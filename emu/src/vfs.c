@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 #include "vfs.h"
@@ -113,36 +114,129 @@ vfs_find_mount(vfs_t *vfs, const char *path, const char **subpath)
 	return (NULL);
 }
 
+/*
+ * Build a host path from rootfs + guest_path, resolving symlinks
+ * within the rootfs so that absolute symlink targets stay inside
+ * the rootfs rather than escaping to the host filesystem.
+ */
 int
 vfs_resolve(vfs_t *vfs, const char *guest_path, char *host_path,
     size_t host_path_size)
 {
 	const char	*sub;
-	size_t		 rlen, plen;
+	char		 resolved[PATH_MAX];
+	char		 scratch[PATH_MAX];
+	char		 link[PATH_MAX];
+	char		*components[256];
+	char		 pathbuf[PATH_MAX];
+	int		 ncomp, depth, i;
+	ssize_t		 llen;
+	struct stat	 st;
 
 	/* Check virtual mounts first. */
 	if (vfs_find_mount(vfs, guest_path, &sub) != NULL)
 		return (-1);
 
-	rlen = strlen(vfs->rootfs);
-	plen = strlen(guest_path);
+	/* Normalize guest path (resolve . and ..) */
+	vfs_normalize_path("/", guest_path, pathbuf, sizeof(pathbuf));
 
-	/* Prevent trivial path traversal above rootfs. */
-	if (plen >= 3 && guest_path[0] == '.' && guest_path[1] == '.' &&
-	    guest_path[2] == '/')
+	/* Start with rootfs as base */
+	if (snprintf(resolved, sizeof(resolved), "%s", vfs->rootfs) >=
+	    (int)sizeof(resolved))
 		return (-1);
 
-	if (rlen + plen + 1 >= host_path_size)
+	/* Split normalized path into components */
+	if (strlcpy(scratch, pathbuf, sizeof(scratch)) >= sizeof(scratch))
 		return (-1);
 
-	/* Construct host_path = rootfs + guest_path. */
-	memcpy(host_path, vfs->rootfs, rlen);
-	if (rlen > 0 && vfs->rootfs[rlen - 1] == '/' && guest_path[0] == '/')
-		memcpy(host_path + rlen, guest_path + 1, plen);
-	else
-		memcpy(host_path + rlen, guest_path, plen + 1);
+	ncomp = 0;
+	for (char *tok = strtok(scratch, "/"); tok != NULL;
+	    tok = strtok(NULL, "/")) {
+		if (ncomp >= 255)
+			return (-1);
+		components[ncomp++] = tok;
+	}
 
-	host_path[rlen + plen] = '\0';
+	/* Resolve each path component, following symlinks within rootfs */
+	depth = 0;
+	for (i = 0; i < ncomp; i++) {
+		/* Append component */
+		if (snprintf(host_path, host_path_size, "%s/%s",
+		    resolved, components[i]) >= (int)host_path_size)
+			return (-1);
+
+		/* Check if this component is a symlink */
+		if (lstat(host_path, &st) == 0 && S_ISLNK(st.st_mode)) {
+			if (++depth > 40)
+				return (-1);	/* symlink loop */
+
+			llen = readlink(host_path, link, sizeof(link) - 1);
+			if (llen < 0)
+				return (-1);
+			link[llen] = '\0';
+
+			if (link[0] == '/') {
+				/* Absolute symlink: restart from rootfs */
+				if (snprintf(resolved, sizeof(resolved),
+				    "%s", vfs->rootfs) >=
+				    (int)sizeof(resolved))
+					return (-1);
+			} else {
+				/* Relative symlink: resolved stays as-is */
+			}
+
+			/* Parse symlink target and prepend remaining
+			 * components to the work list. Build new
+			 * component array from link + remaining. */
+			char linkbuf[PATH_MAX];
+			char *new_components[256];
+			int new_ncomp = 0;
+
+			if (strlcpy(linkbuf, link, sizeof(linkbuf)) >=
+			    sizeof(linkbuf))
+				return (-1);
+
+			for (char *tok = strtok(linkbuf, "/"); tok != NULL;
+			    tok = strtok(NULL, "/")) {
+				if (new_ncomp >= 255)
+					return (-1);
+				new_components[new_ncomp++] = tok;
+			}
+
+			/* Append remaining original components */
+			for (int j = i + 1; j < ncomp; j++) {
+				if (new_ncomp >= 255)
+					return (-1);
+				new_components[new_ncomp++] = components[j];
+			}
+
+			/* Copy back - need stable storage */
+			static __thread char comp_store[PATH_MAX];
+			char *p = comp_store;
+			size_t rem = sizeof(comp_store);
+
+			ncomp = new_ncomp;
+			for (int j = 0; j < ncomp; j++) {
+				size_t len = strlen(new_components[j]) + 1;
+				if (len > rem)
+					return (-1);
+				memcpy(p, new_components[j], len);
+				components[j] = p;
+				p += len;
+				rem -= len;
+			}
+			i = -1;	/* restart loop */
+			continue;
+		}
+
+		/* Not a symlink (or doesn't exist yet), accept */
+		if (strlcpy(resolved, host_path, sizeof(resolved)) >=
+		    sizeof(resolved))
+			return (-1);
+	}
+
+	if (strlcpy(host_path, resolved, host_path_size) >= host_path_size)
+		return (-1);
 
 	return (0);
 }

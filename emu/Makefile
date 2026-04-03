@@ -5,7 +5,7 @@ LDFLAGS = -lpthread -lm
 SRCS = $(wildcard src/*.c)
 ASM_SRCS = $(wildcard src/*.S)
 OBJS = $(SRCS:src/%.c=build/%.o) $(ASM_SRCS:src/%.S=build/%.o)
-TEST_SRCS = $(wildcard tests/*.c)
+TEST_SRCS = $(filter-out tests/test_run.c,$(wildcard tests/*.c))
 TEST_OBJS = $(TEST_SRCS:tests/%.c=build/tests/%.o)
 
 .PHONY: all clean test
