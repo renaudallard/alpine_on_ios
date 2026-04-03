@@ -694,14 +694,10 @@ do_dup3(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EBADF;
 
 	/* Close existing fd at newfd if open. */
-	newfde = fd_get(proc->fds, newfd);
-	if (newfde != NULL && newfde->type != FD_NONE) {
-		if (newfde->real_fd >= 0)
-			close(newfde->real_fd);
-		fd_close(proc->fds, newfd);
-	}
+	fd_close(proc->fds, newfd);
 
-	newfde = fd_get(proc->fds, newfd);
+	/* Access entry directly; fd_get returns NULL for FD_NONE. */
+	newfde = &proc->fds->fds[newfd];
 	newfde->type = oldfde->type;
 	newfde->real_fd = dup(oldfde->real_fd);
 	newfde->flags = oldfde->flags;

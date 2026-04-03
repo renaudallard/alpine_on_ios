@@ -20,6 +20,7 @@ import SwiftUI
 struct AlpineOnIOSApp: App {
     @StateObject private var settings = AppSettings()
     @StateObject private var bridge = EmulatorBridge()
+    @State private var isSetup = false
 
     var body: some Scene {
         WindowGroup {
@@ -33,46 +34,52 @@ struct AlpineOnIOSApp: App {
     }
 
     private func setupEmulator() {
+        guard !isSetup else { return }
+        isSetup = true
+
         let rootfsDir = rootfsPath()
 
         if !FileManager.default.fileExists(atPath: rootfsDir + "/bin/sh") {
-            extractRootfs(to: rootfsDir)
+            extractRootfs()
         }
 
         bridge.initialize(rootfsPath: rootfsDir)
-        bridge.startEmulator()
         bridge.spawnShell()
+        bridge.startEmulator()
     }
 
     /// Return the path where the rootfs is stored inside the app sandbox.
     private func rootfsPath() -> String {
         let docs = FileManager.default.urls(for: .documentDirectory,
                                             in: .userDomainMask).first!
-        return docs.appendingPathComponent("alpine-rootfs").path
+        return docs.appendingPathComponent("alpine").path
     }
 
-    /// Extract the bundled rootfs tarball on first launch.
-    private func extractRootfs(to dest: String) {
-        guard let archive = Bundle.main.url(forResource: "alpine-rootfs",
-                                            withExtension: "tar.gz")
-                ?? Bundle.main.url(forResource: "alpine",
-                                   withExtension: nil) else {
-            /* Rootfs may have been placed directly in the bundle directory. */
-            let bundled = Bundle.main.bundlePath + "/alpine"
-            if FileManager.default.fileExists(atPath: bundled) {
-                try? FileManager.default.copyItem(atPath: bundled, toPath: dest)
-            }
+    /// Copy the bundled rootfs directory to Documents on first launch.
+    /// Foundation.Process (NSTask) is macOS-only; on iOS we copy the
+    /// pre-extracted rootfs directory that is included as a bundle resource.
+    private func extractRootfs() {
+        let fm = FileManager.default
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let rootfsDir = docs.appendingPathComponent("alpine")
+
+        /* Already extracted */
+        if fm.fileExists(atPath: rootfsDir.path) { return }
+
+        /* Find bundled rootfs directory */
+        guard let bundledRootfs = Bundle.main.path(forResource: "alpine",
+                                                   ofType: nil) else {
+            /* No bundled rootfs found; create empty placeholder */
+            try? fm.createDirectory(at: rootfsDir,
+                                    withIntermediateDirectories: true)
             return
         }
 
-        try? FileManager.default.createDirectory(atPath: dest,
-                                                  withIntermediateDirectories: true)
-
-        /* Use tar to extract (available on iOS) */
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        proc.arguments = ["xzf", archive.path, "-C", dest]
-        try? proc.run()
-        proc.waitUntilExit()
+        /* Copy bundled rootfs directory to Documents */
+        do {
+            try fm.copyItem(atPath: bundledRootfs, toPath: rootfsDir.path)
+        } catch {
+            /* Log error but do not crash */
+        }
     }
 }

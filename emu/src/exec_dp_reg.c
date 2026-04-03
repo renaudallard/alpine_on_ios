@@ -19,11 +19,6 @@
 #include "emu.h"
 #include "log.h"
 
-/* From decoder.c */
-uint64_t	apply_shift(uint64_t, int, int);
-uint32_t	apply_shift32(uint32_t, int, int);
-uint64_t	extend_reg(cpu_state_t *, int, int, int);
-
 static int
 exec_logical_shifted(cpu_state_t *cpu, uint32_t insn)
 {
@@ -595,7 +590,7 @@ exec_dp_3src(cpu_state_t *cpu, uint32_t insn)
 		break;
 	case 4: {	/* SMULH */
 		int64_t sn, sm;
-		uint64_t lo, hi, t1, t2, t3;
+		uint64_t lo, hi, t1, t2;
 		uint64_t an, bn, al, bl, ah, bh;
 		int negate;
 
@@ -614,7 +609,6 @@ exec_dp_3src(cpu_state_t *cpu, uint32_t insn)
 		t1 = al * bh + (lo >> 32);
 		t2 = ah * bl + (t1 & 0xFFFFFFFF);
 		hi = ah * bh + (t1 >> 32) + (t2 >> 32);
-		(void)t3;
 		if (negate) {
 			lo = (al * bl) | ((t2 & 0xFFFFFFFF) << 32);
 			if (lo == 0)

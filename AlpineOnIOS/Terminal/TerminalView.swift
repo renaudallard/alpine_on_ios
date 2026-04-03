@@ -25,6 +25,9 @@ struct TerminalView: View {
     @EnvironmentObject var settings: AppSettings
 
     @StateObject private var termBuffer = TerminalBuffer(cols: 80, rows: 24)
+    /// TerminalParser is a class (reference type). @State is used here
+    /// intentionally: the reference identity is stable across re-renders
+    /// and the parser is initialized once in onAppear.
     @State private var parser: TerminalParser?
     @State private var ctrlPressed = false
 
@@ -61,6 +64,11 @@ struct TerminalView: View {
             parser = p
             startReading()
             bridge.setWindowSize(rows: 24, cols: 80)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .terminalSpecialKey)) { notification in
+            if let seq = notification.object as? String {
+                bridge.write(data: Data(seq.utf8))
+            }
         }
     }
 
@@ -253,7 +261,6 @@ class HiddenTextField: UITextField {
             guard let key = press.key else { continue }
             switch key.keyCode {
             case .keyboardUpArrow:
-                sendAction(#selector(keyAction(_:)), to: nil, for: nil)
                 NotificationCenter.default.post(
                     name: .terminalSpecialKey,
                     object: "\u{1B}[A")
@@ -284,8 +291,6 @@ class HiddenTextField: UITextField {
         }
         super.pressesBegan(presses, with: event)
     }
-
-    @objc private func keyAction(_ sender: Any?) {}
 }
 
 // MARK: - Accessory Key Bar

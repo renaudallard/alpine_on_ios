@@ -32,12 +32,6 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
                     Slider(value: $settings.fontSize, in: 8...24, step: 1)
-
-                    Picker("Color Theme", selection: $settings.colorThemeRaw) {
-                        ForEach(ColorTheme.allCases) { theme in
-                            Text(theme.rawValue).tag(theme.rawValue)
-                        }
-                    }
                 }
 
                 Section(header: Text("Keyboard")) {
@@ -90,7 +84,7 @@ struct SettingsView: View {
     private func resetRootfs() {
         let docs = FileManager.default.urls(for: .documentDirectory,
                                             in: .userDomainMask).first!
-        let rootfs = docs.appendingPathComponent("alpine-rootfs")
+        let rootfs = docs.appendingPathComponent("alpine")
         try? FileManager.default.removeItem(at: rootfs)
     }
 }

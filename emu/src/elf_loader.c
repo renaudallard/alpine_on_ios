@@ -384,12 +384,27 @@ elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
 	random_addr = sp;
 
 	/* Environment strings. */
-	envp_addrs = calloc(envc, sizeof(uint64_t));
+	envp_addrs = NULL;
+	if (envc > 0) {
+		envp_addrs = calloc(envc, sizeof(uint64_t));
+		if (envp_addrs == NULL) {
+			LOG_ERR("elf_setup_stack: alloc envp_addrs failed");
+			return 0;
+		}
+	}
 	for (i = envc - 1; i >= 0; i--)
 		envp_addrs[i] = push_string(mem, &sp, envp[i]);
 
 	/* Argument strings. */
-	argv_addrs = calloc(argc, sizeof(uint64_t));
+	argv_addrs = NULL;
+	if (argc > 0) {
+		argv_addrs = calloc(argc, sizeof(uint64_t));
+		if (argv_addrs == NULL) {
+			LOG_ERR("elf_setup_stack: alloc argv_addrs failed");
+			free(envp_addrs);
+			return 0;
+		}
+	}
 	for (i = argc - 1; i >= 0; i--)
 		argv_addrs[i] = push_string(mem, &sp, argv[i]);
 

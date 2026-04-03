@@ -257,6 +257,12 @@ emulator are functional. Known limitations:
 - No GPU or graphics emulation
 - Single-threaded process execution (clone/fork emulation is basic)
 
+The rootfs is bundled as a pre-extracted directory resource and copied
+to the Documents directory on first launch using FileManager (no
+Foundation.Process dependency). The terminal parser supports full
+UTF-8 multi-byte sequences. Arrow and escape keys from hardware
+keyboards are delivered to the emulator via notification observers.
+
 ## License
 
 ISC License. See individual source files for the full license text.

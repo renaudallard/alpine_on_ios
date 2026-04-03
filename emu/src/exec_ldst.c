@@ -22,9 +22,6 @@
 #include "emu.h"
 #include "log.h"
 
-/* From decoder.c */
-uint64_t	extend_reg(cpu_state_t *, int, int, int);
-
 static int
 do_load(cpu_state_t *cpu, uint64_t addr, int size, int opc, int rt, int is_vec)
 {
@@ -434,12 +431,10 @@ exec_ldst_pair(cpu_state_t *cpu, uint32_t insn)
 		}
 	} else {
 		/* GPR pair */
-		int is_signed = (opc == 1);
-
 		if (L) {
 			/* Load pair */
-			if (opc == 0 || (opc == 1 && !is_signed)) {
-				/* 32-bit */
+			if (opc == 0) {
+				/* 32-bit STP/LDP */
 				uint32_t v1, v2;
 				if (mem_read32(cpu->mem, addr, &v1) != 0)
 					return EMU_SEGFAULT;

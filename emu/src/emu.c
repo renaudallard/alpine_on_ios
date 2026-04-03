@@ -1,0 +1,171 @@
+/*
+ * Copyright (c) 2026 Alpine on iOS contributors
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+#include <sys/socket.h>
+
+#include <pthread.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "emu.h"
+#include "log.h"
+#include "memory.h"
+#include "process.h"
+#include "signal_emu.h"
+#include "vfs.h"
+
+/* Global state */
+static vfs_t		*g_vfs;
+static int		 g_initialized;
+static pthread_mutex_t	 g_lock = PTHREAD_MUTEX_INITIALIZER;
+
+int
+emu_init(const char *rootfs_path)
+{
+	pthread_mutex_lock(&g_lock);
+	if (g_initialized) {
+		pthread_mutex_unlock(&g_lock);
+		return (-1);
+	}
+
+	log_init(LOG_LVL_INFO);
+	proc_table_init();
+
+	g_vfs = vfs_create(rootfs_path);
+	if (g_vfs == NULL) {
+		pthread_mutex_unlock(&g_lock);
+		return (-1);
+	}
+
+	g_initialized = 1;
+	pthread_mutex_unlock(&g_lock);
+	return (0);
+}
+
+int
+emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
+{
+	emu_process_t	*proc;
+	int		 sockpair[2];
+	int		 ret;
+
+	if (!g_initialized)
+		return (-1);
+
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockpair) < 0)
+		return (-1);
+
+	proc = proc_create(NULL);
+	if (proc == NULL) {
+		close(sockpair[0]);
+		close(sockpair[1]);
+		return (-1);
+	}
+
+	proc->vfs = g_vfs;
+	snprintf(proc->cwd, sizeof(proc->cwd), "/");
+
+	/* Wire fds 0, 1, 2 to the process end of the socketpair. */
+	proc->fds->fds[0].type = FD_TTY;
+	proc->fds->fds[0].real_fd = sockpair[1];
+	proc->fds->fds[1].type = FD_TTY;
+	proc->fds->fds[1].real_fd = dup(sockpair[1]);
+	proc->fds->fds[2].type = FD_TTY;
+	proc->fds->fds[2].real_fd = dup(sockpair[1]);
+
+	ret = proc_execve(proc, path, argv, envp);
+	if (ret != 0) {
+		close(sockpair[0]);
+		proc_destroy(proc);
+		return (-1);
+	}
+
+	ret = pthread_create(&proc->host_thread, NULL, proc_run, proc);
+	if (ret != 0) {
+		close(sockpair[0]);
+		proc_destroy(proc);
+		return (-1);
+	}
+	pthread_detach(proc->host_thread);
+
+	*term_fd = sockpair[0];
+	return (proc->pid);
+}
+
+int
+emu_set_winsize(int pid, unsigned short rows, unsigned short cols)
+{
+	emu_process_t	*proc;
+
+	proc = proc_find(pid);
+	if (proc == NULL)
+		return (-1);
+
+	(void)rows;
+	(void)cols;
+
+	/* Winsize is handled by ioctl TIOCGWINSZ in sys_file. */
+	return (0);
+}
+
+int
+emu_kill(int pid, int sig)
+{
+	emu_process_t	*proc;
+
+	proc = proc_find(pid);
+	if (proc == NULL)
+		return (-1);
+
+	return sig_send(proc, sig);
+}
+
+int
+emu_waitpid(int pid, int *status, int options)
+{
+	emu_process_t	*init;
+
+	init = proc_find(1);
+	if (init == NULL)
+		return (-1);
+
+	return proc_wait(init, pid, status, options);
+}
+
+void
+emu_run(void)
+{
+	for (;;) {
+		emu_process_t	*p;
+
+		p = proc_find(1);
+		if (p == NULL || p->state != PROC_RUNNING)
+			break;
+		usleep(100000);
+	}
+}
+
+void
+emu_shutdown(void)
+{
+	pthread_mutex_lock(&g_lock);
+	if (g_vfs != NULL) {
+		vfs_destroy(g_vfs);
+		g_vfs = NULL;
+	}
+	g_initialized = 0;
+	pthread_mutex_unlock(&g_lock);
+}

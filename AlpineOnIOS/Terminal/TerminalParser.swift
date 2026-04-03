@@ -38,6 +38,10 @@ class TerminalParser {
     /// OSC accumulated string.
     private var oscData: [UInt8] = []
 
+    /// UTF-8 multi-byte accumulator.
+    private var utf8Buffer: [UInt8] = []
+    private var utf8Remaining: Int = 0
+
     /// Callback to write a response back to the emulator.
     var responseHandler: ((Data) -> Void)?
 
@@ -70,6 +74,26 @@ class TerminalParser {
     }
 
     private func processNormal(_ byte: UInt8) {
+        /* If we are collecting a multi-byte UTF-8 sequence, handle it first. */
+        if utf8Remaining > 0 {
+            if byte >= 0x80 && byte <= 0xBF {
+                /* Valid continuation byte */
+                utf8Buffer.append(byte)
+                utf8Remaining -= 1
+                if utf8Remaining == 0 {
+                    emitUTF8()
+                }
+            } else {
+                /* Invalid continuation: emit replacement for the broken
+                 * sequence and re-process this byte from scratch. */
+                utf8Buffer.removeAll()
+                utf8Remaining = 0
+                buffer.putChar("\u{FFFD}")
+                processNormal(byte)
+            }
+            return
+        }
+
         switch byte {
         case 0x1B: /* ESC */
             state = .escape
@@ -86,15 +110,37 @@ class TerminalParser {
         case 0x00...0x06, 0x0B, 0x0C, 0x0E...0x1A, 0x1C...0x1F:
             break /* ignore other control chars */
         default:
-            /* Printable character (may be UTF-8 leading byte) */
             if byte < 0x80 {
+                /* ASCII */
                 buffer.putChar(Character(UnicodeScalar(byte)))
+            } else if byte >= 0xC0 && byte < 0xE0 {
+                /* 2-byte UTF-8 sequence */
+                utf8Buffer = [byte]
+                utf8Remaining = 1
+            } else if byte >= 0xE0 && byte < 0xF0 {
+                /* 3-byte UTF-8 sequence */
+                utf8Buffer = [byte]
+                utf8Remaining = 2
+            } else if byte >= 0xF0 && byte < 0xF8 {
+                /* 4-byte UTF-8 sequence */
+                utf8Buffer = [byte]
+                utf8Remaining = 3
             } else {
-                /* Simplified: treat non-ASCII as a replacement character.
-                 * A full implementation would accumulate UTF-8 sequences. */
-                buffer.putChar(Character(UnicodeScalar(byte)))
+                /* Unexpected continuation byte (0x80-0xBF) without leader */
+                buffer.putChar("\u{FFFD}")
             }
         }
+    }
+
+    /// Decode the accumulated UTF-8 buffer and emit the character.
+    private func emitUTF8() {
+        if let str = String(bytes: utf8Buffer, encoding: .utf8),
+           let ch = str.first {
+            buffer.putChar(ch)
+        } else {
+            buffer.putChar("\u{FFFD}")
+        }
+        utf8Buffer.removeAll()
     }
 
     private func processEscape(_ byte: UInt8) {

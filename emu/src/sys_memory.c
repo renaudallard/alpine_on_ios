@@ -17,6 +17,8 @@
 #define _DEFAULT_SOURCE
 
 #include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -170,9 +172,14 @@ do_memfd_create(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	extern int memfd_create(const char *, unsigned int);
 	hfd = memfd_create(name, 0);
 #else
-	/* Fallback: use a temp file. */
-	char	tmpl[] = "/tmp/emu_memfd_XXXXXX";
+	/* Fallback: use a temp file in the sandbox temp directory. */
+	const char	*tmpdir;
+	char		 tmpl[PATH_MAX];
 
+	tmpdir = getenv("TMPDIR");
+	if (tmpdir == NULL)
+		tmpdir = "/tmp";
+	snprintf(tmpl, sizeof(tmpl), "%s/emu_memfd_XXXXXX", tmpdir);
 	hfd = mkstemp(tmpl);
 	if (hfd >= 0)
 		unlink(tmpl);
