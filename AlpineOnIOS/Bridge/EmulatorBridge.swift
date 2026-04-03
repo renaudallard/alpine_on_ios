@@ -81,6 +81,40 @@ class EmulatorBridge: ObservableObject {
         }
     }
 
+    /// Spawn X server with a window manager for graphical mode.
+    func spawnGraphical() {
+        let path = "/bin/sh"
+        let argv = ["/bin/sh", "-c",
+            "mkdir -p /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; " +
+            "X :0 -config /etc/X11/xorg.conf & sleep 1; " +
+            "export DISPLAY=:0; " +
+            "if command -v openbox >/dev/null; then openbox & " +
+            "elif command -v twm >/dev/null; then twm & fi; " +
+            "xterm || sh"]
+        let envp = [
+            "HOME=/root",
+            "TERM=xterm-256color",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "USER=root",
+            "SHELL=/bin/sh",
+            "DISPLAY=:0",
+        ]
+
+        var fd: Int32 = -1
+        let result = withCStrings(argv) { cArgv in
+            withCStrings(envp) { cEnvp in
+                path.withCString { cPath in
+                    emu_spawn(cPath, cArgv, cEnvp, &fd)
+                }
+            }
+        }
+
+        if result >= 0 {
+            pid = Int(result)
+            termFD = fd
+        }
+    }
+
     // MARK: - I/O
 
     /// Write data to the terminal file descriptor.

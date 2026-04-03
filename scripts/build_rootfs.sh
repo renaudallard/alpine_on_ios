@@ -8,6 +8,15 @@ if [ ! -d "$ROOTFS_DIR" ]; then
     exit 1
 fi
 
+OVERLAY_DIR="$(dirname "$0")/../rootfs/overlay"
+
+# Apply overlay files (X11 config, profiles, etc.)
+if [ -d "$OVERLAY_DIR" ]; then
+    echo "Applying overlay..."
+    cp -r "$OVERLAY_DIR"/* "$ROOTFS_DIR"/
+    chmod +x "$ROOTFS_DIR/root/.xinitrc" 2>/dev/null || true
+fi
+
 ARCHIVE="$(dirname "$0")/../rootfs/alpine-rootfs.tar.gz"
 echo "Creating rootfs archive..."
 tar czf "$ARCHIVE" -C "$ROOTFS_DIR" .
