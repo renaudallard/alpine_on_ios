@@ -189,17 +189,55 @@ sig_deliver(emu_process_t *proc)
 	/*
 	 * User-defined handler.
 	 *
-	 * Simplified delivery: save PC to X30 (link register), set PC to
-	 * handler, pass signal number in X0.  A full implementation would
-	 * push a sigframe on the guest stack containing all saved registers,
-	 * blocked mask, and a sigreturn trampoline.
+	 * Push a signal frame on the guest stack containing all saved
+	 * registers and the blocked signal mask.  rt_sigreturn restores
+	 * this frame.
+	 *
+	 * Frame layout (288 bytes, 16-byte aligned):
+	 *   +0:   x0-x30 (31 * 8 = 248)
+	 *   +248: sp     (8)
+	 *   +256: pc     (8)
+	 *   +264: nzcv   (4)
+	 *   +268: sig_blocked (8)
 	 */
+#define SIGFRAME_SIZE	288
+
 	LOG_DBG("sig: pid %d delivering signal %d to handler 0x%lx",
 	    proc->pid, sig, (unsigned long)sa->handler);
 
-	proc->cpu.x[30] = proc->cpu.pc;
-	proc->cpu.x[0] = (uint64_t)sig;
-	proc->cpu.pc = sa->handler;
+	{
+		uint64_t	frame_addr;
+		int		i;
+
+		frame_addr = (proc->cpu.sp - SIGFRAME_SIZE) & ~15ULL;
+
+		/* Save x0-x30 */
+		for (i = 0; i < 31; i++)
+			mem_write64(proc->mem,
+			    frame_addr + (uint64_t)i * 8, proc->cpu.x[i]);
+
+		/* Save sp, pc, nzcv, blocked mask */
+		mem_write64(proc->mem, frame_addr + 248, proc->cpu.sp);
+		mem_write64(proc->mem, frame_addr + 256, proc->cpu.pc);
+		mem_write32(proc->mem, frame_addr + 264, proc->cpu.nzcv);
+		mem_write64(proc->mem, frame_addr + 268,
+		    proc->sig_blocked);
+
+		/* Set up for handler execution */
+		proc->cpu.sp = frame_addr;
+		proc->cpu.x[0] = (uint64_t)sig;
+		proc->cpu.pc = sa->handler;
+
+		/*
+		 * If SA_RESTORER is set, use the restorer as the return
+		 * address.  Otherwise set X30 to 0 (handler must call
+		 * rt_sigreturn itself).
+		 */
+		if (sa->flags & EMU_SA_RESTORER)
+			proc->cpu.x[30] = sa->restorer;
+		else
+			proc->cpu.x[30] = 0;
+	}
 
 	/* Block signals specified in sa_mask during handler execution. */
 	proc->sig_blocked |= sa->mask;
@@ -210,4 +248,6 @@ sig_deliver(emu_process_t *proc)
 	/* SA_RESETHAND: reset to default after delivery. */
 	if (sa->flags & EMU_SA_RESETHAND)
 		sa->handler = EMU_SIG_DFL;
+
+#undef SIGFRAME_SIZE
 }

@@ -88,6 +88,14 @@ sys_handle(emu_process_t *proc)
 	case SYS_LINKAT:
 	case SYS_MKNODAT:
 	case SYS_SYNC:
+	case SYS_EPOLL_CREATE1:
+	case SYS_EPOLL_CTL:
+	case SYS_EPOLL_PWAIT:
+	case SYS_EVENTFD2:
+	case SYS_TIMERFD_CREATE:
+	case SYS_TIMERFD_SETTIME:
+	case SYS_PPOLL:
+	case SYS_PSELECT6:
 		ret = sys_file(proc, (int)nr, a0, a1, a2, a3, a4, a5);
 		break;
 
@@ -143,6 +151,11 @@ sys_handle(emu_process_t *proc)
 	case SYS_MADVISE:
 	case SYS_MSYNC:
 	case SYS_MEMFD_CREATE:
+	case SYS_MLOCK:
+	case SYS_MUNLOCK:
+	case SYS_MLOCKALL:
+	case SYS_MUNLOCKALL:
+	case SYS_MINCORE:
 		ret = sys_memory(proc, (int)nr, a0, a1, a2, a3, a4, a5);
 		break;
 
@@ -198,6 +211,12 @@ sys_handle(emu_process_t *proc)
 	case SYS_GETRANDOM:
 	case SYS_FUTEX:
 	case SYS_SYSLOG:
+	case SYS_PERSONALITY:
+	case SYS_SCHED_SETSCHEDULER:
+	case SYS_SCHED_GETSCHEDULER:
+	case SYS_SCHED_GETPARAM:
+	case SYS_SCHED_SETAFFINITY:
+	case SYS_SCHED_GETAFFINITY:
 		ret = sys_misc(proc, (int)nr, a0, a1, a2, a3, a4, a5);
 		break;
 

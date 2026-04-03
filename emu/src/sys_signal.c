@@ -225,6 +225,65 @@ do_sigaltstack(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	return 0;
 }
 
+/*
+ * Restore registers from signal frame on the guest stack.
+ *
+ * The frame layout (pushed by sig_deliver in signal_emu.c):
+ *   sp+0:   x0-x30 (31 * 8 = 248 bytes)
+ *   sp+248: sp     (8 bytes)
+ *   sp+256: pc     (8 bytes)
+ *   sp+264: nzcv   (4 bytes)
+ *   sp+268: sig_blocked (8 bytes)
+ *
+ * Total: 276 bytes, rounded up to 288 for alignment.
+ */
+#define SIGFRAME_SIZE	288
+
+static int64_t
+do_rt_sigreturn(emu_process_t *proc)
+{
+	uint64_t	frame_addr, val;
+	uint32_t	nzcv;
+	int		i;
+
+	frame_addr = proc->cpu.sp;
+
+	/* Restore x0-x30 */
+	for (i = 0; i < 31; i++) {
+		if (mem_read64(proc->mem, frame_addr + (uint64_t)i * 8,
+		    &val) != 0)
+			return -LINUX_EFAULT;
+		proc->cpu.x[i] = val;
+	}
+
+	/* Restore sp */
+	if (mem_read64(proc->mem, frame_addr + 248, &val) != 0)
+		return -LINUX_EFAULT;
+	proc->cpu.sp = val;
+
+	/* Restore pc */
+	if (mem_read64(proc->mem, frame_addr + 256, &val) != 0)
+		return -LINUX_EFAULT;
+	proc->cpu.pc = val;
+
+	/* Restore nzcv */
+	if (mem_read32(proc->mem, frame_addr + 264, &nzcv) != 0)
+		return -LINUX_EFAULT;
+	proc->cpu.nzcv = nzcv;
+
+	/* Restore blocked signal mask */
+	if (mem_read64(proc->mem, frame_addr + 268, &val) != 0)
+		return -LINUX_EFAULT;
+	proc->sig_blocked = val;
+
+	/*
+	 * Return value is already in x0 from the restored frame.
+	 * The caller (sys_handle) would overwrite x0, so we return the
+	 * restored x0 value directly.
+	 */
+	return (int64_t)proc->cpu.x[0];
+}
+
 int64_t
 sys_signal(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
     uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5)
@@ -240,8 +299,7 @@ sys_signal(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 	case SYS_RT_SIGPENDING:
 		return do_rt_sigpending(proc, a0, a1);
 	case SYS_RT_SIGRETURN:
-		/* Stub: signal return frame restoration. */
-		return 0;
+		return do_rt_sigreturn(proc);
 	case SYS_RT_SIGSUSPEND:
 		/* Stub: temporarily replace mask and pause. */
 		return 0;

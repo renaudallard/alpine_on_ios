@@ -17,17 +17,22 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "syscall.h"
 #include "process.h"
 #include "memory.h"
 #include "vfs.h"
+#include "framebuffer.h"
+#include "vfs_input.h"
 #include "log.h"
 
 /* Linux errno values (host errno may differ on non-Linux). */
@@ -293,6 +298,55 @@ stat_to_emu(struct stat *hst, struct emu_stat *est)
 #endif
 }
 
+/*
+ * Try to open via a VFS virtual mount (e.g. /dev, /proc).
+ * Returns the host fd on success, -1 if the path does not belong to a mount.
+ */
+static int
+try_vfs_open(emu_process_t *proc, int dirfd, uint64_t path_addr,
+    int linux_flags, int mode, int *fd_type)
+{
+	char		guest_path[PATH_MAX];
+	char		abs_path[PATH_MAX];
+	const char	*subpath;
+	vfs_mount_t	*mnt;
+	int		host_flags, hfd;
+
+	if (mem_read_str(proc->mem, path_addr, guest_path,
+	    sizeof(guest_path)) != 0)
+		return (-1);
+
+	if (guest_path[0] != '/') {
+		if (dirfd == LINUX_AT_FDCWD)
+			vfs_normalize_path(proc->cwd, guest_path,
+			    abs_path, sizeof(abs_path));
+		else
+			vfs_normalize_path(proc->cwd, guest_path,
+			    abs_path, sizeof(abs_path));
+	} else {
+		vfs_normalize_path("/", guest_path, abs_path,
+		    sizeof(abs_path));
+	}
+
+	mnt = vfs_find_mount(proc->vfs, abs_path, &subpath);
+	if (mnt == NULL || mnt->ops->open == NULL)
+		return (-1);
+
+	host_flags = translate_open_flags(linux_flags);
+	hfd = mnt->ops->open(mnt->ctx, subpath, host_flags, mode);
+	if (hfd < 0)
+		return (hfd);	/* negative errno */
+
+	/* Determine fd type for special devices. */
+	*fd_type = FD_FILE;
+	if (strcmp(subpath, "/fb0") == 0)
+		*fd_type = FD_FB;
+	else if (strcmp(subpath, "/input/event0") == 0)
+		*fd_type = FD_INPUT;
+
+	return (hfd);
+}
+
 static int64_t
 do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
     uint64_t a3)
@@ -301,17 +355,37 @@ do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	char		host_path[PATH_MAX];
 	fd_entry_t	*fde;
 	int		is_cloexec;
+	int		fd_type;
 
 	dirfd = (int)(int32_t)a0;
 	linux_flags = (int)a2;
 	mode = (int)a3;
+	is_cloexec = (linux_flags & LINUX_O_CLOEXEC) != 0;
+
+	/* Try virtual mounts first (e.g. /dev/fb0, /dev/input/event0). */
+	fd_type = FD_FILE;
+	hfd = try_vfs_open(proc, dirfd, a1, linux_flags, mode, &fd_type);
+	if (hfd >= 0) {
+		efd = fd_alloc(proc->fds, 0);
+		if (efd < 0) {
+			close(hfd);
+			return -LINUX_EMFILE;
+		}
+		fde = fd_get(proc->fds, efd);
+		fde->type = fd_type;
+		fde->real_fd = hfd;
+		fde->flags = linux_flags;
+		fde->cloexec = is_cloexec;
+		LOG_TRACE("openat(vfs): type=%d -> efd=%d hfd=%d",
+		    fd_type, efd, hfd);
+		return efd;
+	}
 
 	if (resolve_path(proc, dirfd, a1, host_path,
 	    sizeof(host_path)) != 0)
 		return -LINUX_ENOENT;
 
 	host_flags = translate_open_flags(linux_flags);
-	is_cloexec = (linux_flags & LINUX_O_CLOEXEC) != 0;
 
 	hfd = open(host_path, host_flags, mode);
 	if (hfd < 0) {
@@ -602,10 +676,66 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	}
 	case LINUX_TIOCSPGRP:
 		return 0;
+	case FBIOGET_VSCREENINFO: {
+		struct fb_var_screeninfo	vi;
+		framebuffer_t			*fb;
+
+		if (fde->type != FD_FB)
+			break;
+		fb = fb_get();
+		if (!fb->active)
+			return -LINUX_ENODEV;
+		memset(&vi, 0, sizeof(vi));
+		vi.xres = fb->width;
+		vi.yres = fb->height;
+		vi.xres_virtual = fb->width;
+		vi.yres_virtual = fb->height;
+		vi.bits_per_pixel = FB_BPP;
+		/* BGRA layout */
+		vi.blue.offset = 0;
+		vi.blue.length = 8;
+		vi.green.offset = 8;
+		vi.green.length = 8;
+		vi.red.offset = 16;
+		vi.red.length = 8;
+		vi.transp.offset = 24;
+		vi.transp.length = 8;
+		vi.height = 0xffffffff;	/* unknown */
+		vi.width = 0xffffffff;
+		if (mem_copy_to(proc->mem, a2, &vi, sizeof(vi)) != 0)
+			return -LINUX_EFAULT;
+		return 0;
+	}
+	case FBIOPUT_VSCREENINFO:
+		if (fde->type != FD_FB)
+			break;
+		return 0;
+	case FBIOGET_FSCREENINFO: {
+		struct fb_fix_screeninfo	fi;
+		framebuffer_t			*fb;
+
+		if (fde->type != FD_FB)
+			break;
+		fb = fb_get();
+		if (!fb->active)
+			return -LINUX_ENODEV;
+		memset(&fi, 0, sizeof(fi));
+		snprintf(fi.id, sizeof(fi.id), "emufb");
+		fi.smem_len = (uint32_t)fb->size;
+		fi.type = 0;		/* FB_TYPE_PACKED_PIXELS */
+		fi.visual = 2;		/* FB_VISUAL_TRUECOLOR */
+		fi.line_length = fb->stride;
+		if (mem_copy_to(proc->mem, a2, &fi, sizeof(fi)) != 0)
+			return -LINUX_EFAULT;
+		return 0;
+	}
 	default:
 		LOG_DBG("ioctl: unhandled cmd 0x%llx", (unsigned long long)a1);
 		return -LINUX_ENOTTY;
 	}
+	/* Fall through from fb ioctls on non-fb fds. */
+	LOG_DBG("ioctl: unhandled cmd 0x%llx", (unsigned long long)a1);
+	return -LINUX_ENOTTY;
 }
 
 static int64_t
@@ -1383,6 +1513,694 @@ do_linkat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	return 0;
 }
 
+/* --- epoll emulation via poll() --- */
+
+#define MAX_EPOLL_ENTRIES	256
+
+/* epoll event flags (Linux AArch64) */
+#define LINUX_EPOLLIN		0x001
+#define LINUX_EPOLLOUT		0x004
+#define LINUX_EPOLLERR		0x008
+#define LINUX_EPOLLHUP		0x010
+#define LINUX_EPOLLRDHUP	0x2000
+#define LINUX_EPOLLET		0x80000000u
+#define LINUX_EPOLLONESHOT	0x40000000u
+
+/* epoll_ctl operations */
+#define LINUX_EPOLL_CTL_ADD	1
+#define LINUX_EPOLL_CTL_DEL	2
+#define LINUX_EPOLL_CTL_MOD	3
+
+struct epoll_entry {
+	int		fd;
+	int		real_fd;
+	uint32_t	events;
+	uint64_t	data;
+};
+
+struct epoll_instance {
+	struct epoll_entry	entries[MAX_EPOLL_ENTRIES];
+	int			count;
+};
+
+static int64_t
+do_epoll_create1(emu_process_t *proc, uint64_t a0)
+{
+	int			efd;
+	fd_entry_t		*fde;
+	struct epoll_instance	*ep;
+
+	ep = calloc(1, sizeof(*ep));
+	if (ep == NULL)
+		return -LINUX_ENOMEM;
+
+	efd = fd_alloc(proc->fds, 0);
+	if (efd < 0) {
+		free(ep);
+		return -LINUX_EMFILE;
+	}
+
+	fde = fd_get(proc->fds, efd);
+	fde->type = FD_EPOLL;
+	fde->real_fd = -1;
+	fde->flags = 0;
+	fde->cloexec = ((int)a0 & LINUX_O_CLOEXEC) ? 1 : 0;
+	fde->private = ep;
+
+	return efd;
+}
+
+static int64_t
+do_epoll_ctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
+    uint64_t a3)
+{
+	int			epfd, op, tfd, i;
+	fd_entry_t		*epfde, *tfde;
+	struct epoll_instance	*ep;
+	uint32_t		events;
+	uint64_t		data;
+
+	epfd = (int)a0;
+	op = (int)a1;
+	tfd = (int)a2;
+
+	epfde = fd_get(proc->fds, epfd);
+	if (epfde == NULL || epfde->type != FD_EPOLL)
+		return -LINUX_EBADF;
+
+	ep = epfde->private;
+	if (ep == NULL)
+		return -LINUX_EBADF;
+
+	tfde = fd_get(proc->fds, tfd);
+	if (tfde == NULL || tfde->type == FD_NONE)
+		return -LINUX_EBADF;
+
+	/* struct epoll_event: uint32 events at +0, uint64 data at +4 */
+	if (op != LINUX_EPOLL_CTL_DEL && a3 != 0) {
+		if (mem_read32(proc->mem, a3, &events) != 0)
+			return -LINUX_EFAULT;
+		if (mem_read64(proc->mem, a3 + 4, &data) != 0)
+			return -LINUX_EFAULT;
+	} else {
+		events = 0;
+		data = 0;
+	}
+
+	switch (op) {
+	case LINUX_EPOLL_CTL_ADD:
+		if (ep->count >= MAX_EPOLL_ENTRIES)
+			return -LINUX_ENOMEM;
+		for (i = 0; i < ep->count; i++) {
+			if (ep->entries[i].fd == tfd)
+				return -LINUX_EEXIST;
+		}
+		ep->entries[ep->count].fd = tfd;
+		ep->entries[ep->count].real_fd = tfde->real_fd;
+		ep->entries[ep->count].events = events;
+		ep->entries[ep->count].data = data;
+		ep->count++;
+		return 0;
+
+	case LINUX_EPOLL_CTL_MOD:
+		for (i = 0; i < ep->count; i++) {
+			if (ep->entries[i].fd == tfd) {
+				ep->entries[i].events = events;
+				ep->entries[i].data = data;
+				return 0;
+			}
+		}
+		return -LINUX_ENOENT;
+
+	case LINUX_EPOLL_CTL_DEL:
+		for (i = 0; i < ep->count; i++) {
+			if (ep->entries[i].fd == tfd) {
+				ep->entries[i] =
+				    ep->entries[ep->count - 1];
+				ep->count--;
+				return 0;
+			}
+		}
+		return -LINUX_ENOENT;
+
+	default:
+		return -LINUX_EINVAL;
+	}
+}
+
+static int64_t
+do_epoll_pwait(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
+    uint64_t a3)
+{
+	int			epfd, maxevents, timeout, i, n, ready;
+	fd_entry_t		*epfde;
+	struct epoll_instance	*ep;
+	struct pollfd		*pfds;
+
+	epfd = (int)a0;
+	maxevents = (int)a2;
+	timeout = (int)(int32_t)a3;
+
+	epfde = fd_get(proc->fds, epfd);
+	if (epfde == NULL || epfde->type != FD_EPOLL)
+		return -LINUX_EBADF;
+
+	ep = epfde->private;
+	if (ep == NULL)
+		return -LINUX_EBADF;
+
+	if (maxevents <= 0)
+		return -LINUX_EINVAL;
+
+	if (ep->count == 0) {
+		if (timeout == 0)
+			return 0;
+		if (timeout > 0) {
+			struct timespec ts;
+
+			ts.tv_sec = timeout / 1000;
+			ts.tv_nsec = (timeout % 1000) * 1000000L;
+			nanosleep(&ts, NULL);
+		}
+		return 0;
+	}
+
+	pfds = calloc((size_t)ep->count, sizeof(*pfds));
+	if (pfds == NULL)
+		return -LINUX_ENOMEM;
+
+	for (i = 0; i < ep->count; i++) {
+		pfds[i].fd = ep->entries[i].real_fd;
+		pfds[i].events = 0;
+		if (ep->entries[i].events & LINUX_EPOLLIN)
+			pfds[i].events |= POLLIN;
+		if (ep->entries[i].events & LINUX_EPOLLOUT)
+			pfds[i].events |= POLLOUT;
+		if (ep->entries[i].events & LINUX_EPOLLRDHUP)
+			pfds[i].events |= POLLHUP;
+	}
+
+	n = poll(pfds, (nfds_t)ep->count, timeout);
+	if (n < 0) {
+		free(pfds);
+		return neg_errno(errno);
+	}
+
+	ready = 0;
+	for (i = 0; i < ep->count && ready < maxevents; i++) {
+		uint32_t	revents;
+		uint64_t	addr;
+
+		if (pfds[i].revents == 0)
+			continue;
+
+		revents = 0;
+		if (pfds[i].revents & POLLIN)
+			revents |= LINUX_EPOLLIN;
+		if (pfds[i].revents & POLLOUT)
+			revents |= LINUX_EPOLLOUT;
+		if (pfds[i].revents & POLLERR)
+			revents |= LINUX_EPOLLERR;
+		if (pfds[i].revents & POLLHUP)
+			revents |= LINUX_EPOLLHUP;
+
+		/* struct epoll_event: events(4) + data(8) = 12 bytes */
+		addr = a1 + (uint64_t)ready * 12;
+		if (mem_write32(proc->mem, addr, revents) != 0) {
+			free(pfds);
+			return -LINUX_EFAULT;
+		}
+		if (mem_write64(proc->mem, addr + 4,
+		    ep->entries[i].data) != 0) {
+			free(pfds);
+			return -LINUX_EFAULT;
+		}
+		ready++;
+	}
+
+	free(pfds);
+	return ready;
+}
+
+/* --- eventfd emulation via pipe --- */
+
+struct eventfd_state {
+	int	pipefd[2];
+	int	semaphore;
+};
+
+#define LINUX_EFD_SEMAPHORE	1
+#define LINUX_EFD_CLOEXEC	LINUX_O_CLOEXEC
+#define LINUX_EFD_NONBLOCK	LINUX_O_NONBLOCK
+
+static int64_t
+do_eventfd2(emu_process_t *proc, uint64_t a0, uint64_t a1)
+{
+	int			efd;
+	fd_entry_t		*fde;
+	struct eventfd_state	*evs;
+
+	evs = calloc(1, sizeof(*evs));
+	if (evs == NULL)
+		return -LINUX_ENOMEM;
+
+	if (pipe(evs->pipefd) < 0) {
+		free(evs);
+		return neg_errno(errno);
+	}
+
+	evs->semaphore = ((int)a1 & LINUX_EFD_SEMAPHORE) ? 1 : 0;
+
+	if (a0 > 0) {
+		uint64_t	initval;
+
+		initval = a0;
+		(void)write(evs->pipefd[1], &initval, sizeof(initval));
+	}
+
+	efd = fd_alloc(proc->fds, 0);
+	if (efd < 0) {
+		close(evs->pipefd[0]);
+		close(evs->pipefd[1]);
+		free(evs);
+		return -LINUX_EMFILE;
+	}
+
+	fde = fd_get(proc->fds, efd);
+	fde->type = FD_EVENT;
+	fde->real_fd = evs->pipefd[0];
+	fde->flags = 0;
+	fde->cloexec = ((int)a1 & LINUX_EFD_CLOEXEC) ? 1 : 0;
+	fde->private = evs;
+
+	if ((int)a1 & LINUX_EFD_NONBLOCK) {
+		int	fl;
+
+		fl = fcntl(evs->pipefd[0], F_GETFL);
+		fcntl(evs->pipefd[0], F_SETFL, fl | O_NONBLOCK);
+		fl = fcntl(evs->pipefd[1], F_GETFL);
+		fcntl(evs->pipefd[1], F_SETFL, fl | O_NONBLOCK);
+	}
+
+	return efd;
+}
+
+/* --- timerfd emulation via pipe + thread --- */
+
+struct timerfd_state {
+	int		pipefd[2];
+	pthread_t	thread;
+	int		running;
+	int64_t		interval_ns;
+	pthread_mutex_t	lock;
+};
+
+static void *
+timerfd_thread(void *arg)
+{
+	struct timerfd_state	*tfs;
+	struct timespec		 ts;
+	uint64_t		 val;
+
+	tfs = arg;
+	val = 1;
+
+	for (;;) {
+		pthread_mutex_lock(&tfs->lock);
+		if (!tfs->running || tfs->interval_ns <= 0) {
+			pthread_mutex_unlock(&tfs->lock);
+			break;
+		}
+		ts.tv_sec = tfs->interval_ns / 1000000000L;
+		ts.tv_nsec = tfs->interval_ns % 1000000000L;
+		pthread_mutex_unlock(&tfs->lock);
+
+		nanosleep(&ts, NULL);
+
+		pthread_mutex_lock(&tfs->lock);
+		if (!tfs->running) {
+			pthread_mutex_unlock(&tfs->lock);
+			break;
+		}
+		pthread_mutex_unlock(&tfs->lock);
+
+		(void)write(tfs->pipefd[1], &val, sizeof(val));
+	}
+	return NULL;
+}
+
+static int64_t
+do_timerfd_create(emu_process_t *proc, uint64_t a0, uint64_t a1)
+{
+	int			efd;
+	fd_entry_t		*fde;
+	struct timerfd_state	*tfs;
+
+	(void)a0;	/* clockid */
+
+	tfs = calloc(1, sizeof(*tfs));
+	if (tfs == NULL)
+		return -LINUX_ENOMEM;
+
+	if (pipe(tfs->pipefd) < 0) {
+		free(tfs);
+		return neg_errno(errno);
+	}
+
+	{
+		int fl;
+
+		fl = fcntl(tfs->pipefd[0], F_GETFL);
+		fcntl(tfs->pipefd[0], F_SETFL, fl | O_NONBLOCK);
+	}
+
+	pthread_mutex_init(&tfs->lock, NULL);
+	tfs->running = 0;
+	tfs->interval_ns = 0;
+
+	efd = fd_alloc(proc->fds, 0);
+	if (efd < 0) {
+		close(tfs->pipefd[0]);
+		close(tfs->pipefd[1]);
+		free(tfs);
+		return -LINUX_EMFILE;
+	}
+
+	fde = fd_get(proc->fds, efd);
+	fde->type = FD_PIPE;
+	fde->real_fd = tfs->pipefd[0];
+	fde->flags = 0;
+	fde->cloexec = ((int)a1 & LINUX_O_CLOEXEC) ? 1 : 0;
+	fde->private = tfs;
+
+	return efd;
+}
+
+static int64_t
+do_timerfd_settime(emu_process_t *proc, uint64_t a0, uint64_t a1,
+    uint64_t a2, uint64_t a3)
+{
+	int			fd;
+	fd_entry_t		*fde;
+	struct timerfd_state	*tfs;
+	uint64_t		sec, nsec;
+
+	(void)a1;	/* flags */
+
+	fd = (int)a0;
+	fde = fd_get(proc->fds, fd);
+	if (fde == NULL || fde->type == FD_NONE)
+		return -LINUX_EBADF;
+
+	tfs = fde->private;
+	if (tfs == NULL)
+		return -LINUX_EINVAL;
+
+	if (a3 != 0) {
+		uint8_t	zbuf[32];
+
+		memset(zbuf, 0, sizeof(zbuf));
+		mem_copy_to(proc->mem, a3, zbuf, sizeof(zbuf));
+	}
+
+	/* struct itimerspec: it_interval(16) + it_value(16) */
+	if (a2 == 0)
+		return -LINUX_EINVAL;
+
+	if (mem_read64(proc->mem, a2, &sec) != 0)
+		return -LINUX_EFAULT;
+	if (mem_read64(proc->mem, a2 + 8, &nsec) != 0)
+		return -LINUX_EFAULT;
+
+	pthread_mutex_lock(&tfs->lock);
+
+	if (tfs->running) {
+		tfs->running = 0;
+		pthread_mutex_unlock(&tfs->lock);
+		pthread_join(tfs->thread, NULL);
+		pthread_mutex_lock(&tfs->lock);
+	}
+
+	tfs->interval_ns = (int64_t)(sec * 1000000000ULL + nsec);
+
+	if (tfs->interval_ns == 0) {
+		uint64_t	val_sec, val_nsec;
+
+		if (mem_read64(proc->mem, a2 + 16, &val_sec) == 0 &&
+		    mem_read64(proc->mem, a2 + 24, &val_nsec) == 0) {
+			int64_t val_ns;
+
+			val_ns = (int64_t)(val_sec * 1000000000ULL +
+			    val_nsec);
+			if (val_ns > 0)
+				tfs->interval_ns = val_ns;
+		}
+	}
+
+	if (tfs->interval_ns > 0) {
+		tfs->running = 1;
+		pthread_create(&tfs->thread, NULL, timerfd_thread, tfs);
+	}
+
+	pthread_mutex_unlock(&tfs->lock);
+	return 0;
+}
+
+/* --- ppoll --- */
+
+static int64_t
+do_ppoll(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
+    uint64_t a3)
+{
+	int		nfds, i, n, timeout_ms;
+	struct pollfd	*pfds;
+
+	(void)a3;	/* sigmask */
+
+	nfds = (int)a1;
+	if (nfds < 0)
+		return -LINUX_EINVAL;
+	if (nfds == 0) {
+		if (a2 != 0) {
+			uint64_t	sec, nsec;
+			struct timespec	ts;
+
+			if (mem_read64(proc->mem, a2, &sec) != 0)
+				return -LINUX_EFAULT;
+			if (mem_read64(proc->mem, a2 + 8, &nsec) != 0)
+				return -LINUX_EFAULT;
+			ts.tv_sec = (time_t)sec;
+			ts.tv_nsec = (long)nsec;
+			nanosleep(&ts, NULL);
+		}
+		return 0;
+	}
+
+	pfds = calloc((size_t)nfds, sizeof(*pfds));
+	if (pfds == NULL)
+		return -LINUX_ENOMEM;
+
+	/* struct pollfd: { int fd(4); short events(2); short revents(2); } = 8 */
+	for (i = 0; i < nfds; i++) {
+		uint32_t	fd_val;
+		uint16_t	events_val;
+		fd_entry_t	*fde;
+
+		if (mem_read32(proc->mem, a0 + (uint64_t)i * 8,
+		    &fd_val) != 0) {
+			free(pfds);
+			return -LINUX_EFAULT;
+		}
+		if (mem_read16(proc->mem, a0 + (uint64_t)i * 8 + 4,
+		    &events_val) != 0) {
+			free(pfds);
+			return -LINUX_EFAULT;
+		}
+
+		pfds[i].fd = -1;
+		pfds[i].events = (short)events_val;
+
+		fde = fd_get(proc->fds, (int)(int32_t)fd_val);
+		if (fde != NULL && fde->type != FD_NONE)
+			pfds[i].fd = fde->real_fd;
+	}
+
+	timeout_ms = -1;
+	if (a2 != 0) {
+		uint64_t	sec, nsec;
+
+		if (mem_read64(proc->mem, a2, &sec) == 0 &&
+		    mem_read64(proc->mem, a2 + 8, &nsec) == 0)
+			timeout_ms = (int)(sec * 1000 + nsec / 1000000);
+	}
+
+	n = poll(pfds, (nfds_t)nfds, timeout_ms);
+	if (n < 0) {
+		free(pfds);
+		return neg_errno(errno);
+	}
+
+	for (i = 0; i < nfds; i++) {
+		uint16_t	revents;
+
+		revents = (uint16_t)pfds[i].revents;
+		if (mem_write16(proc->mem, a0 + (uint64_t)i * 8 + 6,
+		    revents) != 0) {
+			free(pfds);
+			return -LINUX_EFAULT;
+		}
+	}
+
+	free(pfds);
+	return n;
+}
+
+/* --- pselect6 --- */
+
+static int64_t
+do_pselect6(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
+    uint64_t a3, uint64_t a4)
+{
+	int		nfds, i, n, maxfd;
+	fd_set		rfds, wfds, efds;
+	fd_set		*rp, *wp, *ep;
+	struct timeval	tv;
+	struct timeval	*tvp;
+	uint8_t		bits_buf[128];
+
+	nfds = (int)a0;
+	if (nfds < 0 || nfds > 1024)
+		return -LINUX_EINVAL;
+
+	FD_ZERO(&rfds);
+	FD_ZERO(&wfds);
+	FD_ZERO(&efds);
+	rp = NULL;
+	wp = NULL;
+	ep = NULL;
+	maxfd = -1;
+
+	if (a1 != 0) {
+		if (mem_copy_from(proc->mem, bits_buf, a1, 128) != 0)
+			return -LINUX_EFAULT;
+		FD_ZERO(&rfds);
+		for (i = 0; i < nfds; i++) {
+			if (bits_buf[i / 8] & (1 << (i % 8))) {
+				fd_entry_t *fde;
+
+				fde = fd_get(proc->fds, i);
+				if (fde != NULL && fde->type != FD_NONE &&
+				    fde->real_fd >= 0) {
+					FD_SET(fde->real_fd, &rfds);
+					if (fde->real_fd > maxfd)
+						maxfd = fde->real_fd;
+				}
+			}
+		}
+		rp = &rfds;
+	}
+
+	if (a2 != 0) {
+		if (mem_copy_from(proc->mem, bits_buf, a2, 128) != 0)
+			return -LINUX_EFAULT;
+		FD_ZERO(&wfds);
+		for (i = 0; i < nfds; i++) {
+			if (bits_buf[i / 8] & (1 << (i % 8))) {
+				fd_entry_t *fde;
+
+				fde = fd_get(proc->fds, i);
+				if (fde != NULL && fde->type != FD_NONE &&
+				    fde->real_fd >= 0) {
+					FD_SET(fde->real_fd, &wfds);
+					if (fde->real_fd > maxfd)
+						maxfd = fde->real_fd;
+				}
+			}
+		}
+		wp = &wfds;
+	}
+
+	if (a3 != 0) {
+		if (mem_copy_from(proc->mem, bits_buf, a3, 128) != 0)
+			return -LINUX_EFAULT;
+		FD_ZERO(&efds);
+		for (i = 0; i < nfds; i++) {
+			if (bits_buf[i / 8] & (1 << (i % 8))) {
+				fd_entry_t *fde;
+
+				fde = fd_get(proc->fds, i);
+				if (fde != NULL && fde->type != FD_NONE &&
+				    fde->real_fd >= 0) {
+					FD_SET(fde->real_fd, &efds);
+					if (fde->real_fd > maxfd)
+						maxfd = fde->real_fd;
+				}
+			}
+		}
+		ep = &efds;
+	}
+
+	tvp = NULL;
+	if (a4 != 0) {
+		uint64_t	sec, nsec;
+
+		if (mem_read64(proc->mem, a4, &sec) == 0 &&
+		    mem_read64(proc->mem, a4 + 8, &nsec) == 0) {
+			tv.tv_sec = (time_t)sec;
+			tv.tv_usec = (suseconds_t)(nsec / 1000);
+			tvp = &tv;
+		}
+	}
+
+	n = select(maxfd + 1, rp, wp, ep, tvp);
+	if (n < 0)
+		return neg_errno(errno);
+
+	if (a1 != 0) {
+		memset(bits_buf, 0, 128);
+		for (i = 0; i < nfds; i++) {
+			fd_entry_t *fde;
+
+			fde = fd_get(proc->fds, i);
+			if (fde != NULL && fde->type != FD_NONE &&
+			    fde->real_fd >= 0 &&
+			    FD_ISSET(fde->real_fd, &rfds))
+				bits_buf[i / 8] |= (uint8_t)(1 << (i % 8));
+		}
+		mem_copy_to(proc->mem, a1, bits_buf, 128);
+	}
+
+	if (a2 != 0) {
+		memset(bits_buf, 0, 128);
+		for (i = 0; i < nfds; i++) {
+			fd_entry_t *fde;
+
+			fde = fd_get(proc->fds, i);
+			if (fde != NULL && fde->type != FD_NONE &&
+			    fde->real_fd >= 0 &&
+			    FD_ISSET(fde->real_fd, &wfds))
+				bits_buf[i / 8] |= (uint8_t)(1 << (i % 8));
+		}
+		mem_copy_to(proc->mem, a2, bits_buf, 128);
+	}
+
+	if (a3 != 0) {
+		memset(bits_buf, 0, 128);
+		for (i = 0; i < nfds; i++) {
+			fd_entry_t *fde;
+
+			fde = fd_get(proc->fds, i);
+			if (fde != NULL && fde->type != FD_NONE &&
+			    fde->real_fd >= 0 &&
+			    FD_ISSET(fde->real_fd, &efds))
+				bits_buf[i / 8] |= (uint8_t)(1 << (i % 8));
+		}
+		mem_copy_to(proc->mem, a3, bits_buf, 128);
+	}
+
+	return n;
+}
+
 int64_t
 sys_file(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
     uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5)
@@ -1471,6 +2289,22 @@ sys_file(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 	case SYS_SYNC:
 		sync();
 		return 0;
+	case SYS_EPOLL_CREATE1:
+		return do_epoll_create1(proc, a0);
+	case SYS_EPOLL_CTL:
+		return do_epoll_ctl(proc, a0, a1, a2, a3);
+	case SYS_EPOLL_PWAIT:
+		return do_epoll_pwait(proc, a0, a1, a2, a3);
+	case SYS_EVENTFD2:
+		return do_eventfd2(proc, a0, a1);
+	case SYS_TIMERFD_CREATE:
+		return do_timerfd_create(proc, a0, a1);
+	case SYS_TIMERFD_SETTIME:
+		return do_timerfd_settime(proc, a0, a1, a2, a3);
+	case SYS_PPOLL:
+		return do_ppoll(proc, a0, a1, a2, a3);
+	case SYS_PSELECT6:
+		return do_pselect6(proc, a0, a1, a2, a3, a4);
 	default:
 		LOG_WARN("sys_file: unhandled nr=%d", nr);
 		return -LINUX_ENOSYS;

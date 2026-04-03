@@ -26,6 +26,7 @@
 #include "syscall.h"
 #include "process.h"
 #include "memory.h"
+#include "framebuffer.h"
 #include "log.h"
 
 /* Linux errno */
@@ -67,8 +68,46 @@ do_mmap(emu_process_t *proc, uint64_t addr, uint64_t length, uint64_t prot,
 
 		efd = (int)(int32_t)fd_arg;
 		fde = fd_get(proc->fds, efd);
-		if (fde != NULL && fde->type != FD_NONE)
+		if (fde == NULL || fde->type == FD_NONE) {
+			/* bad fd */
+		} else if (fde->type == FD_FB) {
+			/*
+			 * Framebuffer mmap: allocate a guest region
+			 * backed by the shared fb pixel buffer.
+			 */
+			framebuffer_t	*fb;
+			uint64_t	fb_len;
+
+			fb = fb_get();
+			if (!fb->active)
+				return -LINUX_ENOMEM;
+			fb_len = fb->size;
+			if (length > fb_len)
+				length = fb_len;
+			ret = mem_mmap(proc->mem, addr, length,
+			    (int)prot,
+			    (int)(flags | LINUX_MAP_ANONYMOUS),
+			    -1, 0);
+			if (ret != (uint64_t)-1) {
+				void	*dst;
+
+				dst = mem_translate(proc->mem, ret,
+				    length, MEM_PROT_WRITE);
+				if (dst != NULL)
+					memcpy(dst, fb->pixels, length);
+				/*
+				 * Store the guest address so the fb
+				 * pixel data can be synced. For now
+				 * the guest writes directly.
+				 */
+			}
+			LOG_TRACE("mmap(fb): ret=0x%llx len=0x%llx",
+			    (unsigned long long)ret,
+			    (unsigned long long)length);
+			return (int64_t)ret;
+		} else {
 			real_fd = fde->real_fd;
+		}
 	}
 
 	ret = mem_mmap(proc->mem, addr, length, (int)prot, (int)flags,
@@ -223,6 +262,28 @@ sys_memory(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 		return 0;
 	case SYS_MEMFD_CREATE:
 		return do_memfd_create(proc, a0, a1);
+	case SYS_MLOCK:
+	case SYS_MUNLOCK:
+		(void)a0; (void)a1;
+		return 0;
+	case SYS_MLOCKALL:
+	case SYS_MUNLOCKALL:
+		return 0;
+	case SYS_MINCORE: {
+		/*
+		 * Write all-present (1) to the vec array.
+		 * Number of pages = ceil(len / PAGE_SIZE).
+		 */
+		uint64_t	len, npages, i;
+
+		len = a1;
+		npages = (len + 4095) / 4096;
+		for (i = 0; i < npages; i++) {
+			if (mem_write8(proc->mem, a2 + i, 1) != 0)
+				return -LINUX_EFAULT;
+		}
+		return 0;
+	}
 	default:
 		LOG_WARN("sys_memory: unhandled nr=%d", nr);
 		return -LINUX_ENOSYS;

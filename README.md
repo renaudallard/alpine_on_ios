@@ -22,10 +22,14 @@ terminal emulator provides an interactive shell.
 ## Architecture
 
 ```
-+-----------------------+
-|  SwiftUI Terminal UI  |   iOS app layer
-+-----------+-----------+
-            |
++-------------------------------+
+|  SwiftUI Terminal + Display   |   iOS app layer (tabs)
++------+----------------+------+
+       |                |
++------+------+  +------+------+
+| TerminalView|  | DisplayView |   Metal-backed framebuffer display
++------+------+  +------+------+
+       |                |
 +-----------+-----------+
 |   EmulatorBridge      |   Swift <-> C bridge
 +-----------+-----------+
@@ -41,7 +45,8 @@ terminal emulator provides an interactive shell.
 +-----------+-----------+
             |
 +-----------+-----------+
-|  VFS layer            |   Virtual filesystem with /proc, /dev
+|  VFS layer            |   Virtual filesystem with /proc, /dev,
+|                       |   /dev/fb0, /dev/input/event0
 +-----------+-----------+
 ```
 
@@ -91,6 +96,9 @@ alpine_on_ios/
 |   +-- Settings/                   User preferences
 |   |   +-- SettingsView.swift
 |   |   +-- AppSettings.swift
+|   +-- Display/                    Metal framebuffer display + input
+|   |   +-- DisplayView.swift
+|   |   +-- InputMapper.swift
 |   +-- Bridge/                     Swift-to-C bridge
 |       +-- EmulatorBridge.swift
 |       +-- AlpineOnIOS-Bridging-Header.h
@@ -273,12 +281,11 @@ a year and removes the 3-app limit.
 ## Current Status
 
 Early development. The JIT native execution engine, CPU interpreter
-fallback, syscall emulation, and terminal emulator are functional.
-Known limitations:
+fallback, syscall emulation, terminal emulator, and framebuffer
+display are functional. Known limitations:
 
 - SIMD/FP instruction coverage is partial (interpreter mode)
 - Network syscall support is incomplete
-- No GPU or graphics emulation
 - Single-threaded process execution (clone/fork emulation is basic)
 
 The rootfs is bundled as a pre-extracted directory resource and copied
@@ -286,6 +293,20 @@ to the Documents directory on first launch using FileManager (no
 Foundation.Process dependency). The terminal parser supports full
 UTF-8 multi-byte sequences. Arrow and escape keys from hardware
 keyboards are delivered to the emulator via notification observers.
+
+### Framebuffer and Input
+
+The emulator provides `/dev/fb0` (framebuffer) and
+`/dev/input/event0` (evdev touch/keyboard) virtual devices. X servers
+and other framebuffer-aware programs can open `/dev/fb0`, query
+resolution via `ioctl(FBIOGET_VSCREENINFO)`, and mmap the pixel
+buffer to render graphics. The default resolution is 1280x720, 32bpp
+BGRA.
+
+On the iOS side, the Display tab shows the framebuffer contents
+through a Metal-backed `MTKView` running at 60 fps. Touch events are
+mapped to Linux `input_event` structs and delivered to the guest via
+`/dev/input/event0`.
 
 ## License
 

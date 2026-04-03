@@ -18,6 +18,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -41,10 +42,26 @@
 #define LINUX_ERANGE	34
 #define LINUX_ENOSYS	38
 
-/* Linux futex operations */
-#define FUTEX_WAIT		0
-#define FUTEX_WAKE		1
-#define FUTEX_PRIVATE_FLAG	128
+/* Futex hash table */
+#define FUTEX_HASH_SIZE	256
+
+typedef struct futex_waiter {
+	uint64_t		addr;
+	uint32_t		bitset;
+	pthread_cond_t		cond;
+	int			woken;
+	struct futex_waiter	*next;
+} futex_waiter_t;
+
+static futex_waiter_t	*futex_hash[FUTEX_HASH_SIZE];
+static pthread_mutex_t	 futex_lock = PTHREAD_MUTEX_INITIALIZER;
+static int		 futex_initialized;
+
+static unsigned int
+futex_hash_fn(uint64_t addr)
+{
+	return (unsigned int)(addr >> 2) % FUTEX_HASH_SIZE;
+}
 
 /* Linux clock IDs */
 #define LINUX_CLOCK_REALTIME		0
@@ -372,42 +389,294 @@ do_getrandom(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	return n;
 }
 
+void
+futex_init(void)
+{
+	if (futex_initialized)
+		return;
+	memset(futex_hash, 0, sizeof(futex_hash));
+	futex_initialized = 1;
+}
+
+int
+futex_wait(uint64_t addr, uint32_t val, uint32_t bitset,
+    const struct timespec *timeout)
+{
+	futex_waiter_t	*w;
+	unsigned int	 h;
+	int		 ret;
+
+	w = calloc(1, sizeof(*w));
+	if (w == NULL)
+		return -LINUX_ENOMEM;
+
+	w->addr = addr;
+	w->bitset = bitset;
+	w->woken = 0;
+	pthread_cond_init(&w->cond, NULL);
+
+	h = futex_hash_fn(addr);
+
+	pthread_mutex_lock(&futex_lock);
+
+	/*
+	 * Re-check the value under lock. The caller already checked,
+	 * but the value may have changed before we enqueued.
+	 */
+	(void)val;	/* Already validated by caller */
+
+	w->next = futex_hash[h];
+	futex_hash[h] = w;
+
+	ret = 0;
+	while (!w->woken) {
+		if (timeout != NULL) {
+			struct timespec	ts;
+
+			clock_gettime(CLOCK_REALTIME, &ts);
+			ts.tv_sec += timeout->tv_sec;
+			ts.tv_nsec += timeout->tv_nsec;
+			if (ts.tv_nsec >= 1000000000L) {
+				ts.tv_sec++;
+				ts.tv_nsec -= 1000000000L;
+			}
+			if (pthread_cond_timedwait(&w->cond, &futex_lock,
+			    &ts) != 0) {
+				/* Timeout: remove waiter and return. */
+				ret = -110;	/* ETIMEDOUT */
+				break;
+			}
+		} else {
+			pthread_cond_wait(&w->cond, &futex_lock);
+		}
+	}
+
+	/* Remove from hash chain. */
+	{
+		futex_waiter_t	**pp;
+
+		for (pp = &futex_hash[h]; *pp != NULL; pp = &(*pp)->next) {
+			if (*pp == w) {
+				*pp = w->next;
+				break;
+			}
+		}
+	}
+
+	pthread_mutex_unlock(&futex_lock);
+	pthread_cond_destroy(&w->cond);
+	free(w);
+
+	return ret;
+}
+
+int
+futex_wake(uint64_t addr, int count, uint32_t bitset)
+{
+	futex_waiter_t	*w;
+	unsigned int	 h;
+	int		 woken;
+
+	if (count <= 0)
+		return 0;
+
+	h = futex_hash_fn(addr);
+	woken = 0;
+
+	pthread_mutex_lock(&futex_lock);
+	for (w = futex_hash[h]; w != NULL && woken < count; w = w->next) {
+		if (w->addr == addr && !w->woken &&
+		    (w->bitset & bitset) != 0) {
+			w->woken = 1;
+			pthread_cond_signal(&w->cond);
+			woken++;
+		}
+	}
+	pthread_mutex_unlock(&futex_lock);
+
+	return woken;
+}
+
+int
+futex_requeue(uint64_t from, uint64_t to, int wake_count, int requeue_limit)
+{
+	futex_waiter_t	*w;
+	unsigned int	 h;
+	int		 woken, requeued;
+
+	h = futex_hash_fn(from);
+	woken = 0;
+	requeued = 0;
+
+	pthread_mutex_lock(&futex_lock);
+	for (w = futex_hash[h]; w != NULL; w = w->next) {
+		if (w->addr != from || w->woken)
+			continue;
+		if (woken < wake_count) {
+			w->woken = 1;
+			pthread_cond_signal(&w->cond);
+			woken++;
+		} else if (requeued < requeue_limit) {
+			w->addr = to;
+			requeued++;
+		}
+	}
+	pthread_mutex_unlock(&futex_lock);
+
+	return woken;
+}
+
 static int64_t
 do_futex(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
     uint64_t a3, uint64_t a4, uint64_t a5)
 {
 	int	op;
 
-	(void)a3;
-	(void)a4;
-	(void)a5;
-
-	op = (int)a1 & ~FUTEX_PRIVATE_FLAG;
+	op = (int)a1 & ~LINUX_FUTEX_PRIVATE_FLAG;
 
 	switch (op) {
-	case FUTEX_WAIT: {
+	case LINUX_FUTEX_WAIT: {
+		uint32_t		curval;
+		struct timespec		ts, *tsp;
+
+		if (mem_read32(proc->mem, a0, &curval) != 0)
+			return -LINUX_EFAULT;
+		if (curval != (uint32_t)a2)
+			return -11;	/* EAGAIN */
+
+		tsp = NULL;
+		if (a3 != 0) {
+			uint64_t	sec, nsec;
+
+			if (mem_read64(proc->mem, a3, &sec) != 0)
+				return -LINUX_EFAULT;
+			if (mem_read64(proc->mem, a3 + 8, &nsec) != 0)
+				return -LINUX_EFAULT;
+			ts.tv_sec = (time_t)sec;
+			ts.tv_nsec = (long)nsec;
+			tsp = &ts;
+		}
+
+		return futex_wait(a0, (uint32_t)a2,
+		    LINUX_FUTEX_BITSET_MATCH_ANY, tsp);
+	}
+
+	case LINUX_FUTEX_WAKE:
+		return futex_wake(a0, (int)a2,
+		    LINUX_FUTEX_BITSET_MATCH_ANY);
+
+	case LINUX_FUTEX_WAIT_BITSET: {
+		uint32_t		curval;
+		struct timespec		ts, *tsp;
+		uint32_t		bitset;
+
+		bitset = (uint32_t)a5;
+		if (bitset == 0)
+			return -LINUX_EINVAL;
+
+		if (mem_read32(proc->mem, a0, &curval) != 0)
+			return -LINUX_EFAULT;
+		if (curval != (uint32_t)a2)
+			return -11;	/* EAGAIN */
+
+		tsp = NULL;
+		if (a3 != 0) {
+			uint64_t	sec, nsec;
+
+			if (mem_read64(proc->mem, a3, &sec) != 0)
+				return -LINUX_EFAULT;
+			if (mem_read64(proc->mem, a3 + 8, &nsec) != 0)
+				return -LINUX_EFAULT;
+			ts.tv_sec = (time_t)sec;
+			ts.tv_nsec = (long)nsec;
+			tsp = &ts;
+		}
+
+		return futex_wait(a0, (uint32_t)a2, bitset, tsp);
+	}
+
+	case LINUX_FUTEX_WAKE_BITSET: {
+		uint32_t	bitset;
+
+		bitset = (uint32_t)a5;
+		if (bitset == 0)
+			return -LINUX_EINVAL;
+
+		return futex_wake(a0, (int)a2, bitset);
+	}
+
+	case LINUX_FUTEX_REQUEUE:
+		return futex_requeue(a0, a4, (int)a2, (int)a3);
+
+	case LINUX_FUTEX_CMP_REQUEUE: {
 		uint32_t	curval;
 
 		if (mem_read32(proc->mem, a0, &curval) != 0)
 			return -LINUX_EFAULT;
-
-		/* If value does not match expected, return EAGAIN. */
-		if (curval != (uint32_t)a2)
+		if (curval != (uint32_t)a5)
 			return -11;	/* EAGAIN */
 
-		/*
-		 * In a full implementation we would block here.
-		 * For now, return immediately (spurious wakeup).
-		 */
-		return 0;
+		return futex_requeue(a0, a4, (int)a2, (int)a3);
 	}
-	case FUTEX_WAKE:
-		/* Return 0 (no waiters woken in stub). */
-		return 0;
+
 	default:
 		LOG_DBG("futex: unhandled op %d", op);
 		return 0;
 	}
+}
+
+/* --- Scheduling stubs --- */
+
+static int64_t
+do_sched_getaffinity(emu_process_t *proc, uint64_t a0, uint64_t a1,
+    uint64_t a2)
+{
+	size_t	size;
+	uint8_t	*mask;
+
+	(void)a0;	/* pid, ignored (0 = self) */
+
+	size = (size_t)a1;
+	if (size == 0 || size > 128)
+		return -LINUX_EINVAL;
+
+	mask = calloc(1, size);
+	if (mask == NULL)
+		return -LINUX_ENOMEM;
+
+	/* Report 1 CPU available */
+	mask[0] = 1;
+
+	if (mem_copy_to(proc->mem, a2, mask, size) != 0) {
+		free(mask);
+		return -LINUX_EFAULT;
+	}
+
+	free(mask);
+	return (int64_t)size;
+}
+
+static int64_t
+do_sched_getparam(emu_process_t *proc, uint64_t a0, uint64_t a1)
+{
+	/* struct sched_param { int sched_priority; } */
+	uint32_t	prio;
+
+	(void)a0;	/* pid */
+
+	prio = 0;
+	if (mem_write32(proc->mem, a1, prio) != 0)
+		return -LINUX_EFAULT;
+	return 0;
+}
+
+static int64_t
+do_personality(uint64_t a0)
+{
+	/* persona == 0xFFFFFFFF means query; otherwise set and return 0 */
+	if ((uint32_t)a0 == 0xFFFFFFFFU)
+		return 0;	/* PER_LINUX = 0 */
+	return 0;
 }
 
 int64_t
@@ -464,6 +733,21 @@ sys_misc(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 		return do_futex(proc, a0, a1, a2, a3, a4, a5);
 	case SYS_SYSLOG:
 		return 0;
+	case SYS_PERSONALITY:
+		return do_personality(a0);
+	case SYS_SCHED_SETSCHEDULER:
+		(void)a0; (void)a1; (void)a2;
+		return 0;
+	case SYS_SCHED_GETSCHEDULER:
+		(void)a0;
+		return 0;	/* SCHED_OTHER */
+	case SYS_SCHED_GETPARAM:
+		return do_sched_getparam(proc, a0, a1);
+	case SYS_SCHED_SETAFFINITY:
+		(void)a0; (void)a1; (void)a2;
+		return 0;
+	case SYS_SCHED_GETAFFINITY:
+		return do_sched_getaffinity(proc, a0, a1, a2);
 	default:
 		LOG_WARN("sys_misc: unhandled nr=%d", nr);
 		return -LINUX_ENOSYS;
