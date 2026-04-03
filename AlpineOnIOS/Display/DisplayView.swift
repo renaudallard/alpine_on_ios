@@ -17,6 +17,55 @@
 import SwiftUI
 import MetalKit
 
+struct DisplayContainerView: View {
+    @State private var scale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    var body: some View {
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+
+            DisplayView()
+                .scaleEffect(scale)
+                .offset(offset)
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            scale = max(0.5, min(3.0, value))
+                        }
+                )
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 20)
+                        .onChanged { value in
+                            offset = CGSize(
+                                width: lastOffset.width + value.translation.width,
+                                height: lastOffset.height + value.translation.height
+                            )
+                        }
+                        .onEnded { _ in
+                            lastOffset = offset
+                        }
+                )
+
+            /* Virtual cursor indicator */
+            VStack {
+                Spacer()
+                HStack {
+                    Text("Pinch to zoom, drag to pan")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(8)
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(8)
+                    Spacer()
+                }
+                .padding()
+            }
+        }
+    }
+}
+
 struct DisplayView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MTKView {
@@ -32,6 +81,17 @@ struct DisplayView: UIViewRepresentable {
         view.isPaused = false
         view.isMultipleTouchEnabled = true
         context.coordinator.setup(device: device)
+
+        /* Add touch handler for mouse input */
+        let tap = UITapGestureRecognizer(target: context.coordinator,
+                                          action: #selector(Coordinator.handleTap(_:)))
+        view.addGestureRecognizer(tap)
+
+        let pan = UIPanGestureRecognizer(target: context.coordinator,
+                                          action: #selector(Coordinator.handlePan(_:)))
+        pan.maximumNumberOfTouches = 1
+        view.addGestureRecognizer(pan)
+
         return view
     }
 
@@ -123,6 +183,45 @@ struct DisplayView: UIViewRepresentable {
             blitEncoder.endEncoding()
             commandBuffer.present(drawable)
             commandBuffer.commit()
+        }
+
+        /* Touch-to-mouse mapping */
+
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard let view = gesture.view else { return }
+            let loc = gesture.location(in: view)
+            let mapped = mapToFramebuffer(point: loc, viewSize: view.bounds.size)
+            input_send_touch(Int32(mapped.x), Int32(mapped.y), 1)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                input_send_touch(Int32(mapped.x), Int32(mapped.y), 0)
+            }
+        }
+
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            guard let view = gesture.view else { return }
+            let loc = gesture.location(in: view)
+            let mapped = mapToFramebuffer(point: loc, viewSize: view.bounds.size)
+
+            switch gesture.state {
+            case .began:
+                input_send_touch(Int32(mapped.x), Int32(mapped.y), 1)
+            case .changed:
+                input_send_touch(Int32(mapped.x), Int32(mapped.y), 1)
+            case .ended, .cancelled:
+                input_send_touch(Int32(mapped.x), Int32(mapped.y), 0)
+            default:
+                break
+            }
+        }
+
+        private func mapToFramebuffer(point: CGPoint, viewSize: CGSize) -> CGPoint {
+            var w: UInt32 = 0, h: UInt32 = 0
+            fb_get_size(&w, &h)
+            if w == 0 || h == 0 { return .zero }
+            let x = point.x / viewSize.width * CGFloat(w)
+            let y = point.y / viewSize.height * CGFloat(h)
+            return CGPoint(x: max(0, min(x, CGFloat(w - 1))),
+                           y: max(0, min(y, CGFloat(h - 1))))
         }
     }
 }

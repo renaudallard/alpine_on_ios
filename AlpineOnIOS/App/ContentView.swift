@@ -48,7 +48,7 @@ struct ContentView: View {
                 Label("Terminal", systemImage: "terminal")
             }
 
-            DisplayView()
+            DisplayContainerView()
                 .tabItem {
                     Label("Display", systemImage: "display")
                 }
