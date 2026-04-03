@@ -27,6 +27,9 @@
 #ifdef __aarch64__
 
 #include <signal.h>
+#ifdef __APPLE__
+#include <libkern/OSCacheControl.h>
+#endif
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -191,7 +194,11 @@ jit_patch_code(void *code, size_t size)
 	JIT_WRITE_DISABLE();
 #endif
 
+#ifdef __APPLE__
+	sys_icache_invalidate(code, size);
+#else
 	__builtin___clear_cache(code, (char *)code + size);
+#endif
 }
 
 #else /* !__aarch64__ */
