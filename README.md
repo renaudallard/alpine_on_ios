@@ -128,7 +128,7 @@ xcodebuild build \
 Three GitHub Actions workflows handle builds and releases:
 
 - **ci.yml**: runs on every push and pull request. Tests the emulator
-  on Linux, builds the iOS app on macOS 14, and uploads the IPA as a
+  on Linux, builds the iOS app on macOS 26, and uploads the IPA as a
   CI artifact.
 - **version-tag.yml**: watches `project.yml` for changes to
   `MARKETING_VERSION`. When a version bump is pushed to `main`, it
