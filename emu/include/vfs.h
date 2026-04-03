@@ -30,7 +30,7 @@ struct emu_stat {
 	int64_t		st_mtime_nsec;
 	int64_t		st_ctime_sec;
 	int64_t		st_ctime_nsec;
-	uint32_t	__unused[2];
+	uint32_t	__reserved[2];
 };
 
 /* Emulated directory entry */
