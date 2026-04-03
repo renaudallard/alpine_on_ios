@@ -348,10 +348,10 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 
 	/* Reset signal handlers to defaults. */
 	for (int i = 0; i < EMU_NSIG; i++) {
-		if (proc->sigactions[i].sa_handler != EMU_SIG_IGN)
-			proc->sigactions[i].sa_handler = EMU_SIG_DFL;
-		proc->sigactions[i].sa_flags = 0;
-		proc->sigactions[i].sa_mask = 0;
+		if (proc->sigactions[i].handler != EMU_SIG_IGN)
+			proc->sigactions[i].handler = EMU_SIG_DFL;
+		proc->sigactions[i].flags = 0;
+		proc->sigactions[i].mask = 0;
 	}
 
 	LOG_INFO("proc: execve pid %d: %s entry=0x%lx sp=0x%lx",

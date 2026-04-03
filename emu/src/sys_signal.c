@@ -51,13 +51,13 @@ do_rt_sigaction(emu_process_t *proc, uint64_t a0, uint64_t a1,
 
 	/* Read new action if provided. */
 	if (a1 != 0) {
-		if (mem_read64(proc->mem, a1, &act.sa_handler) != 0)
+		if (mem_read64(proc->mem, a1, &act.handler) != 0)
 			return -LINUX_EFAULT;
-		if (mem_read64(proc->mem, a1 + 8, &act.sa_flags) != 0)
+		if (mem_read64(proc->mem, a1 + 8, &act.flags) != 0)
 			return -LINUX_EFAULT;
-		if (mem_read64(proc->mem, a1 + 16, &act.sa_restorer) != 0)
+		if (mem_read64(proc->mem, a1 + 16, &act.restorer) != 0)
 			return -LINUX_EFAULT;
-		if (mem_read64(proc->mem, a1 + 24, &act.sa_mask) != 0)
+		if (mem_read64(proc->mem, a1 + 24, &act.mask) != 0)
 			return -LINUX_EFAULT;
 	}
 
@@ -67,13 +67,13 @@ do_rt_sigaction(emu_process_t *proc, uint64_t a0, uint64_t a1,
 
 	/* Write old action if requested. */
 	if (a2 != 0) {
-		if (mem_write64(proc->mem, a2, oldact.sa_handler) != 0)
+		if (mem_write64(proc->mem, a2, oldact.handler) != 0)
 			return -LINUX_EFAULT;
-		if (mem_write64(proc->mem, a2 + 8, oldact.sa_flags) != 0)
+		if (mem_write64(proc->mem, a2 + 8, oldact.flags) != 0)
 			return -LINUX_EFAULT;
-		if (mem_write64(proc->mem, a2 + 16, oldact.sa_restorer) != 0)
+		if (mem_write64(proc->mem, a2 + 16, oldact.restorer) != 0)
 			return -LINUX_EFAULT;
-		if (mem_write64(proc->mem, a2 + 24, oldact.sa_mask) != 0)
+		if (mem_write64(proc->mem, a2 + 24, oldact.mask) != 0)
 			return -LINUX_EFAULT;
 	}
 

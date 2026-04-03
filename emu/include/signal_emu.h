@@ -55,12 +55,15 @@
 #define EMU_SIG_DFL	((uint64_t)0)
 #define EMU_SIG_IGN	((uint64_t)1)
 
-/* Emulated sigaction (matches Linux kernel_sigaction for aarch64) */
+/*
+ * Emulated sigaction (matches Linux kernel_sigaction for aarch64).
+ * Field names avoid sa_handler/sa_flags which are macros on macOS.
+ */
 struct emu_sigaction {
-	uint64_t	sa_handler;	/* Handler address or SIG_DFL/SIG_IGN */
-	uint64_t	sa_flags;
-	uint64_t	sa_restorer;
-	uint64_t	sa_mask;	/* Blocked signals during handler */
+	uint64_t	handler;	/* Handler address or SIG_DFL/SIG_IGN */
+	uint64_t	flags;
+	uint64_t	restorer;
+	uint64_t	mask;		/* Blocked signals during handler */
 };
 
 /* Forward declaration */

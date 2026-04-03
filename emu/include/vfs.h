@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 #include <limits.h>
 
 /* Emulated stat structure (matches Linux struct stat for aarch64) */

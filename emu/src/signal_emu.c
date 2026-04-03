@@ -160,10 +160,10 @@ sig_deliver(emu_process_t *proc)
 
 	sa = &proc->sigactions[sig];
 
-	if (sa->sa_handler == EMU_SIG_IGN)
+	if (sa->handler == EMU_SIG_IGN)
 		return;
 
-	if (sa->sa_handler == EMU_SIG_DFL) {
+	if (sa->handler == EMU_SIG_DFL) {
 		/* Default actions. */
 		if (sig_default_ignore(sig))
 			return;
@@ -195,19 +195,19 @@ sig_deliver(emu_process_t *proc)
 	 * blocked mask, and a sigreturn trampoline.
 	 */
 	LOG_DBG("sig: pid %d delivering signal %d to handler 0x%lx",
-	    proc->pid, sig, (unsigned long)sa->sa_handler);
+	    proc->pid, sig, (unsigned long)sa->handler);
 
 	proc->cpu.x[30] = proc->cpu.pc;
 	proc->cpu.x[0] = (uint64_t)sig;
-	proc->cpu.pc = sa->sa_handler;
+	proc->cpu.pc = sa->handler;
 
 	/* Block signals specified in sa_mask during handler execution. */
-	proc->sig_blocked |= sa->sa_mask;
-	if (!(sa->sa_flags & EMU_SA_NODEFER))
+	proc->sig_blocked |= sa->mask;
+	if (!(sa->flags & EMU_SA_NODEFER))
 		proc->sig_blocked |= SIGMASK(sig);
 	proc->sig_blocked &= ~UNCATCHABLE;
 
 	/* SA_RESETHAND: reset to default after delivery. */
-	if (sa->sa_flags & EMU_SA_RESETHAND)
-		sa->sa_handler = EMU_SIG_DFL;
+	if (sa->flags & EMU_SA_RESETHAND)
+		sa->handler = EMU_SIG_DFL;
 }
