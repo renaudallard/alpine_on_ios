@@ -34,6 +34,17 @@ struct SettingsView: View {
                     Slider(value: $settings.fontSize, in: 8...24, step: 1)
                 }
 
+                Section(header: Text("Display")) {
+                    Picker("Resolution", selection: $settings.displayResolutionRaw) {
+                        ForEach(DisplayResolution.allCases) { res in
+                            Text(res.rawValue).tag(res.rawValue)
+                        }
+                    }
+                    Text("Changes take effect on next X server start.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 Section(header: Text("Keyboard")) {
                     Toggle("Haptic Feedback", isOn: $settings.hapticFeedback)
                 }
