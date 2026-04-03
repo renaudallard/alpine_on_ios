@@ -72,7 +72,7 @@ struct SettingsView: View {
                         Text("Version")
                         Spacer()
                         Text(Bundle.main.infoDictionary?[
-                            "CFBundleShortVersionString"] as? String ?? "0.1.0")
+                            "CFBundleShortVersionString"] as? String ?? "0.2.0")
                             .foregroundColor(.secondary)
                     }
                     Text("Alpine on iOS runs Alpine Linux aarch64 using "

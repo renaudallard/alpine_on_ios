@@ -9,16 +9,16 @@ URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/${ARCH}/a
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTDIR="$SCRIPT_DIR/alpine"
-TMPDIR="$PROJECT_DIR/tmp"
+DL_TMPDIR="$PROJECT_DIR/tmp"
 
-mkdir -p "$OUTDIR" "$TMPDIR"
+mkdir -p "$OUTDIR" "$DL_TMPDIR"
 
 echo "Downloading Alpine ${ALPINE_RELEASE} minirootfs for ${ARCH}..."
-curl -fL -o "$TMPDIR/alpine-minirootfs.tar.gz" "$URL"
+curl -fL -o "$DL_TMPDIR/alpine-minirootfs.tar.gz" "$URL"
 
 echo "Extracting to $OUTDIR..."
-tar xzf "$TMPDIR/alpine-minirootfs.tar.gz" -C "$OUTDIR"
-rm -f "$TMPDIR/alpine-minirootfs.tar.gz"
+tar xzf "$DL_TMPDIR/alpine-minirootfs.tar.gz" -C "$OUTDIR"
+rm -f "$DL_TMPDIR/alpine-minirootfs.tar.gz"
 
 mkdir -p "$OUTDIR/tmp"
 

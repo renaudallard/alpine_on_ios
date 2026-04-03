@@ -237,6 +237,10 @@ struct KeyboardInputView: UIViewRepresentable {
             self.onKeyPress = onKeyPress
         }
 
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
         @objc func focusKeyboard(_ notification: Notification) {
             textField?.becomeFirstResponder()
         }

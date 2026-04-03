@@ -37,6 +37,13 @@ jobs:
       - name: Download rootfs
         run: ./rootfs/download_rootfs.sh
 
+      - name: Apply rootfs overlay
+        run: |
+          if [ -d rootfs/overlay ]; then
+            cp -r rootfs/overlay/* rootfs/alpine/
+            chmod +x rootfs/alpine/root/.xinitrc rootfs/alpine/root/start-firefox.sh 2>/dev/null || true
+          fi
+
       - name: Generate Xcode project
         run: xcodegen generate
 

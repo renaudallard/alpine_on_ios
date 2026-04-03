@@ -561,8 +561,12 @@ fd_table_release(fd_table_t *tbl)
 		return;
 
 	for (i = 0; i < MAX_FDS; i++) {
-		if (tbl->fds[i].type != FD_NONE && tbl->fds[i].real_fd >= 0)
-			close(tbl->fds[i].real_fd);
+		if (tbl->fds[i].type != FD_NONE) {
+			if (tbl->fds[i].real_fd >= 0)
+				close(tbl->fds[i].real_fd);
+			if (tbl->fds[i].private != NULL)
+				free(tbl->fds[i].private);
+		}
 	}
 
 	pthread_mutex_destroy(&tbl->lock);
@@ -598,6 +602,8 @@ fd_close(fd_table_t *tbl, int fd)
 	if (tbl->fds[fd].type != FD_NONE) {
 		if (tbl->fds[fd].real_fd >= 0)
 			close(tbl->fds[fd].real_fd);
+		if (tbl->fds[fd].private != NULL)
+			free(tbl->fds[fd].private);
 		memset(&tbl->fds[fd], 0, sizeof(fd_entry_t));
 	}
 	pthread_mutex_unlock(&tbl->lock);
@@ -613,6 +619,8 @@ fd_close_cloexec(fd_table_t *tbl)
 		if (tbl->fds[i].type != FD_NONE && tbl->fds[i].cloexec) {
 			if (tbl->fds[i].real_fd >= 0)
 				close(tbl->fds[i].real_fd);
+			if (tbl->fds[i].private != NULL)
+				free(tbl->fds[i].private);
 			memset(&tbl->fds[i], 0, sizeof(fd_entry_t));
 		}
 	}

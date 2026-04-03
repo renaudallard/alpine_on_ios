@@ -110,6 +110,7 @@ alpine_on_ios/
 |   +-- CMakeLists.txt
 +-- rootfs/
 |   +-- download_rootfs.sh          Download Alpine minirootfs
+|   +-- overlay/                    Files copied into rootfs (X11 config, .profile, etc.)
 +-- scripts/
     +-- build_rootfs.sh             Package rootfs for app bundle
     +-- package_ipa.sh              Create .ipa from build output

@@ -137,7 +137,6 @@ do_socketpair(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	efd1 = fd_alloc(proc->fds, 0);
 	if (efd1 < 0) {
 		fd_close(proc->fds, efd0);
-		close(sv[0]);
 		close(sv[1]);
 		return -LINUX_EMFILE;
 	}
@@ -151,8 +150,6 @@ do_socketpair(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	if (mem_copy_to(proc->mem, a3, fds, sizeof(fds)) != 0) {
 		fd_close(proc->fds, efd0);
 		fd_close(proc->fds, efd1);
-		close(sv[0]);
-		close(sv[1]);
 		return -LINUX_EFAULT;
 	}
 

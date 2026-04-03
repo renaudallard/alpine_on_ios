@@ -61,7 +61,6 @@ struct fb_fix_screeninfo {
 	uint32_t	type_aux;
 	uint32_t	visual;
 	uint16_t	xpanstep, ypanstep, ywrapstep;
-	uint16_t	__pad;
 	uint32_t	line_length;
 	uint64_t	mmio_start;
 	uint32_t	mmio_len;

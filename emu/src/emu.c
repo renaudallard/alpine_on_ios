@@ -45,6 +45,7 @@ emu_init(const char *rootfs_path)
 
 	log_init(LOG_LVL_INFO);
 	proc_table_init();
+	futex_init();
 
 	g_vfs = vfs_create(rootfs_path);
 	if (g_vfs == NULL) {
@@ -88,11 +89,12 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 
 	/* Wire fds 0, 1, 2 to the process end of the socketpair. */
 	proc->fds->fds[0].type = FD_TTY;
-	proc->fds->fds[0].real_fd = sockpair[1];
+	proc->fds->fds[0].real_fd = dup(sockpair[1]);
 	proc->fds->fds[1].type = FD_TTY;
 	proc->fds->fds[1].real_fd = dup(sockpair[1]);
 	proc->fds->fds[2].type = FD_TTY;
 	proc->fds->fds[2].real_fd = dup(sockpair[1]);
+	close(sockpair[1]);
 
 	ret = proc_execve(proc, path, argv, envp);
 	if (ret != 0) {

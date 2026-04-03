@@ -33,7 +33,6 @@
 #define PAGE_SIZE	4096
 #define PAGE_MASK	(~((uint64_t)PAGE_SIZE - 1))
 #define MMAP_START	0x7F0000000000ULL
-#define MMAP_START_JIT	0x200000000ULL
 
 static uint64_t
 page_align_down(uint64_t addr)
@@ -319,10 +318,19 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 			uint64_t	trim;
 
 			trim = end - r->base;
-			if (!ms->jit_mode)
-				memmove(r->host, r->host + trim,
+			if (!ms->jit_mode) {
+				uint8_t	*newhost;
+
+				newhost = calloc(1, r->size - trim);
+				if (newhost == NULL)
+					continue;
+				memcpy(newhost, r->host + trim,
 				    r->size - trim);
-			r->host = r->host + trim;
+				free(r->host);
+				r->host = newhost;
+			} else {
+				r->host = r->host + trim;
+			}
 			r->base = end;
 			r->size -= trim;
 		}

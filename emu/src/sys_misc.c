@@ -500,25 +500,38 @@ futex_wake(uint64_t addr, int count, uint32_t bitset)
 int
 futex_requeue(uint64_t from, uint64_t to, int wake_count, int requeue_limit)
 {
-	futex_waiter_t	*w;
-	unsigned int	 h;
+	futex_waiter_t	*w, **pp;
+	unsigned int	 h, new_h;
 	int		 woken, requeued;
 
 	h = futex_hash_fn(from);
+	new_h = futex_hash_fn(to);
 	woken = 0;
 	requeued = 0;
 
 	pthread_mutex_lock(&futex_lock);
-	for (w = futex_hash[h]; w != NULL; w = w->next) {
-		if (w->addr != from || w->woken)
+	pp = &futex_hash[h];
+	while (*pp != NULL) {
+		w = *pp;
+		if (w->addr != from || w->woken) {
+			pp = &w->next;
 			continue;
+		}
 		if (woken < wake_count) {
 			w->woken = 1;
 			pthread_cond_signal(&w->cond);
 			woken++;
+			pp = &w->next;
 		} else if (requeued < requeue_limit) {
+			/* Remove from old bucket. */
+			*pp = w->next;
+			/* Insert into new bucket. */
 			w->addr = to;
+			w->next = futex_hash[new_h];
+			futex_hash[new_h] = w;
 			requeued++;
+		} else {
+			pp = &w->next;
 		}
 	}
 	pthread_mutex_unlock(&futex_lock);

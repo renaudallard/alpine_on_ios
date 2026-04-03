@@ -420,9 +420,6 @@ do_close(emu_process_t *proc, uint64_t a0)
 	if (fde == NULL || fde->type == FD_NONE)
 		return -LINUX_EBADF;
 
-	if (fde->real_fd >= 0)
-		close(fde->real_fd);
-
 	fd_close(proc->fds, fd);
 	return 0;
 }
@@ -861,7 +858,6 @@ do_pipe2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	efd1 = fd_alloc(proc->fds, 0);
 	if (efd1 < 0) {
 		fd_close(proc->fds, efd0);
-		close(pipefd[0]);
 		close(pipefd[1]);
 		return -LINUX_EMFILE;
 	}
@@ -878,8 +874,6 @@ do_pipe2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	if (mem_copy_to(proc->mem, a0, fds, sizeof(fds)) != 0) {
 		fd_close(proc->fds, efd0);
 		fd_close(proc->fds, efd1);
-		close(pipefd[0]);
-		close(pipefd[1]);
 		return -LINUX_EFAULT;
 	}
 

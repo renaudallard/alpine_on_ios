@@ -23,7 +23,6 @@ class EmulatorBridge: ObservableObject {
 
     private var termFD: Int32 = -1
     private var readThread: Thread?
-    private var fileHandle: FileHandle?
 
     // MARK: - Initialization
 
@@ -75,7 +74,6 @@ class EmulatorBridge: ObservableObject {
         if result >= 0 {
             pid = Int(result)
             termFD = fd
-            fileHandle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
         } else {
             print("EmulatorBridge: emu_spawn failed")
         }

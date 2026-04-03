@@ -19,6 +19,7 @@ import MetalKit
 
 struct DisplayContainerView: View {
     @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
 
@@ -32,7 +33,10 @@ struct DisplayContainerView: View {
                 .gesture(
                     MagnificationGesture()
                         .onChanged { value in
-                            scale = max(0.5, min(3.0, value))
+                            scale = max(0.5, min(3.0, lastScale * value))
+                        }
+                        .onEnded { _ in
+                            lastScale = scale
                         }
                 )
                 .simultaneousGesture(
