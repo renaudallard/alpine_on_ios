@@ -158,15 +158,18 @@ class EmulatorBridge: ObservableObject {
             }
         }
 
-        return cStrings.withUnsafeMutableBufferPointer { buf in
-            /* Cast UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
-             * to UnsafeMutablePointer<UnsafePointer<CChar>?> */
-            buf.baseAddress!.withMemoryRebound(
-                to: UnsafePointer<CChar>?.self,
-                capacity: cStrings.count
-            ) { ptr in
-                body(ptr)
-            }
+        let count = cStrings.count
+        let cArray = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: count)
+        for i in 0..<count {
+            cArray[i] = cStrings[i]
+        }
+        defer { cArray.deallocate() }
+
+        return cArray.withMemoryRebound(
+            to: UnsafePointer<CChar>?.self,
+            capacity: count
+        ) { ptr in
+            body(ptr)
         }
     }
 }
