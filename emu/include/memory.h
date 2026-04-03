@@ -10,6 +10,9 @@
 #include <stddef.h>
 #include <pthread.h>
 
+/* JIT mode mmap start address (above iOS PAGEZERO) */
+#define MMAP_START_JIT	0x200000000ULL
+
 /* Protection flags (match Linux PROT_*) */
 #define MEM_PROT_NONE	0
 #define MEM_PROT_READ	1
@@ -39,6 +42,7 @@ typedef struct mem_space {
 	uint64_t	brk_current;	/* Current brk */
 	uint64_t	mmap_next;	/* Next mmap hint addr */
 	pthread_mutex_t	lock;
+	int		jit_mode;	/* 1 = JIT (mmap at guest addr) */
 } mem_space_t;
 
 /* Lifecycle */

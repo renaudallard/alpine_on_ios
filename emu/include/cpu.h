@@ -67,6 +67,9 @@ typedef struct cpu_state {
 	mem_space_t	*mem;
 	int		running;
 	int		exit_code;
+
+	/* JIT host register save area (x19-x30, sp, padding) */
+	uint64_t	jit_host_save[14];
 } cpu_state_t;
 
 void	cpu_init(cpu_state_t *cpu);

@@ -16,16 +16,24 @@
 
 #define _DEFAULT_SOURCE
 
+#include <sys/mman.h>
+
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
+
 #include "memory.h"
 #include "log.h"
+#include "jit.h"
 
 #define PAGE_SIZE	4096
 #define PAGE_MASK	(~((uint64_t)PAGE_SIZE - 1))
 #define MMAP_START	0x7F0000000000ULL
+#define MMAP_START_JIT	0x200000000ULL
 
 static uint64_t
 page_align_down(uint64_t addr)
@@ -77,6 +85,7 @@ mem_space_create(void)
 		return NULL;
 
 	ms->mmap_next = MMAP_START;
+	ms->jit_mode = 0;
 	pthread_mutex_init(&ms->lock, NULL);
 	return ms;
 }
@@ -91,7 +100,10 @@ mem_space_destroy(mem_space_t *ms)
 
 	for (r = ms->regions; r != NULL; r = next) {
 		next = r->next;
-		free(r->host);
+		if (ms->jit_mode)
+			munmap(r->host, r->size);
+		else
+			free(r->host);
 		free(r);
 	}
 
@@ -117,6 +129,7 @@ mem_space_clone(mem_space_t *src)
 	dst->brk_base = src->brk_base;
 	dst->brk_current = src->brk_current;
 	dst->mmap_next = src->mmap_next;
+	dst->jit_mode = src->jit_mode;
 	pthread_mutex_init(&dst->lock, NULL);
 
 	pp = &dst->regions;
@@ -129,12 +142,46 @@ mem_space_clone(mem_space_t *src)
 		nr->size = r->size;
 		nr->prot = r->prot;
 		nr->flags = r->flags;
-		nr->host = calloc(1, r->size);
-		if (nr->host == NULL) {
-			free(nr);
-			goto fail;
+
+		if (src->jit_mode) {
+			int	mflags, mprot;
+
+			mflags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
+			mprot = PROT_READ | PROT_WRITE;
+#ifdef __APPLE__
+			if (r->prot & MEM_PROT_EXEC)
+				mflags |= MAP_JIT;
+#endif
+			nr->host = mmap((void *)r->base, r->size,
+			    mprot, mflags, -1, 0);
+			if (nr->host == MAP_FAILED) {
+				free(nr);
+				goto fail;
+			}
+#ifdef __APPLE__
+			if (r->prot & MEM_PROT_EXEC)
+				pthread_jit_write_protect_np(false);
+#endif
+			memcpy(nr->host, r->host, r->size);
+#ifdef __APPLE__
+			if (r->prot & MEM_PROT_EXEC)
+				pthread_jit_write_protect_np(true);
+#endif
+			if (r->prot & MEM_PROT_EXEC) {
+				mprot = PROT_READ | PROT_EXEC;
+				if (r->prot & MEM_PROT_WRITE)
+					mprot |= PROT_WRITE;
+				mprotect(nr->host, r->size, mprot);
+			}
+		} else {
+			nr->host = calloc(1, r->size);
+			if (nr->host == NULL) {
+				free(nr);
+				goto fail;
+			}
+			memcpy(nr->host, r->host, r->size);
 		}
-		memcpy(nr->host, r->host, r->size);
+
 		nr->next = NULL;
 		*pp = nr;
 		pp = &nr->next;
@@ -147,6 +194,16 @@ fail:
 	pthread_mutex_unlock(&src->lock);
 	mem_space_destroy(dst);
 	return NULL;
+}
+
+/* Free a region's host memory depending on jit_mode. */
+static void
+region_free_host(mem_space_t *ms, mem_region_t *r)
+{
+	if (ms->jit_mode)
+		munmap(r->host, r->size);
+	else
+		free(r->host);
 }
 
 /* Remove any regions overlapping [addr, addr+size). */
@@ -168,7 +225,7 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 		if (r->base >= addr && rend <= end) {
 			/* Entirely within range, remove. */
 			region_remove(ms, r);
-			free(r->host);
+			region_free_host(ms, r);
 			free(r);
 			continue;
 		}
@@ -188,15 +245,47 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 			tail->size = tail_size;
 			tail->prot = r->prot;
 			tail->flags = r->flags;
-			tail->host = calloc(1, tail_size);
-			if (tail->host == NULL) {
-				free(tail);
-				continue;
+
+			if (ms->jit_mode) {
+				int	mflags, mprot;
+
+				mflags = MAP_PRIVATE | MAP_ANONYMOUS |
+				    MAP_FIXED;
+				mprot = PROT_READ | PROT_WRITE;
+#ifdef __APPLE__
+				if (r->prot & MEM_PROT_EXEC)
+					mflags |= MAP_JIT;
+#endif
+				tail->host = mmap((void *)end, tail_size,
+				    mprot, mflags, -1, 0);
+				if (tail->host == MAP_FAILED) {
+					free(tail);
+					continue;
+				}
+#ifdef __APPLE__
+				if (r->prot & MEM_PROT_EXEC)
+					pthread_jit_write_protect_np(false);
+#endif
+				memcpy(tail->host, r->host + tail_off,
+				    tail_size);
+#ifdef __APPLE__
+				if (r->prot & MEM_PROT_EXEC)
+					pthread_jit_write_protect_np(true);
+#endif
+			} else {
+				tail->host = calloc(1, tail_size);
+				if (tail->host == NULL) {
+					free(tail);
+					continue;
+				}
+				memcpy(tail->host, r->host + tail_off,
+				    tail_size);
 			}
-			memcpy(tail->host, r->host + tail_off, tail_size);
+
 			region_insert(ms, tail);
 
-			/* Truncate original. */
+			/* Truncate original (JIT: partial munmap not
+			 * needed, mmap MAP_FIXED above reclaims tail). */
 			r->size = addr - r->base;
 			continue;
 		}
@@ -209,7 +298,10 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 			uint64_t	trim;
 
 			trim = end - r->base;
-			memmove(r->host, r->host + trim, r->size - trim);
+			if (!ms->jit_mode)
+				memmove(r->host, r->host + trim,
+				    r->size - trim);
+			r->host = r->host + trim;
 			r->base = end;
 			r->size -= trim;
 		}
@@ -270,11 +362,29 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		return (uint64_t)-1;
 	}
 
-	r->host = calloc(1, aligned_size);
-	if (r->host == NULL) {
-		free(r);
-		pthread_mutex_unlock(&ms->lock);
-		return (uint64_t)-1;
+	if (ms->jit_mode) {
+		int	mflags, mprot;
+
+		mflags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
+		mprot = PROT_READ | PROT_WRITE;
+#ifdef __APPLE__
+		if (prot & MEM_PROT_EXEC)
+			mflags |= MAP_JIT;
+#endif
+		r->host = mmap((void *)addr, aligned_size,
+		    mprot, mflags, -1, 0);
+		if (r->host == MAP_FAILED) {
+			free(r);
+			pthread_mutex_unlock(&ms->lock);
+			return (uint64_t)-1;
+		}
+	} else {
+		r->host = calloc(1, aligned_size);
+		if (r->host == NULL) {
+			free(r);
+			pthread_mutex_unlock(&ms->lock);
+			return (uint64_t)-1;
+		}
 	}
 
 	r->base = addr;
@@ -290,9 +400,33 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		to_read = size;
 		if (to_read > aligned_size)
 			to_read = aligned_size;
-		n = pread(fd, r->host, to_read, offset);
+
+		if (ms->jit_mode) {
+#ifdef __APPLE__
+			if (prot & MEM_PROT_EXEC)
+				pthread_jit_write_protect_np(false);
+#endif
+			n = pread(fd, r->host, to_read, offset);
+#ifdef __APPLE__
+			if (prot & MEM_PROT_EXEC)
+				pthread_jit_write_protect_np(true);
+#endif
+		} else {
+			n = pread(fd, r->host, to_read, offset);
+		}
 		if (n < 0)
 			LOG_WARN("mmap: pread failed for fd %d", fd);
+	}
+
+	/* JIT mode: set final protection and patch executable code. */
+	if (ms->jit_mode && (prot & MEM_PROT_EXEC)) {
+		int	fp;
+
+		jit_patch_code(r->host, aligned_size);
+		fp = PROT_READ | PROT_EXEC;
+		if (prot & MEM_PROT_WRITE)
+			fp |= PROT_WRITE;
+		mprotect(r->host, aligned_size, fp);
 	}
 
 	region_insert(ms, r);
@@ -333,11 +467,32 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 	pthread_mutex_lock(&ms->lock);
 	for (r = ms->regions; r != NULL; r = r->next) {
 		uint64_t	rend;
+		int		old_prot;
 
 		rend = r->base + r->size;
 		if (rend <= addr || r->base >= end)
 			continue;
+
+		old_prot = r->prot;
 		r->prot = prot;
+
+		if (ms->jit_mode) {
+			int	hp = 0;
+			if (prot & MEM_PROT_READ)
+				hp |= PROT_READ;
+			if (prot & MEM_PROT_WRITE)
+				hp |= PROT_WRITE;
+			if (prot & MEM_PROT_EXEC) {
+				/*
+				 * Newly executable region: patch SVC and
+				 * TPIDR instructions before enabling exec.
+				 */
+				if (!(old_prot & MEM_PROT_EXEC))
+					jit_patch_code(r->host, r->size);
+				hp |= PROT_EXEC;
+			}
+			mprotect(r->host, r->size, hp);
+		}
 	}
 	pthread_mutex_unlock(&ms->lock);
 
@@ -381,7 +536,7 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 					break;
 			}
 
-			if (r != NULL) {
+			if (r != NULL && !ms->jit_mode) {
 				uint8_t	*newhost;
 
 				newhost = realloc(r->host, r->size + grow);
@@ -392,6 +547,21 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 				memset(newhost + r->size, 0, grow);
 				r->host = newhost;
 				r->size += grow;
+			} else if (r != NULL && ms->jit_mode) {
+				/* Extend by mapping adjacent pages. */
+				uint64_t	ext_base;
+				void		*p;
+
+				ext_base = r->base + r->size;
+				p = mmap((void *)ext_base, grow,
+				    PROT_READ | PROT_WRITE,
+				    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+				    -1, 0);
+				if (p == MAP_FAILED) {
+					pthread_mutex_unlock(&ms->lock);
+					return ms->brk_current;
+				}
+				r->size += grow;
 			} else {
 				r = calloc(1, sizeof(*r));
 				if (r == NULL) {
@@ -399,11 +569,26 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 					return ms->brk_current;
 				}
 				new_size = new_brk - ms->brk_base;
-				r->host = calloc(1, new_size);
-				if (r->host == NULL) {
-					free(r);
-					pthread_mutex_unlock(&ms->lock);
-					return ms->brk_current;
+				if (ms->jit_mode) {
+					r->host = mmap(
+					    (void *)ms->brk_base, new_size,
+					    PROT_READ | PROT_WRITE,
+					    MAP_PRIVATE | MAP_ANONYMOUS |
+					    MAP_FIXED, -1, 0);
+					if (r->host == MAP_FAILED) {
+						free(r);
+						pthread_mutex_unlock(
+						    &ms->lock);
+						return ms->brk_current;
+					}
+				} else {
+					r->host = calloc(1, new_size);
+					if (r->host == NULL) {
+						free(r);
+						pthread_mutex_unlock(
+						    &ms->lock);
+						return ms->brk_current;
+					}
 				}
 				r->base = ms->brk_base;
 				r->size = new_size;
@@ -427,6 +612,27 @@ void *
 mem_translate(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 {
 	mem_region_t	*r;
+
+	/*
+	 * JIT mode: guest addr = host addr.  Still check region
+	 * bounds for safety, but the host pointer is the addr itself.
+	 */
+	if (ms->jit_mode) {
+		pthread_mutex_lock(&ms->lock);
+		for (r = ms->regions; r != NULL; r = r->next) {
+			if (addr >= r->base &&
+			    addr + size <= r->base + r->size) {
+				if ((r->prot & prot) != prot) {
+					pthread_mutex_unlock(&ms->lock);
+					return NULL;
+				}
+				pthread_mutex_unlock(&ms->lock);
+				return (void *)addr;
+			}
+		}
+		pthread_mutex_unlock(&ms->lock);
+		return NULL;
+	}
 
 	pthread_mutex_lock(&ms->lock);
 	for (r = ms->regions; r != NULL; r = r->next) {

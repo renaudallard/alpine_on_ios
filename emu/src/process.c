@@ -28,12 +28,22 @@
 #include "cpu.h"
 #include "elf_loader.h"
 #include "emu.h"
+#include "jit.h"
 #include "log.h"
 #include "memory.h"
 #include "process.h"
 #include "signal_emu.h"
 #include "syscall.h"
 #include "vfs.h"
+
+/* JIT mode address constants */
+#define JIT_BINARY_BASE		0x100000000ULL
+#define JIT_INTERP_BASE		0x180000000ULL
+#define JIT_STACK_TOP		0x1FFFFF0000ULL
+
+/* Interpreter base addresses */
+#define INTERP_INTERP_BASE	0x7f00000000ULL
+#define INTERP_STACK_TOP	0x7fffffe000ULL
 
 /* WNOHANG from Linux. */
 #define LINUX_WNOHANG	1
@@ -270,8 +280,8 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	char		host_path[PATH_MAX];
 	elf_info_t	info, interp_info;
 	mem_space_t	*newmem;
-	uint64_t	sp, entry;
-	int		ret;
+	uint64_t	sp, entry, interp_base, stack_top, bin_base;
+	int		ret, use_jit;
 
 	/* Resolve path through VFS. */
 	ret = vfs_resolve(proc->vfs, path, host_path, sizeof(host_path));
@@ -285,9 +295,24 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	if (newmem == NULL)
 		return (-ENOMEM);
 
+	/* Determine if JIT mode should be used. */
+	use_jit = (proc->mem != NULL && proc->mem->jit_mode) ||
+	    (jit_available() && emu_jit_enabled());
+	if (use_jit) {
+		newmem->jit_mode = 1;
+		newmem->mmap_next = MMAP_START_JIT;
+		bin_base = JIT_BINARY_BASE;
+		interp_base = JIT_INTERP_BASE;
+		stack_top = JIT_STACK_TOP;
+	} else {
+		bin_base = 0;
+		interp_base = INTERP_INTERP_BASE;
+		stack_top = INTERP_STACK_TOP;
+	}
+
 	/* Load ELF. */
 	memset(&info, 0, sizeof(info));
-	ret = elf_load(host_path, newmem, 0, &info);
+	ret = elf_load(host_path, newmem, bin_base, &info);
 	if (ret != 0) {
 		LOG_ERR("proc: execve: failed to load %s", host_path);
 		mem_space_destroy(newmem);
@@ -310,7 +335,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		}
 
 		memset(&interp_info, 0, sizeof(interp_info));
-		ret = elf_load(interp_host, newmem, 0x7f00000000ULL,
+		ret = elf_load(interp_host, newmem, interp_base,
 		    &interp_info);
 		if (ret != 0) {
 			LOG_ERR("proc: execve: failed to load interp %s",
@@ -324,8 +349,8 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		entry = interp_info.entry;
 	}
 
-	/* Set up stack. Stack top at 0x7fffffe000. */
-	sp = elf_setup_stack(newmem, &info, argv, envp, 0x7fffffe000ULL);
+	/* Set up stack. */
+	sp = elf_setup_stack(newmem, &info, argv, envp, stack_top);
 	if (sp == 0) {
 		LOG_ERR("proc: execve: failed to set up stack");
 		mem_space_destroy(newmem);
@@ -399,6 +424,16 @@ proc_run(void *arg)
 
 	LOG_DBG("proc: running pid %d, pc=0x%lx", proc->pid,
 	    (unsigned long)proc->cpu.pc);
+
+#ifdef __aarch64__
+	/* Use JIT native execution when available. */
+	if (proc->mem != NULL && proc->mem->jit_mode && jit_available()) {
+		LOG_INFO("proc: pid %d using JIT execution", proc->pid);
+		jit_run(proc);
+		proc_exit(proc, proc->cpu.exit_code);
+		return (NULL);
+	}
+#endif
 
 	while (proc->cpu.running) {
 		ret = cpu_step(&proc->cpu);

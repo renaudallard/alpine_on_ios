@@ -15,8 +15,9 @@ terminal emulator provides an interactive shell.
 - **Architecture**: emulates AArch64 (64-bit ARM), not x86 (32-bit).
   This means Alpine aarch64 packages work natively.
 - **Instruction set**: since iOS devices are ARM-based, the emulated
-  instruction set matches the host architecture. A future JIT could
-  take advantage of this.
+  instruction set matches the host architecture. The JIT engine runs
+  guest code natively with BRK-based syscall interception for
+  near-native speed.
 
 ## Architecture
 
@@ -30,8 +31,8 @@ terminal emulator provides an interactive shell.
 +-----------+-----------+
             |
 +-----------+-----------+
-|  AArch64 CPU          |   Instruction interpreter
-|  interpreter          |   (fetch-decode-execute loop)
+|  AArch64 Execution    |   JIT native execution (aarch64 hosts)
+|  Engine               |   or interpreter fallback
 +-----------+-----------+
             |
 +-----------+-----------+
@@ -43,6 +44,29 @@ terminal emulator provides an interactive shell.
 |  VFS layer            |   Virtual filesystem with /proc, /dev
 +-----------+-----------+
 ```
+
+### JIT Native Execution
+
+On aarch64 hosts (iOS, macOS ARM, Linux ARM64), the emulator runs guest
+code natively instead of interpreting each instruction. Since both host
+and guest use the same AArch64 instruction set, guest code is mapped at
+its virtual addresses using `mmap(MAP_FIXED)` and executed directly.
+
+Syscalls and thread-pointer accesses are intercepted by patching the
+binary at load time:
+
+- `SVC #0` is replaced with `BRK #0x0001`
+- `MSR TPIDR_EL0, Xn` is replaced with `BRK #(0x0100 | Rn)`
+- `MRS Xn, TPIDR_EL0` is replaced with `BRK #(0x0200 | Rn)`
+
+A `SIGTRAP` signal handler intercepts these BRK instructions, reads
+the register state from the signal context, dispatches the syscall or
+TPIDR operation, and resumes execution. This gives near-native speed
+with no per-instruction overhead.
+
+The JIT engine is enabled automatically on aarch64 and can be toggled
+with `emu_set_jit_enabled()`. On non-aarch64 hosts, the interpreter
+fallback is used.
 
 ## Project Structure
 
@@ -71,8 +95,8 @@ alpine_on_ios/
 |       +-- EmulatorBridge.swift
 |       +-- AlpineOnIOS-Bridging-Header.h
 +-- emu/
-|   +-- include/                    C headers
-|   +-- src/                        C implementation
+|   +-- include/                    C headers (cpu.h, jit.h, memory.h, ...)
+|   +-- src/                        C implementation + jit_entry.S (asm)
 |   +-- tests/                      C unit tests
 |   +-- Makefile
 |   +-- CMakeLists.txt
@@ -248,11 +272,11 @@ a year and removes the 3-app limit.
 
 ## Current Status
 
-Early development. The CPU interpreter, syscall emulation, and terminal
-emulator are functional. Known limitations:
+Early development. The JIT native execution engine, CPU interpreter
+fallback, syscall emulation, and terminal emulator are functional.
+Known limitations:
 
-- No JIT compilation; pure interpreter, so performance is limited
-- SIMD/FP instruction coverage is partial
+- SIMD/FP instruction coverage is partial (interpreter mode)
 - Network syscall support is incomplete
 - No GPU or graphics emulation
 - Single-threaded process execution (clone/fork emulation is basic)

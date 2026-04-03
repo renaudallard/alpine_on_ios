@@ -3,7 +3,8 @@ CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -O2 -g -Iinclude -D_GNU_SOURCE
 LDFLAGS = -lpthread -lm
 
 SRCS = $(wildcard src/*.c)
-OBJS = $(SRCS:src/%.c=build/%.o)
+ASM_SRCS = $(wildcard src/*.S)
+OBJS = $(SRCS:src/%.c=build/%.o) $(ASM_SRCS:src/%.S=build/%.o)
 TEST_SRCS = $(wildcard tests/*.c)
 TEST_OBJS = $(TEST_SRCS:tests/%.c=build/tests/%.o)
 
@@ -16,6 +17,9 @@ build/libemu.a: $(OBJS)
 
 build/%.o: src/%.c | build
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+build/%.o: src/%.S | build
+	$(CC) -c -o $@ $<
 
 build/tests/%.o: tests/%.c | build/tests
 	$(CC) $(CFLAGS) -c -o $@ $<

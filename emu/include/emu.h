@@ -73,4 +73,15 @@ void emu_run(void);
  */
 void emu_shutdown(void);
 
+/*
+ * Enable or disable JIT native execution.
+ * Returns the previous state.
+ */
+int emu_set_jit_enabled(int on);
+
+/*
+ * Check if JIT is enabled.
+ */
+int emu_jit_enabled(void);
+
 #endif /* EMU_H */

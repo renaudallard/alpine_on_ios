@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "emu.h"
+#include "jit.h"
 #include "log.h"
 #include "memory.h"
 #include "process.h"
@@ -30,6 +31,7 @@
 /* Global state */
 static vfs_t		*g_vfs;
 static int		 g_initialized;
+static int		 g_jit_enabled;
 static pthread_mutex_t	 g_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int
@@ -48,6 +50,12 @@ emu_init(const char *rootfs_path)
 	if (g_vfs == NULL) {
 		pthread_mutex_unlock(&g_lock);
 		return (-1);
+	}
+
+	/* Initialize JIT engine if available. */
+	if (jit_available()) {
+		if (jit_init() == 0)
+			g_jit_enabled = 1;
 	}
 
 	g_initialized = 1;
@@ -167,5 +175,24 @@ emu_shutdown(void)
 		g_vfs = NULL;
 	}
 	g_initialized = 0;
+	g_jit_enabled = 0;
 	pthread_mutex_unlock(&g_lock);
+}
+
+int
+emu_set_jit_enabled(int on)
+{
+	int	prev;
+
+	pthread_mutex_lock(&g_lock);
+	prev = g_jit_enabled;
+	g_jit_enabled = on && jit_available();
+	pthread_mutex_unlock(&g_lock);
+	return (prev);
+}
+
+int
+emu_jit_enabled(void)
+{
+	return (g_jit_enabled);
 }

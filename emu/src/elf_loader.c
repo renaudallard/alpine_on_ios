@@ -293,26 +293,11 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 	free(phdrs);
 	close(fd);
 
-	/* Load interpreter if needed. */
-	if (info->interp[0] != '\0') {
-		elf_info_t	interp_info;
-		uint64_t	interp_base;
-
-		/*
-		 * Load the interpreter at a high address to avoid
-		 * colliding with the main binary.
-		 */
-		interp_base = 0x7F0000000000ULL - 0x1000000;
-
-		if (elf_load(info->interp, mem, interp_base,
-		    &interp_info) != 0) {
-			LOG_ERR("elf_load: failed to load interpreter %s",
-			    info->interp);
-			return -1;
-		}
-		info->interp_base = interp_info.base;
-		info->interp_entry = interp_info.entry;
-	}
+	/*
+	 * Interpreter loading is handled by the caller (proc_execve)
+	 * which performs VFS path resolution.  We just record the
+	 * interpreter path in info->interp.
+	 */
 
 	LOG_INFO("elf_load: %s loaded at base=0x%llx entry=0x%llx",
 	    host_path, (unsigned long long)info->base,
