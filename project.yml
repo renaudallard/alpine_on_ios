@@ -1,0 +1,47 @@
+name: AlpineOnIOS
+options:
+  bundleIdPrefix: com.alpineonios
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    HEADER_SEARCH_PATHS: $(SRCROOT)/emu/include
+    SWIFT_OBJC_BRIDGING_HEADER: $(SRCROOT)/AlpineOnIOS/Bridge/AlpineOnIOS-Bridging-Header.h
+
+targets:
+  AlpineOnIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: AlpineOnIOS
+        excludes:
+          - "**/*.plist"
+      - path: emu/src
+        compilerFlags: ["-std=c11", "-Wall", "-Wextra"]
+        type: sources
+      - path: emu/include
+        type: headers
+        headerVisibility: project
+    resources:
+      - path: rootfs/alpine
+        optional: true
+        buildPhase: resources
+    info:
+      path: AlpineOnIOS/App/Info.plist
+    entitlements:
+      path: AlpineOnIOS.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alpineonios.app
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_ALLOWED: "NO"
+        INFOPLIST_KEY_CFBundleDisplayName: "Alpine Terminal"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - "$(inherited)"
+          - "_GNU_SOURCE=1"

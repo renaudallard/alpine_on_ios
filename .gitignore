@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+emu/build/
+*.o
+*.a
+*.ipa
+DerivedData/
+*.xcodeproj/
+
+# Alpine rootfs (downloaded, not committed)
+rootfs/alpine/
+
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcworkspace/
+
+# Temporary
+tmp/
+*.swp
+*~

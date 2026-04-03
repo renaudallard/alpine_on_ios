@@ -1,0 +1,52 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Download rootfs
+        run: ./rootfs/download_rootfs.sh
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnIOS \
+            -sdk iphoneos \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Package IPA
+        run: |
+          BUILD_DIR=$(xcodebuild -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnIOS \
+            -sdk iphoneos \
+            -configuration Release \
+            -showBuildSettings CODE_SIGNING_ALLOWED=NO \
+            | grep -m1 'BUILT_PRODUCTS_DIR' | awk '{print $3}')
+          mkdir -p Payload
+          cp -r "$BUILD_DIR/AlpineOnIOS.app" Payload/
+          zip -r AlpineOnIOS.ipa Payload/
+          rm -rf Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlpineOnIOS.ipa
+          path: AlpineOnIOS.ipa
