@@ -16,41 +16,68 @@
 
 import Foundation
 
+enum EmulatorState: Equatable {
+    case idle
+    case extracting
+    case initializing
+    case spawning
+    case running
+    case error(String)
+}
+
 /// Swift bridge to the C emulator library.
 class EmulatorBridge: ObservableObject {
+    @Published var state: EmulatorState = .idle
     @Published var pid: Int = -1
-    @Published var isRunning: Bool = false
 
-    private var termFD: Int32 = -1
+    private(set) var termFD: Int32 = -1
     private var readThread: Thread?
+    private var readCallback: ((Data) -> Void)?
 
-    // MARK: - Initialization
+    // MARK: - Full startup sequence
 
-    /// Initialize the emulator with the given rootfs path.
-    /// Returns 0 on success, -1 on failure.
-    func initializeEmulator(rootfsPath: String) -> Int32 {
-        return rootfsPath.withCString { path in
-            emu_init(path)
+    /// Run the complete startup on a background thread with status updates.
+    func startAll(rootfsPath: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            /* Step 1: Initialize emulator */
+            updateState(.initializing)
+            let rc = rootfsPath.withCString { emu_init($0) }
+            if rc != 0 {
+                updateState(.error("emu_init failed (\(rc))"))
+                return
+            }
+
+            /* Step 2: Spawn shell */
+            updateState(.spawning)
+            let spawnResult = doSpawnShell()
+            if spawnResult < 0 {
+                updateState(.error("emu_spawn failed (\(spawnResult))"))
+                return
+            }
+
+            /* Step 3: Start reader thread (if callback already registered) */
+            updateState(.running)
+            if let cb = readCallback {
+                startReaderThread(callback: cb)
+            }
+
+            /* Step 4: Run emulator loop */
+            emu_run()
+            updateState(.idle)
         }
     }
 
-    /// Start the emulator event loop on a background thread.
-    func startEmulator() {
-        isRunning = true
-        Thread.detachNewThread {
-            emu_run()
-            DispatchQueue.main.async {
-                self.isRunning = false
-            }
+    private func updateState(_ newState: EmulatorState) {
+        DispatchQueue.main.async {
+            self.state = newState
         }
+        /* Small delay to let UI update */
+        usleep(50000)
     }
 
     // MARK: - Process management
 
-    /// Spawn /bin/sh as the initial shell process.
-    /// Returns pid on success, -1 on failure.
-    @discardableResult
-    func spawnShell() -> Int {
+    private func doSpawnShell() -> Int {
         let path = "/bin/sh"
         let argv = ["/bin/sh", "-l"]
         let envp = [
@@ -72,44 +99,12 @@ class EmulatorBridge: ObservableObject {
         }
 
         if result >= 0 {
-            pid = Int(result)
+            DispatchQueue.main.async {
+                self.pid = Int(result)
+            }
             termFD = fd
         }
         return Int(result)
-    }
-
-    /// Spawn X server with a window manager for graphical mode.
-    func spawnGraphical() {
-        let path = "/bin/sh"
-        let argv = ["/bin/sh", "-c",
-            "mkdir -p /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; " +
-            "X :0 -config /etc/X11/xorg.conf & sleep 1; " +
-            "export DISPLAY=:0; " +
-            "if command -v openbox >/dev/null; then openbox & " +
-            "elif command -v twm >/dev/null; then twm & fi; " +
-            "xterm || sh"]
-        let envp = [
-            "HOME=/root",
-            "TERM=xterm-256color",
-            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "USER=root",
-            "SHELL=/bin/sh",
-            "DISPLAY=:0",
-        ]
-
-        var fd: Int32 = -1
-        let result = withCStrings(argv) { cArgv in
-            withCStrings(envp) { cEnvp in
-                path.withCString { cPath in
-                    emu_spawn(cPath, cArgv, cEnvp, &fd)
-                }
-            }
-        }
-
-        if result >= 0 {
-            pid = Int(result)
-            termFD = fd
-        }
     }
 
     // MARK: - I/O
@@ -124,10 +119,18 @@ class EmulatorBridge: ObservableObject {
         }
     }
 
-    /// Start reading from the terminal fd on a background thread.
-    /// Calls the callback with received data on each read.
+    /// Register a read callback. If the emulator is already running,
+    /// starts the reader immediately. Otherwise, it will start when
+    /// the emulator reaches the running state.
     func startReading(callback: @escaping (Data) -> Void) {
-        guard termFD >= 0 else { return }
+        readCallback = callback
+        if state == .running && termFD >= 0 {
+            startReaderThread(callback: callback)
+        }
+    }
+
+    private func startReaderThread(callback: @escaping (Data) -> Void) {
+        guard termFD >= 0, readThread == nil else { return }
 
         let fd = termFD
         let thread = Thread {
@@ -148,21 +151,19 @@ class EmulatorBridge: ObservableObject {
         readThread = thread
     }
 
-    // MARK: - Terminal control
+    // MARK: - Control
 
-    /// Set the terminal window size.
     func setWindowSize(rows: Int, cols: Int) {
-        guard pid >= 0 else { return }
-        emu_set_winsize(Int32(pid), UInt16(rows), UInt16(cols))
+        if pid > 0 {
+            emu_set_winsize(Int32(pid), UInt16(rows), UInt16(cols))
+        }
     }
 
-    /// Send a signal to the emulated process.
     func sendSignal(sig: Int32) {
-        guard pid >= 0 else { return }
-        emu_kill(Int32(pid), sig)
+        if pid > 0 {
+            emu_kill(Int32(pid), sig)
+        }
     }
-
-    // MARK: - Cleanup
 
     deinit {
         if termFD >= 0 {
@@ -173,13 +174,10 @@ class EmulatorBridge: ObservableObject {
 
     // MARK: - C String Helpers
 
-    /// Convert an array of Swift strings to a NULL-terminated C string array,
-    /// calling the closure with the result.
     private func withCStrings<R>(
         _ strings: [String],
         body: (UnsafeMutablePointer<UnsafePointer<CChar>?>) -> R
     ) -> R {
-        /* Allocate array of C string pointers + NULL terminator. */
         var cStrings = strings.map { strdup($0) }
         cStrings.append(nil)
 
@@ -190,15 +188,15 @@ class EmulatorBridge: ObservableObject {
         }
 
         let count = cStrings.count
-        let cArray = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: count)
+        let cArray = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+            .allocate(capacity: count)
         for i in 0..<count {
             cArray[i] = cStrings[i]
         }
         defer { cArray.deallocate() }
 
         return cArray.withMemoryRebound(
-            to: UnsafePointer<CChar>?.self,
-            capacity: count
+            to: UnsafePointer<CChar>?.self, capacity: count
         ) { ptr in
             body(ptr)
         }

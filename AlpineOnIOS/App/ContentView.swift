@@ -19,32 +19,23 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var bridge: EmulatorBridge
-    @Binding var statusMessage: String
     @State private var showSettings = false
 
     var body: some View {
         TabView {
             NavigationView {
                 ZStack {
-                    TerminalView()
-                        .environmentObject(bridge)
-                        .environmentObject(settings)
+                    Color.black.edgesIgnoringSafeArea(.all)
 
-                    /* Show status/error overlay when emulator isn't ready */
-                    if !statusMessage.isEmpty {
-                        VStack {
-                            Spacer()
-                            Text(statusMessage)
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundColor(.green)
-                                .multilineTextAlignment(.leading)
-                                .padding()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.black.opacity(0.85))
-                                .cornerRadius(8)
-                                .padding()
-                            Spacer()
-                        }
+                    switch bridge.state {
+                    case .idle, .extracting, .initializing, .spawning:
+                        statusView
+                    case .running:
+                        TerminalView()
+                            .environmentObject(bridge)
+                            .environmentObject(settings)
+                    case .error(let msg):
+                        errorView(msg)
                     }
                 }
                 .navigationTitle("Alpine Terminal")
@@ -72,6 +63,45 @@ struct ContentView: View {
                 .tabItem {
                     Label("Display", systemImage: "display")
                 }
+        }
+    }
+
+    private var statusView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.5)
+                .tint(.green)
+            Text(statusText)
+                .font(.system(.body, design: .monospaced))
+                .foregroundColor(.green)
+        }
+    }
+
+    private var statusText: String {
+        switch bridge.state {
+        case .idle: return "Starting..."
+        case .extracting: return "Extracting rootfs..."
+        case .initializing: return "Initializing emulator..."
+        case .spawning: return "Spawning shell..."
+        case .running: return ""
+        case .error: return ""
+        }
+    }
+
+    private func errorView(_ message: String) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Error")
+                    .font(.title2.bold())
+                    .foregroundColor(.red)
+                Text(message)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.green)
+                Text("Try deleting and reinstalling the app.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            .padding()
         }
     }
 }
