@@ -47,6 +47,28 @@ int	jit_run(emu_process_t *proc);
  */
 void	jit_patch_code(void *code, size_t size);
 
+/*
+ * W^X toggle for JIT code regions.
+ * On macOS: use pthread_jit_write_protect_np.
+ * On iOS: MAP_JIT pages are always writable; just flush icache after.
+ * On Linux: RWX pages, no toggle needed.
+ */
+#if defined(__APPLE__) && defined(__MACH__)
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <pthread.h>
+#define JIT_WRITE_ENABLE()	pthread_jit_write_protect_np(0)
+#define JIT_WRITE_DISABLE()	pthread_jit_write_protect_np(1)
+#else
+/* iOS: no pthread_jit_write_protect_np, pages are RW until icache flush */
+#define JIT_WRITE_ENABLE()	do {} while (0)
+#define JIT_WRITE_DISABLE()	do {} while (0)
+#endif
+#else
+#define JIT_WRITE_ENABLE()	do {} while (0)
+#define JIT_WRITE_DISABLE()	do {} while (0)
+#endif
+
 #ifdef __aarch64__
 /* Assembly stubs */
 void	jit_enter(cpu_state_t *cpu, void *host_pc);

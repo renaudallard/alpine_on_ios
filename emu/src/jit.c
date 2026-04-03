@@ -167,7 +167,7 @@ jit_patch_code(void *code, size_t size)
 	count = size / 4;
 
 #ifdef __APPLE__
-	pthread_jit_write_protect_np(false);
+	JIT_WRITE_ENABLE();
 #endif
 
 	for (i = 0; i < count; i++) {
@@ -188,7 +188,7 @@ jit_patch_code(void *code, size_t size)
 	}
 
 #ifdef __APPLE__
-	pthread_jit_write_protect_np(true);
+	JIT_WRITE_DISABLE();
 #endif
 
 	__builtin___clear_cache(code, (char *)code + size);

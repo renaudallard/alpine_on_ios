@@ -181,12 +181,12 @@ mem_space_clone(mem_space_t *src)
 			}
 #ifdef __APPLE__
 			if (r->prot & MEM_PROT_EXEC)
-				pthread_jit_write_protect_np(false);
+				JIT_WRITE_ENABLE();
 #endif
 			memcpy(nr->host, r->host, r->size);
 #ifdef __APPLE__
 			if (r->prot & MEM_PROT_EXEC)
-				pthread_jit_write_protect_np(true);
+				JIT_WRITE_DISABLE();
 #endif
 			if (r->prot & MEM_PROT_EXEC) {
 				mprot = PROT_READ | PROT_EXEC;
@@ -285,13 +285,13 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 				}
 #ifdef __APPLE__
 				if (r->prot & MEM_PROT_EXEC)
-					pthread_jit_write_protect_np(false);
+					JIT_WRITE_ENABLE();
 #endif
 				memcpy(tail->host, r->host + tail_off,
 				    tail_size);
 #ifdef __APPLE__
 				if (r->prot & MEM_PROT_EXEC)
-					pthread_jit_write_protect_np(true);
+					JIT_WRITE_DISABLE();
 #endif
 			} else {
 				tail->host = calloc(1, tail_size);
@@ -425,12 +425,12 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		if (ms->jit_mode) {
 #ifdef __APPLE__
 			if (prot & MEM_PROT_EXEC)
-				pthread_jit_write_protect_np(false);
+				JIT_WRITE_ENABLE();
 #endif
 			n = pread(fd, r->host, to_read, offset);
 #ifdef __APPLE__
 			if (prot & MEM_PROT_EXEC)
-				pthread_jit_write_protect_np(true);
+				JIT_WRITE_DISABLE();
 #endif
 		} else {
 			n = pread(fd, r->host, to_read, offset);
