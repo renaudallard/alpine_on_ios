@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build and release
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Download rootfs
+        run: ./rootfs/download_rootfs.sh
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnIOS \
+            -sdk iphoneos \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Package IPA
+        run: |
+          BUILD_DIR=$(xcodebuild -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnIOS \
+            -sdk iphoneos \
+            -configuration Release \
+            -showBuildSettings CODE_SIGNING_ALLOWED=NO \
+            | grep -m1 'BUILT_PRODUCTS_DIR' | awk '{print $3}')
+          mkdir -p Payload
+          cp -r "$BUILD_DIR/AlpineOnIOS.app" Payload/
+          zip -r "AlpineOnIOS-${{ steps.version.outputs.tag }}.ipa" Payload/
+          rm -rf Payload
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Alpine on iOS ${{ steps.version.outputs.tag }}"
+          body: |
+            ## Alpine on iOS ${{ steps.version.outputs.tag }}
+
+            AArch64 Linux emulator running Alpine Linux on iOS.
+
+            ### Installation
+
+            Download the .ipa file below and sideload it using
+            [AltStore](https://altstore.io/),
+            [Sideloadly](https://sideloadly.io/), or similar tools.
+          files: "AlpineOnIOS-${{ steps.version.outputs.tag }}.ipa"
+          draft: false
+          prerelease: false

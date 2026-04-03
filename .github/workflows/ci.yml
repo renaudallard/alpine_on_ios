@@ -1,4 +1,4 @@
-name: Build
+name: CI
 
 on:
   push:
@@ -7,8 +7,23 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  test:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build emulator
+        run: make -C emu
+
+      - name: Run tests
+        run: make -C emu test
+
+  build-ios:
+    name: Build iOS
     runs-on: macos-14
+    needs: test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,5 +63,5 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: AlpineOnIOS.ipa
+          name: AlpineOnIOS-ci
           path: AlpineOnIOS.ipa

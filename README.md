@@ -123,11 +123,21 @@ xcodebuild build \
 ./scripts/package_ipa.sh build/Build/Products/Release-iphoneos
 ```
 
-### CI
+### CI and Releases
 
-GitHub Actions builds the app automatically on pushes to `main` and on
-pull requests. The workflow runs on macOS 14 (Apple Silicon) and uploads
-the built IPA as an artifact.
+Three GitHub Actions workflows handle builds and releases:
+
+- **ci.yml**: runs on every push and pull request. Tests the emulator
+  on Linux, builds the iOS app on macOS 14, and uploads the IPA as a
+  CI artifact.
+- **version-tag.yml**: watches `project.yml` for changes to
+  `MARKETING_VERSION`. When a version bump is pushed to `main`, it
+  automatically creates a `v{version}` git tag.
+- **release.yml**: triggered by `v*` tags. Builds a release IPA and
+  publishes it as a GitHub Release for download.
+
+To cut a release, bump `MARKETING_VERSION` in `project.yml` and push
+to `main`. The tag and release are created automatically.
 
 ## Current Status
 
