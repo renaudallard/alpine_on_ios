@@ -19,29 +19,49 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var bridge: EmulatorBridge
+    @Binding var statusMessage: String
     @State private var showSettings = false
 
     var body: some View {
         TabView {
             NavigationView {
-                TerminalView()
-                    .environmentObject(bridge)
-                    .environmentObject(settings)
-                    .navigationTitle("Alpine Terminal")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button {
-                                showSettings = true
-                            } label: {
-                                Image(systemName: "gearshape")
-                            }
+                ZStack {
+                    TerminalView()
+                        .environmentObject(bridge)
+                        .environmentObject(settings)
+
+                    /* Show status/error overlay when emulator isn't ready */
+                    if !statusMessage.isEmpty {
+                        VStack {
+                            Spacer()
+                            Text(statusMessage)
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundColor(.green)
+                                .multilineTextAlignment(.leading)
+                                .padding()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.black.opacity(0.85))
+                                .cornerRadius(8)
+                                .padding()
+                            Spacer()
                         }
                     }
-                    .sheet(isPresented: $showSettings) {
-                        SettingsView()
-                            .environmentObject(settings)
+                }
+                .navigationTitle("Alpine Terminal")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            showSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
                     }
+                }
+                .sheet(isPresented: $showSettings) {
+                    SettingsView()
+                        .environmentObject(settings)
+                }
             }
             .navigationViewStyle(.stack)
             .tabItem {

@@ -359,6 +359,19 @@ struct AccessoryKeyBar: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                /* Keyboard toggle */
+                Button {
+                    NotificationCenter.default.post(
+                        name: .terminalFocusKeyboard, object: nil)
+                } label: {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 16))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(6)
+                }
+
                 /* Ctrl toggle */
                 Button {
                     ctrlPressed.toggle()
