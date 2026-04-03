@@ -249,10 +249,20 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			if (lseek(fd, file_off, SEEK_SET) < 0)
 				goto fail;
 			n = read(fd, p, phdrs[i].p_filesz);
-			if (n < 0) {
-				LOG_ERR("elf_load: read segment failed");
+			if (n < 0 || (size_t)n < phdrs[i].p_filesz) {
+				LOG_ERR("elf_load: read segment %d failed "
+				    "(got %zd, want %lu)", i, n,
+				    (unsigned long)phdrs[i].p_filesz);
 				goto fail;
 			}
+			LOG_DBG("elf_load: seg %d: vaddr=0x%lx "
+			    "file=0x%lx fsz=0x%lx msz=0x%lx "
+			    "mapaddr=0x%lx -> host=%p",
+			    i, (unsigned long)phdrs[i].p_vaddr,
+			    (unsigned long)file_off,
+			    (unsigned long)phdrs[i].p_filesz,
+			    (unsigned long)phdrs[i].p_memsz,
+			    (unsigned long)map_addr, p);
 		}
 
 		/* Set final protection (remove write if not in flags). */
@@ -289,6 +299,25 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 	info->phent = sizeof(Elf64_Phdr);
 	info->phnum = ehdr.e_phnum;
 	info->base = base;
+
+	/* Verify DYNAMIC section if present */
+	for (i = 0; i < ehdr.e_phnum; i++) {
+		if (phdrs[i].p_type == 2 /* PT_DYNAMIC */) {
+			uint64_t dyn_addr = base + phdrs[i].p_vaddr;
+			uint64_t *dp = mem_translate(mem, dyn_addr, 16,
+			    MEM_PROT_READ);
+			if (dp != NULL) {
+				LOG_DBG("elf_load: DYNAMIC at 0x%lx:"
+				    " tag=0x%lx val=0x%lx",
+				    (unsigned long)dyn_addr,
+				    (unsigned long)dp[0],
+				    (unsigned long)dp[1]);
+			} else {
+				LOG_ERR("elf_load: cannot translate DYNAMIC "
+				    "at 0x%lx", (unsigned long)dyn_addr);
+			}
+		}
+	}
 
 	free(phdrs);
 	close(fd);

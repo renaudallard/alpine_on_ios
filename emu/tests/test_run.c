@@ -38,6 +38,10 @@ main(int argc, char **argv)
 	}
 	fprintf(stderr, "=== emu_init OK\n");
 
+	/* Enable JIT for native execution on aarch64 */
+	emu_set_jit_enabled(1);
+	fprintf(stderr, "=== JIT enabled=%d\n", emu_jit_enabled());
+
 	pid = emu_spawn("/bin/sh", cmd_argv, envp, &term_fd);
 	if (pid < 0) {
 		fprintf(stderr, "emu_spawn failed: %d\n", pid);

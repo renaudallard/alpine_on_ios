@@ -21,7 +21,7 @@ struct AlpineOnIOSApp: App {
     @StateObject private var settings = AppSettings()
     @StateObject private var bridge = EmulatorBridge()
     @State private var isSetup = false
-    @State private var statusMessage = "Starting..."
+    @State private var statusMessage = ""
 
     var body: some Scene {
         WindowGroup {
@@ -29,66 +29,62 @@ struct AlpineOnIOSApp: App {
                 .environmentObject(settings)
                 .environmentObject(bridge)
                 .onAppear {
-                    if !isSetup {
-                        isSetup = true
-                        DispatchQueue.global(qos: .userInitiated).async {
-                            setupEmulator()
-                        }
-                    }
+                    /*
+                     * Run setup synchronously on the main thread so that
+                     * by the time TerminalView.onAppear fires, the shell
+                     * is already spawned and termFD is valid.
+                     */
+                    setupEmulator()
                 }
         }
     }
 
     private func setupEmulator() {
-        updateStatus("Locating rootfs...")
-        let rootfsDir = rootfsPath()
-        let fm = FileManager.default
+        guard !isSetup else { return }
+        isSetup = true
 
-        /* Extract rootfs if /bin directory is missing */
+        let fm = FileManager.default
+        let rootfsDir = rootfsPath()
+
+        /* Extract rootfs if not present */
         if !fm.fileExists(atPath: rootfsDir + "/bin") {
-            updateStatus("Extracting rootfs...")
             extractRootfs()
         }
 
-        /* Verify the rootfs has essential files */
-        let binSh = rootfsDir + "/bin/busybox"
-        if !fm.fileExists(atPath: binSh) {
-            /* Check what we actually have */
-            var diag = "Rootfs at: \(rootfsDir)\n"
+        /* Verify rootfs */
+        if !fm.fileExists(atPath: rootfsDir + "/bin") {
+            var diag = "Rootfs path: \(rootfsDir)\n"
             if fm.fileExists(atPath: rootfsDir) {
-                let contents = (try? fm.contentsOfDirectory(atPath: rootfsDir)) ?? []
-                diag += "Contents: \(contents.joined(separator: ", "))\n"
+                let items = (try? fm.contentsOfDirectory(atPath: rootfsDir)) ?? []
+                diag += "Contents: \(items.prefix(20).joined(separator: ", "))\n"
             } else {
                 diag += "Directory does not exist\n"
             }
-            /* Check bundle */
-            diag += "Bundle path: \(Bundle.main.bundlePath)\n"
-            let bundleContents = (try? fm.contentsOfDirectory(
+            diag += "Bundle: \(Bundle.main.bundlePath)\n"
+            let bundleItems = (try? fm.contentsOfDirectory(
                 atPath: Bundle.main.bundlePath)) ?? []
-            diag += "Bundle root: \(bundleContents.joined(separator: ", "))\n"
-            updateStatus("ERROR: /bin/busybox not found\n\(diag)")
+            diag += "Bundle root: \(bundleItems.joined(separator: ", "))\n"
+            statusMessage = "ERROR: rootfs not found\n\(diag)"
             return
         }
 
-        updateStatus("Initializing emulator...")
-        bridge.initialize(rootfsPath: rootfsDir)
-
-        updateStatus("Spawning shell...")
-        bridge.spawnShell()
-
-        if bridge.pid < 0 {
-            updateStatus("ERROR: Failed to spawn shell (pid=\(bridge.pid))")
+        /* Initialize emulator */
+        let rc = bridge.initializeEmulator(rootfsPath: rootfsDir)
+        if rc != 0 {
+            statusMessage = "ERROR: emu_init failed (\(rc))"
             return
         }
 
-        updateStatus("")  /* Clear status, shell is running */
+        /* Spawn shell */
+        let pid = bridge.spawnShell()
+        if pid < 0 {
+            statusMessage = "ERROR: shell spawn failed (\(pid))"
+            return
+        }
+
+        /* Start emulator event loop on background thread */
         bridge.startEmulator()
-    }
-
-    private func updateStatus(_ msg: String) {
-        DispatchQueue.main.async {
-            statusMessage = msg
-        }
+        statusMessage = ""
     }
 
     private func rootfsPath() -> String {
@@ -102,32 +98,27 @@ struct AlpineOnIOSApp: App {
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let rootfsDir = docs.appendingPathComponent("alpine")
 
-        if fm.fileExists(atPath: rootfsDir.path) {
-            return
-        }
+        if fm.fileExists(atPath: rootfsDir.path) { return }
 
-        /* Try multiple locations for the bundled rootfs */
-        let candidates = [
+        /* Search for bundled rootfs in multiple locations */
+        let candidates: [String?] = [
             Bundle.main.path(forResource: "alpine", ofType: nil),
-            Bundle.main.bundlePath + "/alpine",
             Bundle.main.resourcePath.map { $0 + "/alpine" },
-            Bundle.main.bundlePath + "/rootfs/alpine",
-        ].compactMap { $0 }
+            Bundle.main.bundlePath + "/alpine",
+        ]
 
-        for candidate in candidates {
-            if fm.fileExists(atPath: candidate) {
+        for case let path? in candidates {
+            if fm.fileExists(atPath: path) {
                 do {
-                    try fm.copyItem(atPath: candidate, toPath: rootfsDir.path)
-                    updateStatus("Rootfs extracted from: \(candidate)")
+                    try fm.copyItem(atPath: path, toPath: rootfsDir.path)
                     return
                 } catch {
-                    updateStatus("Copy failed from \(candidate): \(error)")
+                    statusMessage = "Copy error: \(error.localizedDescription)"
                 }
             }
         }
 
-        /* No bundled rootfs found */
+        /* No bundled rootfs */
         try? fm.createDirectory(at: rootfsDir, withIntermediateDirectories: true)
-        updateStatus("No bundled rootfs found. Searched: \(candidates)")
     }
 }

@@ -10,8 +10,8 @@
 #include <stddef.h>
 #include <pthread.h>
 
-/* JIT mode mmap start address (above iOS PAGEZERO) */
-#define MMAP_START_JIT	0x200000000ULL
+/* JIT mode mmap start address (well above iOS app binary) */
+#define MMAP_START_JIT	0x600000000ULL
 
 /* Protection flags (match Linux PROT_*) */
 #define MEM_PROT_NONE	0

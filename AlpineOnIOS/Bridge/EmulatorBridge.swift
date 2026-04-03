@@ -27,12 +27,10 @@ class EmulatorBridge: ObservableObject {
     // MARK: - Initialization
 
     /// Initialize the emulator with the given rootfs path.
-    func initialize(rootfsPath: String) {
-        let rc = rootfsPath.withCString { path in
+    /// Returns 0 on success, -1 on failure.
+    func initializeEmulator(rootfsPath: String) -> Int32 {
+        return rootfsPath.withCString { path in
             emu_init(path)
-        }
-        if rc != 0 {
-            print("EmulatorBridge: emu_init failed")
         }
     }
 
@@ -50,7 +48,9 @@ class EmulatorBridge: ObservableObject {
     // MARK: - Process management
 
     /// Spawn /bin/sh as the initial shell process.
-    func spawnShell() {
+    /// Returns pid on success, -1 on failure.
+    @discardableResult
+    func spawnShell() -> Int {
         let path = "/bin/sh"
         let argv = ["/bin/sh", "-l"]
         let envp = [
@@ -74,9 +74,8 @@ class EmulatorBridge: ObservableObject {
         if result >= 0 {
             pid = Int(result)
             termFD = fd
-        } else {
-            print("EmulatorBridge: emu_spawn failed")
         }
+        return Int(result)
     }
 
     /// Spawn X server with a window manager for graphical mode.

@@ -53,7 +53,8 @@ emu_init(const char *rootfs_path)
 		return (-1);
 	}
 
-	/* Initialize JIT engine if available. */
+	/* Enable JIT on aarch64. Addresses are set high enough
+	 * (0x500000000+) to avoid iOS PAGEZERO and app binary. */
 	if (jit_available()) {
 		if (jit_init() == 0)
 			g_jit_enabled = 1;
@@ -88,13 +89,28 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 	snprintf(proc->cwd, sizeof(proc->cwd), "/");
 
 	/* Wire fds 0, 1, 2 to the process end of the socketpair. */
-	proc->fds->fds[0].type = FD_TTY;
-	proc->fds->fds[0].real_fd = dup(sockpair[1]);
-	proc->fds->fds[1].type = FD_TTY;
-	proc->fds->fds[1].real_fd = dup(sockpair[1]);
-	proc->fds->fds[2].type = FD_TTY;
-	proc->fds->fds[2].real_fd = dup(sockpair[1]);
-	close(sockpair[1]);
+	{
+		int fd0, fd1, fd2;
+		fd0 = dup(sockpair[1]);
+		fd1 = dup(sockpair[1]);
+		fd2 = dup(sockpair[1]);
+		close(sockpair[1]);
+		if (fd0 < 0 || fd1 < 0 || fd2 < 0) {
+			LOG_ERR("emu_spawn: dup failed");
+			if (fd0 >= 0) close(fd0);
+			if (fd1 >= 0) close(fd1);
+			if (fd2 >= 0) close(fd2);
+			close(sockpair[0]);
+			proc_destroy(proc);
+			return (-1);
+		}
+		proc->fds->fds[0].type = FD_TTY;
+		proc->fds->fds[0].real_fd = fd0;
+		proc->fds->fds[1].type = FD_TTY;
+		proc->fds->fds[1].real_fd = fd1;
+		proc->fds->fds[2].type = FD_TTY;
+		proc->fds->fds[2].real_fd = fd2;
+	}
 
 	ret = proc_execve(proc, path, argv, envp);
 	if (ret != 0) {

@@ -36,10 +36,15 @@
 #include "syscall.h"
 #include "vfs.h"
 
-/* JIT mode address constants */
-#define JIT_BINARY_BASE		0x100000000ULL
-#define JIT_INTERP_BASE		0x180000000ULL
-#define JIT_STACK_TOP		0x1FFFFF0000ULL
+/*
+ * JIT mode address constants.
+ * Must be above iOS PAGEZERO (4GB) and away from the app binary
+ * (loaded near 0x100000000 with ASLR). Using 0x500000000+ (20GB+)
+ * avoids conflicts on all current iOS devices.
+ */
+#define JIT_BINARY_BASE		0x500000000ULL
+#define JIT_INTERP_BASE		0x580000000ULL
+#define JIT_STACK_TOP		0x5FFFFF0000ULL
 
 /* Interpreter base addresses */
 #define INTERP_INTERP_BASE	0x7f00000000ULL
@@ -442,8 +447,8 @@ proc_run(void *arg)
 
 	proc = (emu_process_t *)arg;
 
-	LOG_DBG("proc: running pid %d, pc=0x%lx", proc->pid,
-	    (unsigned long)proc->cpu.pc);
+	LOG_DBG("proc: running pid %d, pc=0x%lx sp=0x%lx", proc->pid,
+	    (unsigned long)proc->cpu.pc, (unsigned long)proc->cpu.sp);
 
 #ifdef __aarch64__
 	/* Use JIT native execution when available. */
