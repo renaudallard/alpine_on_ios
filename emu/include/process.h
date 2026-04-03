@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <pthread.h>
+#include <time.h>
 #include "cpu.h"
 #include "memory.h"
 #include "vfs.h"
@@ -29,6 +30,8 @@
 #define FD_EPOLL	5
 #define FD_EVENT	6
 #define FD_DIR		7
+#define FD_FB		8
+#define FD_INPUT	9
 
 #define MAX_FDS		1024
 #define MAX_PROCS	256
@@ -98,6 +101,17 @@ int		 proc_fork(emu_process_t *parent);
 int		 proc_execve(emu_process_t *proc, const char *path,
 		    const char **argv, const char **envp);
 void		 proc_destroy(emu_process_t *proc);
+
+/* Futex subsystem */
+void		 futex_init(void);
+int		 futex_wait(uint64_t addr, uint32_t val, uint32_t bitset,
+		    const struct timespec *timeout);
+int		 futex_wake(uint64_t addr, int count, uint32_t bitset);
+int		 futex_requeue(uint64_t from, uint64_t to, int wake_count,
+		    int requeue_limit);
+
+/* Add process to global list (for clone with shared memory). */
+void		 proc_add(emu_process_t *proc);
 
 /* Thread entry point for running a process */
 void		*proc_run(void *arg);

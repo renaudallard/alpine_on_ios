@@ -86,6 +86,7 @@ mem_space_create(void)
 
 	ms->mmap_next = MMAP_START;
 	ms->jit_mode = 0;
+	ms->refcount = 1;
 	pthread_mutex_init(&ms->lock, NULL);
 	return ms;
 }
@@ -94,8 +95,16 @@ void
 mem_space_destroy(mem_space_t *ms)
 {
 	mem_region_t	*r, *next;
+	int		 rc;
 
 	if (ms == NULL)
+		return;
+
+	pthread_mutex_lock(&ms->lock);
+	rc = --ms->refcount;
+	pthread_mutex_unlock(&ms->lock);
+
+	if (rc > 0)
 		return;
 
 	for (r = ms->regions; r != NULL; r = next) {
@@ -109,6 +118,17 @@ mem_space_destroy(mem_space_t *ms)
 
 	pthread_mutex_destroy(&ms->lock);
 	free(ms);
+}
+
+void
+mem_space_ref(mem_space_t *ms)
+{
+	if (ms == NULL)
+		return;
+
+	pthread_mutex_lock(&ms->lock);
+	ms->refcount++;
+	pthread_mutex_unlock(&ms->lock);
 }
 
 mem_space_t *
@@ -130,6 +150,7 @@ mem_space_clone(mem_space_t *src)
 	dst->brk_current = src->brk_current;
 	dst->mmap_next = src->mmap_next;
 	dst->jit_mode = src->jit_mode;
+	dst->refcount = 1;
 	pthread_mutex_init(&dst->lock, NULL);
 
 	pp = &dst->regions;

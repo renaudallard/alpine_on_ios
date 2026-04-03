@@ -136,6 +136,15 @@ proc_create(emu_process_t *parent)
 	return (p);
 }
 
+void
+proc_add(emu_process_t *proc)
+{
+	pthread_mutex_lock(&proc_lock);
+	proc->next = proc_list;
+	proc_list = proc;
+	pthread_mutex_unlock(&proc_lock);
+}
+
 emu_process_t *
 proc_find(int pid)
 {
@@ -156,37 +165,48 @@ void
 proc_exit(emu_process_t *proc, int status)
 {
 	emu_process_t	*child, *parent;
+	int		 is_thread;
+
+	is_thread = (proc->tgid != proc->pid);
 
 	pthread_mutex_lock(&proc->lock);
 	proc->exit_status = status;
 	proc->state = PROC_ZOMBIE;
 	proc->cpu.running = 0;
 
-	/* Write 0 to clear_child_tid if set. */
+	/* Write 0 to clear_child_tid and wake futex waiters. */
 	if (proc->clear_child_tid != 0) {
 		mem_write32(proc->mem, proc->clear_child_tid, 0);
-		/* A real implementation would do a futex wake here. */
+		futex_wake(proc->clear_child_tid, 1,
+		    LINUX_FUTEX_BITSET_MATCH_ANY);
 	}
 	pthread_mutex_unlock(&proc->lock);
 
-	/* Reparent children to pid 1. */
-	pthread_mutex_lock(&proc_lock);
-	for (child = proc_list; child != NULL; child = child->next) {
-		if (child->ppid == proc->pid)
-			child->ppid = 1;
-	}
-	pthread_mutex_unlock(&proc_lock);
+	/*
+	 * Threads don't reparent children or signal the parent process.
+	 * Only the main thread (tgid == pid) does that.
+	 */
+	if (!is_thread) {
+		/* Reparent children to pid 1. */
+		pthread_mutex_lock(&proc_lock);
+		for (child = proc_list; child != NULL; child = child->next) {
+			if (child->ppid == proc->pid)
+				child->ppid = 1;
+		}
+		pthread_mutex_unlock(&proc_lock);
 
-	/* Signal parent. */
-	parent = proc_find(proc->ppid);
-	if (parent != NULL) {
-		sig_send(parent, EMU_SIGCHLD);
-		pthread_mutex_lock(&parent->lock);
-		pthread_cond_broadcast(&parent->wait_cond);
-		pthread_mutex_unlock(&parent->lock);
+		/* Signal parent. */
+		parent = proc_find(proc->ppid);
+		if (parent != NULL) {
+			sig_send(parent, EMU_SIGCHLD);
+			pthread_mutex_lock(&parent->lock);
+			pthread_cond_broadcast(&parent->wait_cond);
+			pthread_mutex_unlock(&parent->lock);
+		}
 	}
 
-	LOG_DBG("proc: pid %d exited with status %d", proc->pid, status);
+	LOG_DBG("proc: pid %d (tgid %d) exited with status %d",
+	    proc->pid, proc->tgid, status);
 }
 
 int

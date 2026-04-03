@@ -34,15 +34,7 @@
 #define LINUX_EINVAL	22
 #define LINUX_ENOSYS	38
 
-/* Linux clone flags */
-#define LINUX_CLONE_VM		0x00000100
-#define LINUX_CLONE_FS		0x00000200
-#define LINUX_CLONE_FILES	0x00000400
-#define LINUX_CLONE_SIGHAND	0x00000800
-#define LINUX_CLONE_THREAD	0x00010000
-#define LINUX_CLONE_CHILD_SETTID	0x01000000
-#define LINUX_CLONE_CHILD_CLEARTID	0x00200000
-#define LINUX_CLONE_PARENT_SETTID	0x00100000
+/* Use shared clone flag definitions from syscall.h */
 
 /* Linux wait options */
 #define LINUX_WNOHANG		1
@@ -83,90 +75,182 @@ static int64_t
 do_clone(emu_process_t *proc, uint64_t flags, uint64_t newsp,
     uint64_t parent_tidptr, uint64_t tls, uint64_t child_tidptr)
 {
-	int	childpid;
+	emu_process_t	*child;
+	int		 ret, is_thread;
 
-	if (flags & LINUX_CLONE_THREAD) {
-		/* Thread creation: share memory and fds. */
-		LOG_WARN("clone: CLONE_THREAD not fully supported");
-		return -LINUX_ENOSYS;
+	is_thread = (flags & LINUX_CLONE_THREAD) != 0;
+
+	/*
+	 * CLONE_THREAD implies CLONE_VM, CLONE_FILES, CLONE_SIGHAND.
+	 */
+	if (is_thread)
+		flags |= LINUX_CLONE_VM | LINUX_CLONE_FILES |
+		    LINUX_CLONE_SIGHAND;
+
+	if (flags & LINUX_CLONE_VM) {
+		/*
+		 * Thread-like clone: allocate a new process struct
+		 * but share memory and optionally fd table.
+		 */
+		child = calloc(1, sizeof(*child));
+		if (child == NULL)
+			return -LINUX_ENOMEM;
+
+		child->pid = proc_next_pid();
+		child->tid = child->pid;
+		child->ppid = proc->ppid;
+		child->pgid = proc->pgid;
+		child->sid = proc->sid;
+		child->uid = proc->uid;
+		child->gid = proc->gid;
+		child->euid = proc->euid;
+		child->egid = proc->egid;
+		child->umask_val = proc->umask_val;
+		child->state = PROC_RUNNING;
+		child->vfs = proc->vfs;
+		snprintf(child->cwd, sizeof(child->cwd), "%s", proc->cwd);
+		memcpy(child->sigactions, proc->sigactions,
+		    sizeof(child->sigactions));
+
+		/* Share memory space (increment refcount). */
+		child->mem = proc->mem;
+		mem_space_ref(child->mem);
+
+		/* Share or clone fd table. */
+		if (flags & LINUX_CLONE_FILES) {
+			child->fds = proc->fds;
+			pthread_mutex_lock(&child->fds->lock);
+			child->fds->refcount++;
+			pthread_mutex_unlock(&child->fds->lock);
+		} else {
+			child->fds = fd_table_clone(proc->fds);
+			if (child->fds == NULL) {
+				mem_space_destroy(child->mem);
+				free(child);
+				return -LINUX_ENOMEM;
+			}
+		}
+
+		/* Thread group: child shares parent's tgid. */
+		if (is_thread)
+			child->tgid = proc->tgid;
+		else
+			child->tgid = child->pid;
+
+		/* Copy CPU state and set child return value. */
+		memcpy(&child->cpu, &proc->cpu, sizeof(cpu_state_t));
+		child->cpu.mem = child->mem;
+		child->cpu.x[0] = 0;
+		child->cpu.running = 1;
+
+		/* Set child stack. */
+		if (newsp != 0)
+			child->cpu.sp = newsp;
+
+		/* Set TLS. */
+		if (flags & LINUX_CLONE_SETTLS)
+			child->cpu.tpidr_el0 = tls;
+
+		pthread_mutex_init(&child->lock, NULL);
+		pthread_cond_init(&child->wait_cond, NULL);
+
+		/* Handle CLONE_CHILD_SETTID. */
+		if ((flags & LINUX_CLONE_CHILD_SETTID) &&
+		    child_tidptr != 0) {
+			mem_write32(child->mem, child_tidptr,
+			    (uint32_t)child->tid);
+		}
+
+		/* Handle CLONE_CHILD_CLEARTID. */
+		if ((flags & LINUX_CLONE_CHILD_CLEARTID) &&
+		    child_tidptr != 0) {
+			child->clear_child_tid = child_tidptr;
+		}
+
+		/* Handle CLONE_PARENT_SETTID. */
+		if ((flags & LINUX_CLONE_PARENT_SETTID) &&
+		    parent_tidptr != 0) {
+			mem_write32(proc->mem, parent_tidptr,
+			    (uint32_t)child->tid);
+		}
+
+		/* Add to process list. */
+		proc_add(child);
+
+		/* Start child on a new pthread. */
+		ret = pthread_create(&child->host_thread, NULL,
+		    proc_run, child);
+		if (ret != 0) {
+			LOG_ERR("clone: failed to create thread for pid %d",
+			    child->pid);
+			proc_destroy(child);
+			return -LINUX_ENOMEM;
+		}
+		pthread_detach(child->host_thread);
+
+		LOG_DBG("clone: thread parent=%d child=%d flags=0x%llx",
+		    proc->pid, child->pid, (unsigned long long)flags);
+
+		return child->tid;
 	}
 
-	childpid = proc_fork(proc);
-	if (childpid < 0)
+	/* Non-CLONE_VM: traditional fork with flag handling. */
+	ret = proc_fork(proc);
+	if (ret < 0)
+		return -LINUX_ENOMEM;
+
+	child = proc_find(ret);
+	if (child == NULL)
 		return -LINUX_ENOMEM;
 
 	/* Set child stack if provided. */
-	if (newsp != 0) {
-		emu_process_t	*child;
+	if (newsp != 0)
+		child->cpu.sp = newsp;
 
-		child = proc_find(childpid);
-		if (child != NULL)
-			child->cpu.sp = newsp;
-	}
+	/* Handle CLONE_SETTLS. */
+	if (flags & LINUX_CLONE_SETTLS)
+		child->cpu.tpidr_el0 = tls;
 
 	/* Handle CLONE_CHILD_SETTID. */
-	if (flags & LINUX_CLONE_CHILD_SETTID && child_tidptr != 0) {
-		emu_process_t	*child;
-
-		child = proc_find(childpid);
-		if (child != NULL) {
-			int32_t	tid;
-
-			tid = (int32_t)child->tid;
-			mem_write32(child->mem, child_tidptr, (uint32_t)tid);
-		}
-	}
+	if ((flags & LINUX_CLONE_CHILD_SETTID) && child_tidptr != 0)
+		mem_write32(child->mem, child_tidptr, (uint32_t)child->tid);
 
 	/* Handle CLONE_CHILD_CLEARTID. */
-	if (flags & LINUX_CLONE_CHILD_CLEARTID && child_tidptr != 0) {
-		emu_process_t	*child;
-
-		child = proc_find(childpid);
-		if (child != NULL)
-			child->clear_child_tid = child_tidptr;
-	}
+	if ((flags & LINUX_CLONE_CHILD_CLEARTID) && child_tidptr != 0)
+		child->clear_child_tid = child_tidptr;
 
 	/* Handle CLONE_PARENT_SETTID. */
-	if (flags & LINUX_CLONE_PARENT_SETTID && parent_tidptr != 0) {
-		int32_t	tid;
+	if ((flags & LINUX_CLONE_PARENT_SETTID) && parent_tidptr != 0)
+		mem_write32(proc->mem, parent_tidptr, (uint32_t)child->tid);
 
-		tid = (int32_t)childpid;
-		mem_write32(proc->mem, parent_tidptr, (uint32_t)tid);
-	}
+	LOG_DBG("clone: fork parent=%d child=%d flags=0x%llx",
+	    proc->pid, child->pid, (unsigned long long)flags);
 
-	/* Handle TLS. */
-	if (tls != 0) {
-		emu_process_t	*child;
-
-		child = proc_find(childpid);
-		if (child != NULL)
-			child->cpu.tpidr_el0 = tls;
-	}
-
-	LOG_DBG("clone: parent=%d child=%d flags=0x%llx",
-	    proc->pid, childpid, (unsigned long long)flags);
-
-	return childpid;
+	return child->tid;
 }
 
 static int64_t
 do_clone3(emu_process_t *proc, uint64_t a0, uint64_t a1)
 {
 	/*
-	 * clone3 struct layout (first fields):
-	 * flags(8), pidfd(8), child_tid(8), parent_tid(8),
-	 * exit_signal(8), stack(8), stack_size(8), tls(8)
+	 * struct clone_args layout:
+	 *   0: flags(8), 8: pidfd(8), 16: child_tid(8),
+	 *  24: parent_tid(8), 32: exit_signal(8), 40: stack(8),
+	 *  48: stack_size(8), 56: tls(8), 64: set_tid(8),
+	 *  72: set_tid_size(8), 80: cgroup(8)
 	 */
 	uint64_t	flags, newsp, stack_size, tls;
-	uint64_t	parent_tidptr, child_tidptr;
+	uint64_t	parent_tidptr, child_tidptr, exit_signal;
 
-	(void)a1;
+	(void)a1;	/* size of struct, validated elsewhere */
 
 	if (mem_read64(proc->mem, a0, &flags) != 0)
 		return -LINUX_EFAULT;
 	if (mem_read64(proc->mem, a0 + 16, &child_tidptr) != 0)
 		return -LINUX_EFAULT;
 	if (mem_read64(proc->mem, a0 + 24, &parent_tidptr) != 0)
+		return -LINUX_EFAULT;
+	if (mem_read64(proc->mem, a0 + 32, &exit_signal) != 0)
 		return -LINUX_EFAULT;
 	if (mem_read64(proc->mem, a0 + 40, &newsp) != 0)
 		return -LINUX_EFAULT;
@@ -175,6 +259,9 @@ do_clone3(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	if (mem_read64(proc->mem, a0 + 56, &tls) != 0)
 		return -LINUX_EFAULT;
 
+	(void)exit_signal;	/* Accepted but not acted on */
+
+	/* Stack grows downward: point SP to top of the stack region. */
 	if (newsp != 0 && stack_size != 0)
 		newsp += stack_size;
 

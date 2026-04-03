@@ -15,6 +15,10 @@ typedef struct emu_process emu_process_t;
 
 /* AArch64 Linux syscall numbers (from asm-generic/unistd.h) */
 #define SYS_GETCWD		17
+#define SYS_EVENTFD2		19
+#define SYS_EPOLL_CREATE1	20
+#define SYS_EPOLL_CTL		21
+#define SYS_EPOLL_PWAIT		22
 #define SYS_DUP			23
 #define SYS_DUP3		24
 #define SYS_FCNTL		25
@@ -60,7 +64,10 @@ typedef struct emu_process emu_process_t;
 #define SYS_SYNC		81
 #define SYS_FSYNC		82
 #define SYS_FDATASYNC		83
+#define SYS_TIMERFD_CREATE	85
+#define SYS_TIMERFD_SETTIME	86
 #define SYS_UTIMENSAT		88
+#define SYS_PERSONALITY		92
 #define SYS_EXIT		93
 #define SYS_EXIT_GROUP		94
 #define SYS_SET_TID_ADDRESS	96
@@ -74,6 +81,11 @@ typedef struct emu_process emu_process_t;
 #define SYS_CLOCK_GETRES	114
 #define SYS_CLOCK_NANOSLEEP	115
 #define SYS_SYSLOG		116
+#define SYS_SCHED_SETSCHEDULER	119
+#define SYS_SCHED_GETSCHEDULER	120
+#define SYS_SCHED_GETPARAM	121
+#define SYS_SCHED_SETAFFINITY	122
+#define SYS_SCHED_GETAFFINITY	123
 #define SYS_SCHED_YIELD		124
 #define SYS_KILL		129
 #define SYS_TKILL		130
@@ -139,6 +151,11 @@ typedef struct emu_process emu_process_t;
 #define SYS_MMAP		222
 #define SYS_MPROTECT		226
 #define SYS_MSYNC		227
+#define SYS_MLOCK		228
+#define SYS_MUNLOCK		229
+#define SYS_MLOCKALL		230
+#define SYS_MUNLOCKALL		231
+#define SYS_MINCORE		232
 #define SYS_MADVISE		233
 #define SYS_ACCEPT4		242
 #define SYS_WAIT4		260
@@ -150,6 +167,27 @@ typedef struct emu_process emu_process_t;
 #define SYS_RSEQ		293
 #define SYS_CLONE3		435
 #define SYS_FACCESSAT2		439
+
+/* Linux futex operations */
+#define LINUX_FUTEX_WAIT		0
+#define LINUX_FUTEX_WAKE		1
+#define LINUX_FUTEX_REQUEUE		3
+#define LINUX_FUTEX_CMP_REQUEUE		4
+#define LINUX_FUTEX_WAIT_BITSET		9
+#define LINUX_FUTEX_WAKE_BITSET		10
+#define LINUX_FUTEX_PRIVATE_FLAG	128
+#define LINUX_FUTEX_BITSET_MATCH_ANY	0xFFFFFFFF
+
+/* Linux clone flags */
+#define LINUX_CLONE_VM			0x00000100
+#define LINUX_CLONE_FS			0x00000200
+#define LINUX_CLONE_FILES		0x00000400
+#define LINUX_CLONE_SIGHAND		0x00000800
+#define LINUX_CLONE_THREAD		0x00010000
+#define LINUX_CLONE_SETTLS		0x00080000
+#define LINUX_CLONE_PARENT_SETTID	0x00100000
+#define LINUX_CLONE_CHILD_CLEARTID	0x00200000
+#define LINUX_CLONE_CHILD_SETTID	0x01000000
 
 /*
  * Handle a syscall. Called when SVC #0 is executed.

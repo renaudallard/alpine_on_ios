@@ -43,12 +43,14 @@ typedef struct mem_space {
 	uint64_t	mmap_next;	/* Next mmap hint addr */
 	pthread_mutex_t	lock;
 	int		jit_mode;	/* 1 = JIT (mmap at guest addr) */
+	int		refcount;	/* Shared memory reference count */
 } mem_space_t;
 
 /* Lifecycle */
 mem_space_t	*mem_space_create(void);
 void		 mem_space_destroy(mem_space_t *);
 mem_space_t	*mem_space_clone(mem_space_t *);
+void		 mem_space_ref(mem_space_t *);
 
 /* Memory mapping */
 uint64_t	mem_mmap(mem_space_t *, uint64_t addr, uint64_t size,
