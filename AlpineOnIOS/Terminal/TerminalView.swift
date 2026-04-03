@@ -148,13 +148,23 @@ struct TerminalGridView: View {
         let fg = resolvedFG(cell: cell, isCursor: isCursor)
         let bg = resolvedBG(cell: cell, isCursor: isCursor)
 
-        Text(String(cell.character))
-            .font(font)
-            .bold(cell.attrs.bold)
-            .underline(cell.attrs.underline)
+        let text = Text(String(cell.character))
+            .font(cell.attrs.bold ? font.bold() : font)
             .foregroundColor(fg)
             .background(bg)
             .frame(maxWidth: .infinity)
+
+        if cell.attrs.underline {
+            text.overlay(
+                Rectangle()
+                    .frame(height: 1)
+                    .foregroundColor(fg)
+                    .offset(y: 6),
+                alignment: .bottom
+            )
+        } else {
+            text
+        }
     }
 
     private func resolvedFG(cell: TerminalCell, isCursor: Bool) -> Color {
