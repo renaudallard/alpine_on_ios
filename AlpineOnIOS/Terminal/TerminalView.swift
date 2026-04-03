@@ -34,21 +34,20 @@ struct TerminalView: View {
     var body: some View {
         VStack(spacing: 0) {
             /* Terminal character grid */
-            TerminalGridView(buffer: termBuffer, fontSize: settings.fontSize)
-                .background(Color.black)
-                .overlay(
-                    KeyboardInputView(
-                        onKeyPress: { handleKey($0) },
-                        ctrlPressed: $ctrlPressed
-                    )
-                    .frame(width: 1, height: 1)
-                    .opacity(0.01)
+            ZStack {
+                TerminalGridView(buffer: termBuffer, fontSize: settings.fontSize)
+                    .background(Color.black)
+
+                /* Full-size transparent text field captures keyboard */
+                KeyboardInputView(
+                    onKeyPress: { handleKey($0) },
+                    ctrlPressed: $ctrlPressed
                 )
-                .onTapGesture {
-                    /* Focus the hidden text field on tap */
-                    NotificationCenter.default.post(
-                        name: .terminalFocusKeyboard, object: nil)
-                }
+            }
+            .onTapGesture {
+                NotificationCenter.default.post(
+                    name: .terminalFocusKeyboard, object: nil)
+            }
 
             /* Extra key row */
             AccessoryKeyBar(
@@ -208,6 +207,13 @@ struct KeyboardInputView: UIViewRepresentable {
         tf.smartQuotesType = .no
         tf.smartDashesType = .no
         tf.keyboardType = .asciiCapable
+        tf.returnKeyType = .default
+        tf.tintColor = .clear
+        tf.textColor = .clear
+        tf.backgroundColor = .clear
+
+        /* Store direct reference for focus management */
+        context.coordinator.textField = tf
 
         NotificationCenter.default.addObserver(
             context.coordinator,
@@ -215,15 +221,18 @@ struct KeyboardInputView: UIViewRepresentable {
             name: .terminalFocusKeyboard,
             object: nil)
 
-        /* Become first responder after a short delay to ensure view is ready */
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        /* Become first responder after a short delay */
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             tf.becomeFirstResponder()
         }
 
         return tf
     }
 
-    func updateUIView(_ uiView: HiddenTextField, context: Context) {}
+    func updateUIView(_ uiView: HiddenTextField, context: Context) {
+        /* Ensure reference stays current */
+        context.coordinator.textField = uiView
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onKeyPress: onKeyPress)
@@ -231,7 +240,7 @@ struct KeyboardInputView: UIViewRepresentable {
 
     class Coordinator: NSObject, UITextFieldDelegate {
         var onKeyPress: (String) -> Void
-        private weak var textField: UITextField?
+        var textField: HiddenTextField?
 
         init(onKeyPress: @escaping (String) -> Void) {
             self.onKeyPress = onKeyPress
@@ -243,10 +252,6 @@ struct KeyboardInputView: UIViewRepresentable {
 
         @objc func focusKeyboard(_ notification: Notification) {
             textField?.becomeFirstResponder()
-        }
-
-        func textFieldDidBeginEditing(_ textField: UITextField) {
-            self.textField = textField
         }
 
         func textField(_ textField: UITextField,
@@ -261,12 +266,33 @@ struct KeyboardInputView: UIViewRepresentable {
             }
             return false
         }
+
+        /* Handle return key */
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            onKeyPress("\n")
+            return false
+        }
     }
 }
 
 /// UITextField subclass that stays invisible but always accepts input.
 class HiddenTextField: UITextField {
     override var canBecomeFirstResponder: Bool { true }
+    override var canResignFirstResponder: Bool { true }
+
+    override func caretRect(for position: UITextPosition) -> CGRect {
+        /* Hide the caret */
+        .zero
+    }
+
+    override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+        []
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        /* Disable context menu */
+        false
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>,
                                 with event: UIPressesEvent?) {
