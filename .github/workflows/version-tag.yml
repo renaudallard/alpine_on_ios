@@ -6,6 +6,9 @@ on:
     paths:
       - project.yml
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   tag:
     name: Create version tag
