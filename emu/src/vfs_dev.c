@@ -28,6 +28,8 @@
 #include <unistd.h>
 
 #include "vfs.h"
+#include "framebuffer.h"
+#include "vfs_input.h"
 #include "log.h"
 
 /* Major/minor device numbers for Linux-compatible stat results. */
@@ -47,6 +49,10 @@
 #define DEV_PTMX_MIN	2
 #define DEV_PTS0_MAJ	136
 #define DEV_PTS0_MIN	0
+#define DEV_FB0_MAJ	29
+#define DEV_FB0_MIN	0
+#define DEV_INPUT_MAJ	13
+#define DEV_INPUT_MIN	64
 
 #define MAKEDEV(maj, min)	(((uint64_t)(maj) << 8) | (uint64_t)(min))
 
@@ -54,7 +60,7 @@
 static const char *dev_entries[] = {
 	"null", "zero", "random", "urandom", "tty",
 	"console", "ptmx", "pts", "fd", "stdin",
-	"stdout", "stderr", "shm",
+	"stdout", "stderr", "shm", "fb0", "input",
 	NULL
 };
 
@@ -97,6 +103,26 @@ vfs_dev_open(void *ctx, const char *path, int flags, int mode)
 		fd = open("/dev/tty", flags);
 		if (fd < 0)
 			fd = open("/dev/null", flags);
+		if (fd < 0)
+			return (-errno);
+		return (fd);
+	}
+	if (strcmp(path, "/fb0") == 0) {
+		if (fb_init(0, 0) != 0)
+			return (-ENOMEM);
+		fd = fb_get_fd();
+		if (fd < 0)
+			return (-errno);
+		return (fd);
+	}
+	if (strcmp(path, "/input/event0") == 0) {
+		if (input_init() != 0)
+			return (-ENOMEM);
+		fd = input_get_fd();
+		if (fd < 0)
+			return (-errno);
+		/* Return a dup so the pipe read end stays open. */
+		fd = dup(fd);
 		if (fd < 0)
 			return (-errno);
 		return (fd);
@@ -148,7 +174,8 @@ vfs_dev_stat(void *ctx, const char *path, struct emu_stat *st)
 	/* Subdirectories. */
 	if (strcmp(path, "/pts") == 0 ||
 	    strcmp(path, "/fd") == 0 ||
-	    strcmp(path, "/shm") == 0) {
+	    strcmp(path, "/shm") == 0 ||
+	    strcmp(path, "/input") == 0) {
 		st->st_mode = 0755 | 0040000;	/* S_IFDIR */
 		st->st_nlink = 2;
 		return (0);
@@ -202,6 +229,21 @@ vfs_dev_stat(void *ctx, const char *path, struct emu_stat *st)
 	if (strcmp(path, "/pts/0") == 0) {
 		st->st_mode = 0620 | 0020000;
 		st->st_rdev = MAKEDEV(DEV_PTS0_MAJ, DEV_PTS0_MIN);
+		return (0);
+	}
+	if (strcmp(path, "/fb0") == 0) {
+		st->st_mode = 0666 | 0020000;	/* S_IFCHR */
+		st->st_rdev = MAKEDEV(DEV_FB0_MAJ, DEV_FB0_MIN);
+		return (0);
+	}
+	if (strcmp(path, "/input") == 0) {
+		st->st_mode = 0755 | 0040000;	/* S_IFDIR */
+		st->st_nlink = 2;
+		return (0);
+	}
+	if (strcmp(path, "/input/event0") == 0) {
+		st->st_mode = 0660 | 0020000;	/* S_IFCHR */
+		st->st_rdev = MAKEDEV(DEV_INPUT_MAJ, DEV_INPUT_MIN);
 		return (0);
 	}
 

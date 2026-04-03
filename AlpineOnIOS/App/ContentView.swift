@@ -22,26 +22,36 @@ struct ContentView: View {
     @State private var showSettings = false
 
     var body: some View {
-        NavigationView {
-            TerminalView()
-                .environmentObject(bridge)
-                .environmentObject(settings)
-                .navigationTitle("Alpine Terminal")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
+        TabView {
+            NavigationView {
+                TerminalView()
+                    .environmentObject(bridge)
+                    .environmentObject(settings)
+                    .navigationTitle("Alpine Terminal")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Image(systemName: "gearshape")
+                            }
                         }
                     }
-                }
-                .sheet(isPresented: $showSettings) {
-                    SettingsView()
-                        .environmentObject(settings)
+                    .sheet(isPresented: $showSettings) {
+                        SettingsView()
+                            .environmentObject(settings)
+                    }
+            }
+            .navigationViewStyle(.stack)
+            .tabItem {
+                Label("Terminal", systemImage: "terminal")
+            }
+
+            DisplayView()
+                .tabItem {
+                    Label("Display", systemImage: "display")
                 }
         }
-        .navigationViewStyle(.stack)
     }
 }

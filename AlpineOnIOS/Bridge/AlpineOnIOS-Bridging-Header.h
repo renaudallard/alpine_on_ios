@@ -3,3 +3,5 @@
  */
 
 #include "emu.h"
+#include "framebuffer.h"
+#include "vfs_input.h"

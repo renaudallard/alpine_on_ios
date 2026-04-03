@@ -37,6 +37,9 @@ targets:
       path: AlpineOnIOS/App/Info.plist
     entitlements:
       path: AlpineOnIOS.entitlements
+    dependencies:
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alpineonios.app
