@@ -108,8 +108,9 @@ class EmulatorBridge: ObservableObject {
         let path = "/bin/busybox"
         let argv = ["sh", "-c",
             "busybox --install -s /bin 2>/dev/null; " +
-            "while true; do echo -n \"# \"; read cmd || break; " +
-            "echo \"$cmd\"; eval \"$cmd\"; done"]
+            "mkdir -p /proc /dev /tmp 2>/dev/null; " +
+            "while true; do echo -n \"$ \"; read cmd || break; " +
+            "eval \"$cmd\" 2>&1; done"]
         let envp = [
             "HOME=/root",
             "TERM=xterm-256color",
