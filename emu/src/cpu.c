@@ -44,6 +44,8 @@ cpu_step(cpu_state_t *cpu)
 
 	old_pc = cpu->pc;
 
+
+
 	group = (insn >> 25) & 0xF;
 
 	switch (group) {

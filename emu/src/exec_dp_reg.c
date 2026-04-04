@@ -693,13 +693,13 @@ exec_dp_reg(cpu_state_t *cpu, uint32_t insn)
 	if (bits(insn, 28, 21) == 0xD4)
 		return exec_cond_select(cpu, insn);
 
-	/* Data processing 2-source: bits[28:21] = x1010110 */
-	if (bits(insn, 28, 21) == 0xD6)
-		return exec_dp_2src(cpu, insn);
-
-	/* Data processing 1-source: bits[30:21] = 1 x1010110 00 */
-	if ((bits(insn, 30, 21) & 0x3FF) == 0x2D6)
+	/* Data processing 1-source: bits[28:21]=11010110, bit[30]=1 */
+	if (bits(insn, 28, 21) == 0xD6 && bit(insn, 30))
 		return exec_dp_1src(cpu, insn);
+
+	/* Data processing 2-source: bits[28:21]=11010110, bit[30]=0 */
+	if (bits(insn, 28, 21) == 0xD6 && !bit(insn, 30))
+		return exec_dp_2src(cpu, insn);
 
 	/* Data processing 3-source: bit[28]=1, bits[24:21] high bit set */
 	if (bit(insn, 28) && (bits(insn, 24, 21) & 0x8))

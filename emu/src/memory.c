@@ -495,7 +495,7 @@ mem_munmap(mem_space_t *ms, uint64_t addr, uint64_t size)
 int
 mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 {
-	mem_region_t	*r;
+	mem_region_t	*r, *next;
 	uint64_t	 end;
 
 	addr = page_align_down(addr);
@@ -503,16 +503,79 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 	end = addr + size;
 
 	pthread_mutex_lock(&ms->lock);
-	for (r = ms->regions; r != NULL; r = r->next) {
-		uint64_t	rend;
+	for (r = ms->regions; r != NULL; r = next) {
+		uint64_t	rend, overlap_start, overlap_end;
 		int		old_prot;
 
+		next = r->next;
 		rend = r->base + r->size;
 		if (rend <= addr || r->base >= end)
 			continue;
 
-		old_prot = r->prot;
-		r->prot = prot;
+		overlap_start = (addr > r->base) ? addr : r->base;
+		overlap_end = (end < rend) ? end : rend;
+
+		/*
+		 * If the mprotect covers the entire region, just
+		 * change the protection in place.
+		 */
+		if (overlap_start == r->base && overlap_end == rend) {
+			old_prot = r->prot;
+			r->prot = prot;
+		} else {
+			/*
+			 * Partial overlap: split the region. Create a
+			 * new region for the protected range and adjust
+			 * the original for the remainder.
+			 */
+			old_prot = r->prot;
+
+			if (overlap_start > r->base) {
+				/* Split: keep [base, overlap_start) as-is,
+				 * create [overlap_start, overlap_end) with new prot */
+				mem_region_t *nr = calloc(1, sizeof(*nr));
+				if (nr == NULL) break;
+				nr->base = overlap_start;
+				nr->size = overlap_end - overlap_start;
+				nr->prot = prot;
+				nr->flags = r->flags;
+				nr->host = r->host + (overlap_start - r->base);
+
+				if (overlap_end < rend) {
+					/* Also need a tail region */
+					mem_region_t *tr = calloc(1, sizeof(*tr));
+					if (tr == NULL) { free(nr); break; }
+					tr->base = overlap_end;
+					tr->size = rend - overlap_end;
+					tr->prot = r->prot;
+					tr->flags = r->flags;
+					tr->host = r->host + (overlap_end - r->base);
+					tr->next = r->next;
+					nr->next = tr;
+				} else {
+					nr->next = r->next;
+				}
+				r->size = overlap_start - r->base;
+				r->next = nr;
+				next = nr->next;
+			} else {
+				/* overlap_start == r->base, overlap_end < rend:
+				 * change [base, overlap_end), keep [overlap_end, rend) */
+				mem_region_t *nr = calloc(1, sizeof(*nr));
+				if (nr == NULL) break;
+				nr->base = overlap_end;
+				nr->size = rend - overlap_end;
+				nr->prot = r->prot;
+				nr->flags = r->flags;
+				nr->host = r->host + (overlap_end - r->base);
+				nr->next = r->next;
+				r->size = overlap_end - r->base;
+				r->prot = prot;
+				r->next = nr;
+				next = nr->next;
+			}
+			continue;	/* JIT mprotect handled per-region below */
+		}
 
 		if (ms->jit_mode) {
 			int	hp = 0;
@@ -521,10 +584,6 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 			if (prot & MEM_PROT_WRITE)
 				hp |= PROT_WRITE;
 			if (prot & MEM_PROT_EXEC) {
-				/*
-				 * Newly executable region: patch SVC and
-				 * TPIDR instructions before enabling exec.
-				 */
 				if (!(old_prot & MEM_PROT_EXEC))
 					jit_patch_code(r->host, r->size);
 				hp |= PROT_EXEC;

@@ -342,7 +342,7 @@ exec_ldst_pair(cpu_state_t *cpu, uint32_t insn)
 	if (V) {
 		scale = 2 + opc;	/* S=2(4B), D=3(8B), Q=4(16B) */
 	} else {
-		scale = (opc & 1) ? 3 : 2;	/* 32-bit=2, 64-bit=3 */
+		scale = (opc == 2) ? 3 : 2;	/* opc=0/1: 32-bit(4B), opc=2: 64-bit(8B) */
 	}
 
 	offset = sign_extend(bits(insn, 21, 15), 7) << scale;
@@ -866,6 +866,17 @@ exec_ldst(cpu_state_t *cpu, uint32_t insn)
 		case 3:	/* Pre-index */
 			return exec_ldst_imm9(cpu, insn);
 		}
+	}
+
+	/*
+	 * AdvSIMD load/store multiple structures: bit[31]=0, bits[29:27]=001.
+	 * Load/store exclusive: bit[31] can be 1, bits[29:27]=001.
+	 */
+	if (op1 == 1) {
+		if (!bit(insn, 31))
+			return exec_simd(cpu, insn);
+		/* Load/store exclusive (LDAXR, STLXR, LDAR, STLR, etc.) */
+		return exec_ldst_exclusive(cpu, insn);
 	}
 
 	LOG_WARN("unimplemented ldst at 0x%llx: 0x%08x",
