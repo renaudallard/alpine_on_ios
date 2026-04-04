@@ -152,10 +152,20 @@ mem_space_clone(mem_space_t *src)
 
 	dst->brk_base = src->brk_base;
 	dst->brk_current = src->brk_current;
-	dst->mmap_next = src->mmap_next;
-	dst->jit_mode = src->jit_mode;
 	dst->refcount = 1;
 	pthread_mutex_init(&dst->lock, NULL);
+
+	/*
+	 * Clone always produces an interpreter-mode copy.
+	 * In JIT mode the parent's host addresses ARE the guest
+	 * addresses, and both parent and child are threads in the
+	 * same host process.  Using MAP_FIXED at the same address
+	 * would destroy the parent's mappings.  The interpreter
+	 * fallback is safe because fork is almost always followed
+	 * by execve, which creates a fresh JIT address space.
+	 */
+	dst->jit_mode = 0;
+	dst->mmap_next = MMAP_START;
 
 	pp = &dst->regions;
 	for (r = src->regions; r != NULL; r = r->next) {
@@ -168,44 +178,12 @@ mem_space_clone(mem_space_t *src)
 		nr->prot = r->prot;
 		nr->flags = r->flags;
 
-		if (src->jit_mode) {
-			int	mflags, mprot;
-
-			mflags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
-			mprot = PROT_READ | PROT_WRITE;
-#ifdef __APPLE__
-			if (r->prot & MEM_PROT_EXEC)
-				mflags |= MAP_JIT;
-#endif
-			nr->host = mmap((void *)r->base, r->size,
-			    mprot, mflags, -1, 0);
-			if (nr->host == MAP_FAILED) {
-				free(nr);
-				goto fail;
-			}
-#ifdef __APPLE__
-			if (r->prot & MEM_PROT_EXEC)
-				JIT_WRITE_ENABLE();
-#endif
-			memcpy(nr->host, r->host, r->size);
-#ifdef __APPLE__
-			if (r->prot & MEM_PROT_EXEC)
-				JIT_WRITE_DISABLE();
-#endif
-			if (r->prot & MEM_PROT_EXEC) {
-				mprot = PROT_READ | PROT_EXEC;
-				if (r->prot & MEM_PROT_WRITE)
-					mprot |= PROT_WRITE;
-				mprotect(nr->host, r->size, mprot);
-			}
-		} else {
-			nr->host = calloc(1, r->size);
-			if (nr->host == NULL) {
-				free(nr);
-				goto fail;
-			}
-			memcpy(nr->host, r->host, r->size);
+		nr->host = calloc(1, r->size);
+		if (nr->host == NULL) {
+			free(nr);
+			goto fail;
 		}
+		memcpy(nr->host, r->host, r->size);
 
 		nr->next = NULL;
 		*pp = nr;
