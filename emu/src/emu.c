@@ -49,6 +49,16 @@ set_error(const char *fmt, ...)
 	LOG_ERR("%s", g_last_error);
 }
 
+void
+emu_set_error(const char *fmt, ...)
+{
+	va_list	ap;
+	va_start(ap, fmt);
+	vsnprintf(g_last_error, sizeof(g_last_error), fmt, ap);
+	va_end(ap);
+	LOG_ERR("%s", g_last_error);
+}
+
 const char *
 emu_last_error(void)
 {

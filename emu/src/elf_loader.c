@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include "elf_loader.h"
+#include "emu.h"
 #include "memory.h"
 #include "log.h"
 
@@ -129,40 +130,40 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 	fd = open(host_path, O_RDONLY);
 	if (fd < 0) {
-		LOG_ERR("elf_load: cannot open %s", host_path);
+		emu_set_error("elf: cannot open %s", host_path);
 		return -1;
 	}
 
 	n = read(fd, &ehdr, sizeof(ehdr));
 	if (n != sizeof(ehdr)) {
-		LOG_ERR("elf_load: short read on ELF header");
+		emu_set_error("elf: short read on ELF header");
 		goto fail;
 	}
 
 	/* Validate ELF magic. */
 	if (ehdr.e_ident[0] != ELFMAG0 || ehdr.e_ident[1] != ELFMAG1 ||
 	    ehdr.e_ident[2] != ELFMAG2 || ehdr.e_ident[3] != ELFMAG3) {
-		LOG_ERR("elf_load: bad ELF magic");
+		emu_set_error("elf: bad ELF magic");
 		goto fail;
 	}
 
 	if (ehdr.e_ident[4] != ELFCLASS64) {
-		LOG_ERR("elf_load: not 64-bit ELF");
+		emu_set_error("elf: not 64-bit ELF");
 		goto fail;
 	}
 
 	if (ehdr.e_ident[5] != ELFDATA2LSB) {
-		LOG_ERR("elf_load: not little-endian");
+		emu_set_error("elf: not little-endian");
 		goto fail;
 	}
 
 	if (ehdr.e_machine != EM_AARCH64) {
-		LOG_ERR("elf_load: not aarch64 (machine=%d)", ehdr.e_machine);
+		emu_set_error("elf: not aarch64 (machine=%d)", ehdr.e_machine);
 		goto fail;
 	}
 
 	if (ehdr.e_type != ET_EXEC && ehdr.e_type != ET_DYN) {
-		LOG_ERR("elf_load: unsupported ELF type %d", ehdr.e_type);
+		emu_set_error("elf: unsupported ELF type %d", ehdr.e_type);
 		goto fail;
 	}
 
@@ -178,7 +179,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 	n = read(fd, phdrs, (size_t)ehdr.e_phnum * sizeof(Elf64_Phdr));
 	if (n != (ssize_t)((size_t)ehdr.e_phnum * sizeof(Elf64_Phdr))) {
-		LOG_ERR("elf_load: short read on program headers");
+		emu_set_error("elf: short read on program headers");
 		goto fail;
 	}
 
@@ -198,7 +199,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 	}
 
 	if (vmin == UINT64_MAX) {
-		LOG_ERR("elf_load: no PT_LOAD segments");
+		emu_set_error("elf: no PT_LOAD segments");
 		goto fail;
 	}
 
@@ -233,7 +234,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 		    prot | MEM_PROT_WRITE,
 		    MEM_MAP_PRIVATE | MEM_MAP_FIXED | MEM_MAP_ANONYMOUS,
 		    -1, 0) == (uint64_t)-1) {
-			LOG_ERR("elf_load: mmap failed for segment %d", i);
+			emu_set_error("elf: mmap failed for segment %d", i);
 			goto fail;
 		}
 
@@ -243,14 +244,14 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			p = mem_translate(mem, addr, phdrs[i].p_filesz,
 			    MEM_PROT_WRITE);
 			if (p == NULL) {
-				LOG_ERR("elf_load: translate failed");
+				emu_set_error("elf: translate failed");
 				goto fail;
 			}
 			if (lseek(fd, file_off, SEEK_SET) < 0)
 				goto fail;
 			n = read(fd, p, phdrs[i].p_filesz);
 			if (n < 0 || (size_t)n < phdrs[i].p_filesz) {
-				LOG_ERR("elf_load: read segment %d failed "
+				emu_set_error("elf: read segment %d failed "
 				    "(got %zd, want %lu)", i, n,
 				    (unsigned long)phdrs[i].p_filesz);
 				goto fail;
@@ -274,14 +275,14 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 	for (i = 0; i < ehdr.e_phnum; i++) {
 		if (phdrs[i].p_type == PT_INTERP) {
 			if (phdrs[i].p_filesz >= sizeof(info->interp)) {
-				LOG_ERR("elf_load: interp path too long");
+				emu_set_error("elf: interp path too long");
 				goto fail;
 			}
 			if (lseek(fd, phdrs[i].p_offset, SEEK_SET) < 0)
 				goto fail;
 			n = read(fd, info->interp, phdrs[i].p_filesz);
 			if (n < (ssize_t)phdrs[i].p_filesz) {
-				LOG_ERR("elf_load: read interp failed");
+				emu_set_error("elf: read interp failed");
 				goto fail;
 			}
 			info->interp[phdrs[i].p_filesz] = '\0';
@@ -313,7 +314,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				    (unsigned long)dp[0],
 				    (unsigned long)dp[1]);
 			} else {
-				LOG_ERR("elf_load: cannot translate DYNAMIC "
+				emu_set_error("elf: cannot translate DYNAMIC "
 				    "at 0x%lx", (unsigned long)dyn_addr);
 			}
 		}

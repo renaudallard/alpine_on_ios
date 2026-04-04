@@ -346,7 +346,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	/* Resolve path through VFS. */
 	ret = vfs_resolve(proc->vfs, path, host_path, sizeof(host_path));
 	if (ret != 0) {
-		LOG_ERR("proc: execve: cannot resolve %s", path);
+		emu_set_error("execve: cannot resolve %s", path);
 		return (-ENOENT);
 	}
 
@@ -388,7 +388,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		ret = elf_load(host_path, newmem, bin_base, &info);
 	}
 	if (ret != 0) {
-		LOG_ERR("proc: execve: elf_load %s failed (jit=%d)",
+		emu_set_error("execve: elf_load %s failed (jit=%d)",
 		    host_path, use_jit);
 		mem_space_destroy(newmem);
 		return (-ENOEXEC);
@@ -403,7 +403,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		ret = vfs_resolve(proc->vfs, info.interp,
 		    interp_host, sizeof(interp_host));
 		if (ret != 0) {
-			LOG_ERR("proc: execve: cannot resolve interp %s", info.interp);
+			emu_set_error("execve: cannot resolve interp %s", info.interp);
 			mem_space_destroy(newmem);
 			return (-ENOENT);
 		}
@@ -412,7 +412,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		ret = elf_load(interp_host, newmem, interp_base,
 		    &interp_info);
 		if (ret != 0) {
-			LOG_ERR("proc: execve: interp elf_load %s failed", interp_host);
+			emu_set_error("execve: interp elf_load %s failed", interp_host);
 			mem_space_destroy(newmem);
 			return (-ENOEXEC);
 		}
@@ -425,7 +425,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	/* Set up stack. */
 	sp = elf_setup_stack(newmem, &info, argv, envp, stack_top);
 	if (sp == 0) {
-		LOG_ERR("proc: execve: failed to set up stack");
+		emu_set_error("execve: failed to set up stack");
 		mem_space_destroy(newmem);
 		return (-ENOMEM);
 	}
