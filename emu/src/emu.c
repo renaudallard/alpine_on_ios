@@ -98,6 +98,12 @@ emu_init(const char *rootfs_path)
 			g_jit_enabled = 1;
 			LOG_INFO("emu: JIT probe succeeded, JIT enabled");
 		} else {
+			/* JIT not available: remove SIGTRAP handler to
+			 * avoid crashing on stray traps in interpreter mode */
+			struct sigaction sa_dfl;
+			memset(&sa_dfl, 0, sizeof(sa_dfl));
+			sa_dfl.sa_handler = SIG_DFL;
+			sigaction(SIGTRAP, &sa_dfl, NULL);
 			LOG_WARN("emu: JIT probe failed (%s), "
 			    "using interpreter", strerror(errno));
 		}

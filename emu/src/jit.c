@@ -85,8 +85,15 @@ jit_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 	imm = (insn >> 5) & 0xFFFF;
 
 	proc = jit_current_proc;
-	if (proc == NULL)
-		abort();
+	if (proc == NULL) {
+		/* Not in JIT context - restore default and re-raise */
+		struct sigaction sa;
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_handler = SIG_DFL;
+		sigaction(SIGTRAP, &sa, NULL);
+		raise(SIGTRAP);
+		return;
+	}
 
 	if (imm == 0x0001) {
 		/* SVC #0: syscall */
