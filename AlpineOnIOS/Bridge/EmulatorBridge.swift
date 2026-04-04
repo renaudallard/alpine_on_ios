@@ -108,13 +108,6 @@ class EmulatorBridge: ObservableObject {
         let path = "/bin/busybox"
         let argv = ["sh", "-c",
             "mkdir -p /proc /dev /tmp 2>/dev/null; " +
-            "if ! test -e /bin/ls; then " +
-            "echo 'Installing commands, please wait...'; " +
-            "busybox --install -s /bin 2>/dev/null; " +
-            "busybox --install -s /sbin 2>/dev/null; " +
-            "busybox --install -s /usr/bin 2>/dev/null; " +
-            "busybox --install -s /usr/sbin 2>/dev/null; " +
-            "echo 'Done.'; fi; " +
             "echo 'Alpine Linux'; " +
             "while true; do echo -n '$ '; read cmd || break; " +
             "eval \"$cmd\" 2>&1; done"]

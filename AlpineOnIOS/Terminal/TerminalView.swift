@@ -161,11 +161,12 @@ struct TerminalGridView: View {
         let fg = resolvedFG(cell: cell, isCursor: isCursor)
         let bg = resolvedBG(cell: cell, isCursor: isCursor)
 
+        let charWidth = CGFloat(fontSize) * 0.6
         let text = Text(String(cell.character))
             .font(cell.attrs.bold ? font.bold() : font)
             .foregroundColor(fg)
             .background(bg)
-            .frame(maxWidth: .infinity)
+            .frame(width: charWidth, alignment: .leading)
 
         if cell.attrs.underline {
             text.overlay(

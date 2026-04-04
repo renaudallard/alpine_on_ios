@@ -56,8 +56,12 @@ struct AlpineOnIOSApp: App {
             return
         }
 
-        /* Start emulator. It will run busybox --install before
-         * spawning the shell if /bin/sh doesn't exist yet. */
+        /* Create busybox applet symlinks in Swift (instant).
+         * Much faster than running busybox --install in the emulator. */
+        if !fm.fileExists(atPath: rootfs + "/bin/ls") {
+            createBusyboxSymlinks(rootfs: rootfs)
+        }
+
         bridge.startAll(rootfsPath: rootfs)
     }
 
@@ -87,6 +91,56 @@ struct AlpineOnIOSApp: App {
             try fm.copyItem(atPath: src, toPath: dest)
         } catch {
             bridge.state = .error("Copy failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Create busybox applet symlinks in the rootfs (instant in Swift).
+    private func createBusyboxSymlinks(rootfs: String) {
+        let fm = FileManager.default
+        let busybox = rootfs + "/bin/busybox"
+
+        /* Standard busybox applet list */
+        let dirs = ["/bin", "/sbin", "/usr/bin", "/usr/sbin"]
+        for dir in dirs {
+            let full = rootfs + dir
+            try? fm.createDirectory(atPath: full,
+                withIntermediateDirectories: true, attributes: nil)
+        }
+
+        /* Common applets to create as symlinks to busybox */
+        let applets = [
+            "/bin": ["sh", "ash", "ls", "cat", "cp", "mv", "rm", "mkdir",
+                "rmdir", "ln", "chmod", "chown", "chgrp", "touch", "echo",
+                "grep", "egrep", "fgrep", "sed", "head", "tail", "wc",
+                "sort", "uniq", "cut", "tr", "tee", "find", "xargs",
+                "tar", "gzip", "gunzip", "zcat", "df", "du", "mount",
+                "umount", "ps", "kill", "sleep", "date", "uname", "pwd",
+                "hostname", "whoami", "id", "env", "printenv", "test",
+                "true", "false", "yes", "seq", "expr", "basename",
+                "dirname", "realpath", "readlink", "stat", "md5sum",
+                "sha256sum", "dd", "sync", "dmesg", "more", "less",
+                "vi", "ed", "diff", "patch", "wget", "nc", "ping",
+                "traceroute", "nslookup", "ifconfig", "route", "ip",
+                "arp", "netstat", "ss", "mount", "free", "uptime",
+                "top", "watch", "hexdump", "od", "strings", "file",
+                "mktemp", "base64", "rev", "which"],
+            "/sbin": ["halt", "reboot", "poweroff", "init", "fdisk",
+                "mkfs.ext2", "fsck", "blkid", "swapon", "swapoff",
+                "ifconfig", "route", "iptables", "modprobe", "lsmod"],
+            "/usr/bin": ["awk", "nohup", "install", "time", "xargs",
+                "head", "tail", "tty", "clear", "reset"],
+            "/usr/sbin": ["adduser", "deluser", "addgroup", "delgroup",
+                "crond", "chpasswd"],
+        ]
+
+        for (dir, names) in applets {
+            for name in names {
+                let link = rootfs + dir + "/" + name
+                if !fm.fileExists(atPath: link) {
+                    try? fm.createSymbolicLink(
+                        atPath: link, withDestinationPath: busybox)
+                }
+            }
         }
     }
 }
