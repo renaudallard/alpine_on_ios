@@ -134,11 +134,15 @@ struct AlpineOnIOSApp: App {
         ]
 
         for (dir, names) in applets {
+            /* Compute relative path from this dir to /bin/busybox */
+            let depth = dir.components(separatedBy: "/").count - 2
+            let relPath = String(repeating: "../", count: depth) + "bin/busybox"
+
             for name in names {
                 let link = rootfs + dir + "/" + name
                 if !fm.fileExists(atPath: link) {
                     try? fm.createSymbolicLink(
-                        atPath: link, withDestinationPath: busybox)
+                        atPath: link, withDestinationPath: relPath)
                 }
             }
         }
