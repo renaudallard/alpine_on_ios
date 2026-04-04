@@ -35,70 +35,26 @@ struct AlpineOnIOSApp: App {
         guard !isSetup else { return }
         isSetup = true
 
+        /*
+         * Use the rootfs directly from the app bundle. The bundle
+         * preserves symlinks correctly (copied with cp -a / ditto).
+         * FileManager.copyItem breaks absolute symlinks like
+         * /bin/sh -> /bin/busybox because it resolves them against
+         * the host filesystem, not the rootfs.
+         */
+        let rootfs = Bundle.main.bundlePath + "/alpine"
         let fm = FileManager.default
-        let rootfs = rootfsPath()
 
-        /* Extract rootfs if needed (synchronous, fast after first run) */
         if !fm.fileExists(atPath: rootfs + "/bin") {
-            bridge.state = .extracting
-            extractRootfs()
-        }
-
-        /* Verify rootfs exists */
-        if !fm.fileExists(atPath: rootfs + "/bin") {
-            var diag = "Rootfs: \(rootfs)\n"
-            if fm.fileExists(atPath: rootfs) {
-                let items = (try? fm.contentsOfDirectory(atPath: rootfs)) ?? []
-                diag += "Contents: \(items.prefix(15).joined(separator: ", "))\n"
-            } else {
-                diag += "Directory missing\n"
-            }
+            var diag = "Rootfs not found in bundle.\n"
             diag += "Bundle: \(Bundle.main.bundlePath)\n"
-            let bItems = (try? fm.contentsOfDirectory(
+            let items = (try? fm.contentsOfDirectory(
                 atPath: Bundle.main.bundlePath)) ?? []
-            diag += "Bundle items: \(bItems.joined(separator: ", "))"
+            diag += "Items: \(items.joined(separator: ", "))"
             bridge.state = .error(diag)
             return
         }
 
-        /* Start emulator on background thread */
         bridge.startAll(rootfsPath: rootfs)
-    }
-
-    private func rootfsPath() -> String {
-        let docs = FileManager.default.urls(for: .documentDirectory,
-                                            in: .userDomainMask).first!
-        return docs.appendingPathComponent("alpine").path
-    }
-
-    private func extractRootfs() {
-        let fm = FileManager.default
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dest = docs.appendingPathComponent("alpine")
-
-        /* Remove stale/incomplete rootfs from previous installs */
-        if fm.fileExists(atPath: dest.path) &&
-           !fm.fileExists(atPath: dest.path + "/bin/busybox") {
-            try? fm.removeItem(atPath: dest.path)
-        }
-
-        guard !fm.fileExists(atPath: dest.path) else { return }
-
-        /* Try to find the bundled rootfs.
-         * The post-build script copies it to App.app/alpine/. */
-        let candidates: [String?] = [
-            Bundle.main.bundlePath + "/alpine",
-            Bundle.main.path(forResource: "alpine", ofType: nil),
-            Bundle.main.resourcePath.map { $0 + "/alpine" },
-        ]
-
-        for case let src? in candidates where fm.fileExists(atPath: src) {
-            do {
-                try fm.copyItem(atPath: src, toPath: dest.path)
-                return
-            } catch {
-                /* Try next candidate */
-            }
-        }
     }
 }
