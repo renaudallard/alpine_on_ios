@@ -657,43 +657,13 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	}
 	case LINUX_TIOCSWINSZ:
 		return 0;
-	case LINUX_TCGETS: {
+	case LINUX_TCGETS:
 		/*
-		 * Return a termios with standard interactive flags.
-		 * Linux AArch64 struct termios layout:
-		 *   c_iflag (4), c_oflag (4), c_cflag (4), c_lflag (4),
-		 *   c_line (1), c_cc[19] (19)
-		 * Total: 36 bytes.
+		 * Return ENOTTY so the shell uses simple line mode
+		 * instead of complex interactive terminal handling
+		 * which crashes on unimplemented features.
 		 */
-		uint8_t	termios[36];
-		uint32_t iflag, oflag, cflag, lflag;
-
-		memset(termios, 0, sizeof(termios));
-
-		iflag = 0x100;		/* ICRNL */
-		oflag = 0x05;		/* OPOST | ONLCR */
-		cflag = 0xB0;		/* CS8 | CREAD */
-		lflag = 0x0B;		/* ISIG | ICANON | ECHO */
-
-		memcpy(termios, &iflag, 4);
-		memcpy(termios + 4, &oflag, 4);
-		memcpy(termios + 8, &cflag, 4);
-		memcpy(termios + 12, &lflag, 4);
-
-		/* c_cc defaults: VINTR=^C, VEOF=^D, VERASE=^? */
-		termios[17 + 0] = 3;	/* VINTR = ^C */
-		termios[17 + 1] = 28;	/* VQUIT = ^\ */
-		termios[17 + 2] = 127;	/* VERASE = DEL */
-		termios[17 + 3] = 21;	/* VKILL = ^U */
-		termios[17 + 4] = 4;	/* VEOF = ^D */
-		termios[17 + 5] = 0;	/* VTIME */
-		termios[17 + 6] = 1;	/* VMIN */
-
-		if (mem_copy_to(proc->mem, a2, termios,
-		    sizeof(termios)) != 0)
-			return -LINUX_EFAULT;
-		return 0;
-	}
+		return -LINUX_ENOTTY;
 	case LINUX_TCSETS:
 	case LINUX_TCSETSW:
 	case LINUX_TCSETSF:

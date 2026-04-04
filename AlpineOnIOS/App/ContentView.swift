@@ -97,9 +97,12 @@ struct ContentView: View {
                 Text(message)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.green)
-                Text("Try deleting and reinstalling the app.")
-                    .font(.caption)
-                    .foregroundColor(.gray)
+                Button("Restart") {
+                    exit(0)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .padding(.top, 8)
             }
             .padding()
         }
