@@ -388,7 +388,8 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		ret = elf_load(host_path, newmem, bin_base, &info);
 	}
 	if (ret != 0) {
-		LOG_ERR("proc: execve: failed to load %s", host_path);
+		LOG_ERR("proc: execve: elf_load %s failed (jit=%d)",
+		    host_path, use_jit);
 		mem_space_destroy(newmem);
 		return (-ENOEXEC);
 	}
@@ -402,8 +403,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		ret = vfs_resolve(proc->vfs, info.interp,
 		    interp_host, sizeof(interp_host));
 		if (ret != 0) {
-			LOG_ERR("proc: execve: cannot resolve interp %s",
-			    info.interp);
+			LOG_ERR("proc: execve: cannot resolve interp %s", info.interp);
 			mem_space_destroy(newmem);
 			return (-ENOENT);
 		}
@@ -412,8 +412,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		ret = elf_load(interp_host, newmem, interp_base,
 		    &interp_info);
 		if (ret != 0) {
-			LOG_ERR("proc: execve: failed to load interp %s",
-			    interp_host);
+			LOG_ERR("proc: execve: interp elf_load %s failed", interp_host);
 			mem_space_destroy(newmem);
 			return (-ENOEXEC);
 		}

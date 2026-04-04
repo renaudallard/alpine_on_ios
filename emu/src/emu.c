@@ -155,7 +155,9 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 
 	ret = proc_execve(proc, path, argv, envp);
 	if (ret != 0) {
-		set_error("execve %s: error %d", path, ret);
+		set_error("execve %s: error %d (jit=%d). "
+		    "Delete app and reinstall if rootfs is stale.",
+		    path, ret, g_jit_enabled);
 		close(sockpair[0]);
 		proc_destroy(proc);
 		return (-1);
