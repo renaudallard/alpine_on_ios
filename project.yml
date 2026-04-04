@@ -29,10 +29,6 @@ targets:
       - path: emu/include
         type: headers
         headerVisibility: project
-    resources:
-      - path: rootfs/alpine
-        optional: true
-        buildPhase: resources
     info:
       path: AlpineOnIOS/App/Info.plist
     entitlements:
@@ -40,11 +36,27 @@ targets:
     dependencies:
       - sdk: Metal.framework
       - sdk: MetalKit.framework
+    postBuildScripts:
+      - script: |
+          # Copy Alpine rootfs into the app bundle, preserving symlinks.
+          # XcodeGen's resource handling doesn't properly include directories
+          # with symlinks, so we use cp -a directly.
+          ROOTFS="${SRCROOT}/rootfs/alpine"
+          DEST="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/alpine"
+          if [ -d "$ROOTFS" ]; then
+            echo "Copying rootfs to app bundle..."
+            rm -rf "$DEST"
+            cp -a "$ROOTFS" "$DEST"
+            echo "Rootfs copied: $(du -sh "$DEST" | cut -f1)"
+          else
+            echo "warning: rootfs not found at $ROOTFS"
+          fi
+        name: Copy Alpine rootfs
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alpineonios.app
-        MARKETING_VERSION: "0.3.3"
-        CURRENT_PROJECT_VERSION: 9
+        MARKETING_VERSION: "0.3.4"
+        CURRENT_PROJECT_VERSION: 10
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_ALLOWED: "NO"
         INFOPLIST_KEY_CFBundleDisplayName: "Alpine Terminal"

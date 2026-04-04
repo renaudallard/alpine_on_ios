@@ -78,11 +78,12 @@ struct AlpineOnIOSApp: App {
 
         guard !fm.fileExists(atPath: dest.path) else { return }
 
-        /* Try to find the bundled rootfs */
+        /* Try to find the bundled rootfs.
+         * The post-build script copies it to App.app/alpine/. */
         let candidates: [String?] = [
+            Bundle.main.bundlePath + "/alpine",
             Bundle.main.path(forResource: "alpine", ofType: nil),
             Bundle.main.resourcePath.map { $0 + "/alpine" },
-            Bundle.main.bundlePath + "/alpine",
         ]
 
         for case let src? in candidates where fm.fileExists(atPath: src) {
