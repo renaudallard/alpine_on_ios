@@ -49,24 +49,7 @@ class EmulatorBridge: ObservableObject {
                 return
             }
 
-            /* Step 2: Run busybox --install if /bin/sh doesn't exist */
-            let shPath = rootfsPath + "/bin/sh"
-            if !FileManager.default.fileExists(atPath: shPath) {
-                updateState(.extracting)
-                let installResult = doRunCommand(
-                    path: "/bin/busybox",
-                    argv: ["/bin/busybox", "--install", "-s", "/bin"],
-                    envp: ["PATH=/bin"])
-                if installResult < 0 {
-                    let detail = String(cString: emu_last_error())
-                    updateState(.error("busybox --install failed: \(detail)"))
-                    return
-                }
-                /* Wait for install to complete */
-                emu_waitpid(Int32(installResult), nil, 0)
-            }
-
-            /* Step 3: Spawn shell */
+            /* Step 2: Spawn shell */
             updateState(.spawning)
             let spawnResult = doSpawnShell()
             if spawnResult < 0 {
@@ -119,8 +102,11 @@ class EmulatorBridge: ObservableObject {
     }
 
     private func doSpawnShell() -> Int {
-        let path = "/bin/sh"
-        let argv = ["/bin/sh", "-l"]
+        /* Use /bin/busybox directly. Busybox checks argv[0] to
+         * determine the applet. argv[0]="sh" makes it run as shell.
+         * This avoids needing /bin/sh to exist as a separate file. */
+        let path = "/bin/busybox"
+        let argv = ["sh", "-l"]
         let envp = [
             "HOME=/root",
             "TERM=xterm-256color",
