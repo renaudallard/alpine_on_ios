@@ -277,9 +277,9 @@ struct KeyboardInputView: UIViewRepresentable {
             } else {
                 onKeyPress(string)
             }
-            /* Clear the field to keep it ready for next input */
+            /* Reset text field for next input */
             DispatchQueue.main.async {
-                textField.text = " "  /* Keep a space so backspace works */
+                textField.text = ""
             }
             return false
         }
