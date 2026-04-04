@@ -191,8 +191,8 @@ exec_ldst_unsigned_offset(cpu_state_t *cpu, uint32_t insn)
 		int scale;
 		if (opc == 0 || opc == 1)
 			scale = size;
-		else if (size == 0 && opc == 3)
-			scale = 4;	/* 128-bit */
+		else if (size == 0 && (opc == 2 || opc == 3))
+			scale = 4;	/* 128-bit STR Q / LDR Q */
 		else
 			scale = size;
 		offset = (uint64_t)imm12 << scale;

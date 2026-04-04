@@ -1011,6 +1011,65 @@ exec_simd(cpu_state_t *cpu, uint32_t insn)
 		return EMU_OK;
 	}
 
+	/* INS (general): 0 1 0 01110000 imm5 0 00111 Rn Rd */
+	if (bits(insn, 29, 21) == 0x070 && bits(insn, 15, 10) == 0x07) {
+		uint32_t imm5 = bits(insn, 20, 16);
+		uint32_t rn = bits(insn, 9, 5);
+		uint32_t rd = bits(insn, 4, 0);
+		uint64_t val = cpu_xreg(cpu, rn);
+
+		if (imm5 & 1) {
+			int idx = (imm5 >> 1) & 0xF;
+			cpu->v[rd].b[idx] = (uint8_t)val;
+		} else if (imm5 & 2) {
+			int idx = (imm5 >> 2) & 0x7;
+			cpu->v[rd].h[idx] = (uint16_t)val;
+		} else if (imm5 & 4) {
+			int idx = (imm5 >> 3) & 0x3;
+			cpu->v[rd].s[idx] = (uint32_t)val;
+		} else if (imm5 & 8) {
+			int idx = (imm5 >> 4) & 0x1;
+			cpu->v[rd].d[idx] = val;
+		}
+		return EMU_OK;
+	}
+
+	/* SSHLL/SXTL: 0 Q 0 01111 immh immb 10100 1 Rn Rd */
+	if (bits(insn, 29, 29) == 0 && bits(insn, 28, 24) == 0x0F &&
+	    bits(insn, 15, 10) == 0x29) {
+		uint32_t Q = bit(insn, 30);
+		uint32_t immh = bits(insn, 22, 19);
+		uint32_t immb = bits(insn, 18, 16);
+		uint32_t rn = bits(insn, 9, 5);
+		uint32_t rd = bits(insn, 4, 0);
+		int shift = (immh << 3 | immb);
+		int i;
+
+		if (immh & 1) {
+			/* 8→16 */
+			shift -= 8;
+			int base = Q ? 8 : 0;
+			for (i = 0; i < 8; i++)
+				cpu->v[rd].h[i] = (uint16_t)(int16_t)(int8_t)
+				    cpu->v[rn].b[base + i] << shift;
+		} else if (immh & 2) {
+			/* 16→32 */
+			shift -= 16;
+			int base = Q ? 4 : 0;
+			for (i = 0; i < 4; i++)
+				cpu->v[rd].s[i] = (uint32_t)(int32_t)(int16_t)
+				    cpu->v[rn].h[base + i] << shift;
+		} else if (immh & 4) {
+			/* 32→64 (SXTL V.2D, V.2S) */
+			shift -= 32;
+			int base = Q ? 2 : 0;
+			for (i = 0; i < 2; i++)
+				cpu->v[rd].d[i] = (uint64_t)(int64_t)(int32_t)
+				    cpu->v[rn].s[base + i] << shift;
+		}
+		return EMU_OK;
+	}
+
 	/*
 	 * CMEQ (zero): 0 Q 1 01110 size 10000 0100 1 10 Rn Rd
 	 * bits[29] = 1, bits[28:24] = 01110, bits[20:17] = 1000,
