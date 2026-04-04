@@ -97,7 +97,8 @@ class TerminalParser {
         switch byte {
         case 0x1B: /* ESC */
             state = .escape
-        case 0x0A: /* LF */
+        case 0x0A: /* LF - also do CR (newline mode) */
+            buffer.carriageReturn()
             buffer.lineFeed()
         case 0x0D: /* CR */
             buffer.carriageReturn()
