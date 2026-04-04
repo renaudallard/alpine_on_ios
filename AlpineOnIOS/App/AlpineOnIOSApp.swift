@@ -76,6 +76,12 @@ struct AlpineOnIOSApp: App {
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dest = docs.appendingPathComponent("alpine")
 
+        /* Remove stale/incomplete rootfs from previous installs */
+        if fm.fileExists(atPath: dest.path) &&
+           !fm.fileExists(atPath: dest.path + "/bin/busybox") {
+            try? fm.removeItem(atPath: dest.path)
+        }
+
         guard !fm.fileExists(atPath: dest.path) else { return }
 
         /* Try to find the bundled rootfs.
@@ -94,8 +100,5 @@ struct AlpineOnIOSApp: App {
                 /* Try next candidate */
             }
         }
-
-        /* No rootfs found - create empty directory so error shows */
-        try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
     }
 }

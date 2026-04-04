@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <sys/mman.h>
 #include <sys/socket.h>
 
 #include <errno.h>
@@ -73,11 +74,26 @@ emu_init(const char *rootfs_path)
 		return (-1);
 	}
 
-	/* Enable JIT on aarch64. Addresses are set high enough
-	 * (0x500000000+) to avoid iOS PAGEZERO and app binary. */
-	if (jit_available()) {
-		if (jit_init() == 0)
+	/* Enable JIT on aarch64 if MAP_JIT is available.
+	 * Probe with a small mmap to verify JIT works before enabling,
+	 * since sideloaded apps may not have the JIT entitlement. */
+	if (jit_available() && jit_init() == 0) {
+#ifdef __APPLE__
+		void *probe = mmap((void *)0x500000000ULL, 4096,
+		    PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_JIT,
+		    -1, 0);
+		if (probe != MAP_FAILED) {
+			munmap(probe, 4096);
 			g_jit_enabled = 1;
+			LOG_INFO("emu: JIT probe succeeded, JIT enabled");
+		} else {
+			LOG_WARN("emu: JIT probe failed (%s), "
+			    "using interpreter", strerror(errno));
+		}
+#else
+		g_jit_enabled = 1;
+#endif
 	}
 
 	g_initialized = 1;
