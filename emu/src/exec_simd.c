@@ -942,6 +942,802 @@ exec_simd_ldst1(cpu_state_t *cpu, uint32_t insn)
 	return EMU_OK;
 }
 
+/*
+ * USHLL/UXTL: unsigned shift left long.
+ * Encoding: 0 Q 1 01111 immh immb 10100 1 Rn Rd
+ * Same as SSHLL but unsigned (bit[29]=1).
+ */
+static int
+exec_ushll(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, immh, immb, rn, rd;
+	int		shift, i;
+
+	Q = bit(insn, 30);
+	immh = bits(insn, 22, 19);
+	immb = bits(insn, 18, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+	shift = (int)(immh << 3 | immb);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	if (immh & 1) {
+		/* 8->16 */
+		shift -= 8;
+		int base = Q ? 8 : 0;
+		for (i = 0; i < 8; i++)
+			cpu->v[rd].h[i] = (uint16_t)cpu->v[rn].b[base + i]
+			    << shift;
+	} else if (immh & 2) {
+		/* 16->32 */
+		shift -= 16;
+		int base = Q ? 4 : 0;
+		for (i = 0; i < 4; i++)
+			cpu->v[rd].s[i] = (uint32_t)cpu->v[rn].h[base + i]
+			    << shift;
+	} else if (immh & 4) {
+		/* 32->64 */
+		shift -= 32;
+		int base = Q ? 2 : 0;
+		for (i = 0; i < 2; i++)
+			cpu->v[rd].d[i] = (uint64_t)cpu->v[rn].s[base + i]
+			    << shift;
+	} else {
+		return EMU_UNIMPL;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * ADD (vector): element-wise addition.
+ * Encoding: 0 Q 0 01110 size 1 Rm 10000 1 Rn Rd
+ */
+static int
+exec_add_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, size, rm, rn, rd;
+	int		i, elems;
+
+	Q = bit(insn, 30);
+	size = bits(insn, 23, 22);
+	rm = bits(insn, 20, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	switch (size) {
+	case 0:
+		elems = Q ? 16 : 8;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].b[i] = cpu->v[rn].b[i] + cpu->v[rm].b[i];
+		break;
+	case 1:
+		elems = Q ? 8 : 4;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].h[i] = cpu->v[rn].h[i] + cpu->v[rm].h[i];
+		break;
+	case 2:
+		elems = Q ? 4 : 2;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].s[i] = cpu->v[rn].s[i] + cpu->v[rm].s[i];
+		break;
+	case 3:
+		elems = Q ? 2 : 1;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].d[i] = cpu->v[rn].d[i] + cpu->v[rm].d[i];
+		break;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * SUB (vector): element-wise subtraction.
+ * Encoding: 0 Q 1 01110 size 1 Rm 10000 1 Rn Rd
+ */
+static int
+exec_sub_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, size, rm, rn, rd;
+	int		i, elems;
+
+	Q = bit(insn, 30);
+	size = bits(insn, 23, 22);
+	rm = bits(insn, 20, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	switch (size) {
+	case 0:
+		elems = Q ? 16 : 8;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].b[i] = cpu->v[rn].b[i] - cpu->v[rm].b[i];
+		break;
+	case 1:
+		elems = Q ? 8 : 4;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].h[i] = cpu->v[rn].h[i] - cpu->v[rm].h[i];
+		break;
+	case 2:
+		elems = Q ? 4 : 2;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].s[i] = cpu->v[rn].s[i] - cpu->v[rm].s[i];
+		break;
+	case 3:
+		elems = Q ? 2 : 1;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].d[i] = cpu->v[rn].d[i] - cpu->v[rm].d[i];
+		break;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * SHL (vector, immediate): shift left by immediate.
+ * Encoding: 0 Q 0 01111 immh immb 01010 1 Rn Rd
+ */
+static int
+exec_shl_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, immh, immb, rn, rd;
+	int		shift, i, elems;
+
+	Q = bit(insn, 30);
+	immh = bits(insn, 22, 19);
+	immb = bits(insn, 18, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+	shift = (int)(immh << 3 | immb);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	if (immh & 8) {
+		shift -= 64;
+		elems = Q ? 2 : 1;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].d[i] = cpu->v[rn].d[i] << shift;
+	} else if (immh & 4) {
+		shift -= 32;
+		elems = Q ? 4 : 2;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].s[i] = cpu->v[rn].s[i] << shift;
+	} else if (immh & 2) {
+		shift -= 16;
+		elems = Q ? 8 : 4;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].h[i] = cpu->v[rn].h[i] << shift;
+	} else if (immh & 1) {
+		shift -= 8;
+		elems = Q ? 16 : 8;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].b[i] = cpu->v[rn].b[i] << shift;
+	} else {
+		return EMU_UNIMPL;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * SSHR (vector, immediate): signed shift right.
+ * Encoding: 0 Q 0 01111 immh immb 00000 1 Rn Rd
+ */
+static int
+exec_sshr_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, immh, immb, rn, rd;
+	int		shift, i, elems;
+
+	Q = bit(insn, 30);
+	immh = bits(insn, 22, 19);
+	immb = bits(insn, 18, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+	shift = (int)(immh << 3 | immb);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	if (immh & 8) {
+		shift = 128 - shift;
+		elems = Q ? 2 : 1;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].d[i] = (uint64_t)(
+			    (int64_t)cpu->v[rn].d[i] >> shift);
+	} else if (immh & 4) {
+		shift = 64 - shift;
+		elems = Q ? 4 : 2;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].s[i] = (uint32_t)(
+			    (int32_t)cpu->v[rn].s[i] >> shift);
+	} else if (immh & 2) {
+		shift = 32 - shift;
+		elems = Q ? 8 : 4;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].h[i] = (uint16_t)(
+			    (int16_t)cpu->v[rn].h[i] >> shift);
+	} else if (immh & 1) {
+		shift = 16 - shift;
+		elems = Q ? 16 : 8;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].b[i] = (uint8_t)(
+			    (int8_t)cpu->v[rn].b[i] >> shift);
+	} else {
+		return EMU_UNIMPL;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * USHR (vector, immediate): unsigned shift right.
+ * Encoding: 0 Q 1 01111 immh immb 00000 1 Rn Rd
+ */
+static int
+exec_ushr_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, immh, immb, rn, rd;
+	int		shift, i, elems;
+
+	Q = bit(insn, 30);
+	immh = bits(insn, 22, 19);
+	immb = bits(insn, 18, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+	shift = (int)(immh << 3 | immb);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	if (immh & 8) {
+		shift = 128 - shift;
+		elems = Q ? 2 : 1;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].d[i] = cpu->v[rn].d[i] >> shift;
+	} else if (immh & 4) {
+		shift = 64 - shift;
+		elems = Q ? 4 : 2;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].s[i] = cpu->v[rn].s[i] >> shift;
+	} else if (immh & 2) {
+		shift = 32 - shift;
+		elems = Q ? 8 : 4;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].h[i] = cpu->v[rn].h[i] >> shift;
+	} else if (immh & 1) {
+		shift = 16 - shift;
+		elems = Q ? 16 : 8;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].b[i] = cpu->v[rn].b[i] >> shift;
+	} else {
+		return EMU_UNIMPL;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * EOR (vector): bitwise exclusive OR.
+ * Encoding: 0 Q 1 01110 00 1 Rm 00011 1 Rn Rd
+ */
+static int
+exec_eor_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, rm, rn, rd;
+	int		bytes, i;
+
+	Q = bit(insn, 30);
+	rm = bits(insn, 20, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	bytes = Q ? 16 : 8;
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+	for (i = 0; i < bytes; i++)
+		cpu->v[rd].b[i] = cpu->v[rn].b[i] ^ cpu->v[rm].b[i];
+
+	return EMU_OK;
+}
+
+/*
+ * BIC (vector, register): bit clear.
+ * Encoding: 0 Q 0 01110 size 1 Rm 00011 1 Rn Rd
+ */
+static int
+exec_bic_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, rm, rn, rd;
+	int		bytes, i;
+
+	Q = bit(insn, 30);
+	rm = bits(insn, 20, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	bytes = Q ? 16 : 8;
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+	for (i = 0; i < bytes; i++)
+		cpu->v[rd].b[i] = cpu->v[rn].b[i] & ~cpu->v[rm].b[i];
+
+	return EMU_OK;
+}
+
+/*
+ * NOT/MVN (vector): bitwise NOT.
+ * Encoding: 0 Q 1 01110 00 10000 00101 10 Rn Rd
+ */
+static int
+exec_not_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, rn, rd;
+	int		bytes, i;
+
+	Q = bit(insn, 30);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	bytes = Q ? 16 : 8;
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+	for (i = 0; i < bytes; i++)
+		cpu->v[rd].b[i] = ~cpu->v[rn].b[i];
+
+	return EMU_OK;
+}
+
+/*
+ * CNT (vector): population count per byte.
+ * Encoding: 0 Q 0 01110 size 10000 00101 10 Rn Rd
+ * size must be 00 (byte elements).
+ */
+static int
+exec_cnt_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, rn, rd;
+	int		bytes, i;
+
+	Q = bit(insn, 30);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	bytes = Q ? 16 : 8;
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+	for (i = 0; i < bytes; i++) {
+		uint8_t v = cpu->v[rn].b[i];
+		uint8_t cnt = 0;
+		while (v) {
+			cnt += v & 1;
+			v >>= 1;
+		}
+		cpu->v[rd].b[i] = cnt;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * ADDP (vector): pairwise add.
+ * Encoding: 0 Q 0 01110 size 1 Rm 10111 1 Rn Rd
+ */
+static int
+exec_addp_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, size, rm, rn, rd;
+	int		i, pairs;
+	vreg_t		tmp;
+
+	Q = bit(insn, 30);
+	size = bits(insn, 23, 22);
+	rm = bits(insn, 20, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	memset(&tmp, 0, sizeof(tmp));
+
+	switch (size) {
+	case 0: {
+		int elems = Q ? 16 : 8;
+		pairs = elems / 2;
+		for (i = 0; i < pairs; i++)
+			tmp.b[i] = cpu->v[rn].b[2 * i] +
+			    cpu->v[rn].b[2 * i + 1];
+		for (i = 0; i < pairs; i++)
+			tmp.b[pairs + i] = cpu->v[rm].b[2 * i] +
+			    cpu->v[rm].b[2 * i + 1];
+		break;
+	}
+	case 1: {
+		int elems = Q ? 8 : 4;
+		pairs = elems / 2;
+		for (i = 0; i < pairs; i++)
+			tmp.h[i] = cpu->v[rn].h[2 * i] +
+			    cpu->v[rn].h[2 * i + 1];
+		for (i = 0; i < pairs; i++)
+			tmp.h[pairs + i] = cpu->v[rm].h[2 * i] +
+			    cpu->v[rm].h[2 * i + 1];
+		break;
+	}
+	case 2: {
+		int elems = Q ? 4 : 2;
+		pairs = elems / 2;
+		for (i = 0; i < pairs; i++)
+			tmp.s[i] = cpu->v[rn].s[2 * i] +
+			    cpu->v[rn].s[2 * i + 1];
+		for (i = 0; i < pairs; i++)
+			tmp.s[pairs + i] = cpu->v[rm].s[2 * i] +
+			    cpu->v[rm].s[2 * i + 1];
+		break;
+	}
+	case 3: {
+		if (!Q)
+			return EMU_UNIMPL;
+		tmp.d[0] = cpu->v[rn].d[0] + cpu->v[rn].d[1];
+		tmp.d[1] = cpu->v[rm].d[0] + cpu->v[rm].d[1];
+		break;
+	}
+	}
+
+	cpu->v[rd] = tmp;
+	return EMU_OK;
+}
+
+/*
+ * TBL: table lookup.
+ * Encoding: 0 Q 0 01110 000 Rm 0 len 000 Rn Rd
+ * len: 00=1 reg, 01=2 regs, 10=3 regs, 11=4 regs
+ */
+static int
+exec_tbl(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, rm, len, rn, rd;
+	int		bytes, i, nregs;
+	uint8_t		table[64];
+	int		tbl_size;
+
+	Q = bit(insn, 30);
+	rm = bits(insn, 20, 16);
+	len = bits(insn, 14, 13);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	nregs = (int)len + 1;
+	tbl_size = nregs * 16;
+	bytes = Q ? 16 : 8;
+
+	/* Build table from consecutive registers. */
+	for (i = 0; i < nregs; i++)
+		memcpy(table + i * 16, &cpu->v[(rn + i) & 31],
+		    16);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+	for (i = 0; i < bytes; i++) {
+		uint8_t idx = cpu->v[rm].b[i];
+		if (idx < tbl_size)
+			cpu->v[rd].b[i] = table[idx];
+		/* else 0, already cleared */
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * ZIP1/ZIP2: interleave elements from two vectors.
+ * ZIP1: 0 Q 0 01110 size 0 Rm 0 011 1 0 Rn Rd
+ * ZIP2: 0 Q 0 01110 size 0 Rm 0 111 1 0 Rn Rd
+ */
+static int
+exec_zip(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, size, rm, rn, rd, op;
+	int		i, elems, half;
+	vreg_t		tmp;
+
+	Q = bit(insn, 30);
+	size = bits(insn, 23, 22);
+	rm = bits(insn, 20, 16);
+	op = bit(insn, 14);	/* 0 = ZIP1, 1 = ZIP2 */
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	memset(&tmp, 0, sizeof(tmp));
+
+	switch (size) {
+	case 0:
+		elems = Q ? 16 : 8;
+		half = elems / 2;
+		for (i = 0; i < half; i++) {
+			int base = op ? half : 0;
+			tmp.b[2 * i] = cpu->v[rn].b[base + i];
+			tmp.b[2 * i + 1] = cpu->v[rm].b[base + i];
+		}
+		break;
+	case 1:
+		elems = Q ? 8 : 4;
+		half = elems / 2;
+		for (i = 0; i < half; i++) {
+			int base = op ? half : 0;
+			tmp.h[2 * i] = cpu->v[rn].h[base + i];
+			tmp.h[2 * i + 1] = cpu->v[rm].h[base + i];
+		}
+		break;
+	case 2:
+		elems = Q ? 4 : 2;
+		half = elems / 2;
+		for (i = 0; i < half; i++) {
+			int base = op ? half : 0;
+			tmp.s[2 * i] = cpu->v[rn].s[base + i];
+			tmp.s[2 * i + 1] = cpu->v[rm].s[base + i];
+		}
+		break;
+	case 3:
+		if (!Q)
+			return EMU_UNIMPL;
+		if (op) {
+			tmp.d[0] = cpu->v[rn].d[1];
+			tmp.d[1] = cpu->v[rm].d[1];
+		} else {
+			tmp.d[0] = cpu->v[rn].d[0];
+			tmp.d[1] = cpu->v[rm].d[0];
+		}
+		break;
+	}
+
+	cpu->v[rd] = tmp;
+	return EMU_OK;
+}
+
+/*
+ * UZP1/UZP2: de-interleave elements.
+ * UZP1: 0 Q 0 01110 size 0 Rm 0 001 1 0 Rn Rd
+ * UZP2: 0 Q 0 01110 size 0 Rm 0 101 1 0 Rn Rd
+ */
+static int
+exec_uzp(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, size, rm, rn, rd, op;
+	int		i, elems, half;
+	vreg_t		tmp;
+
+	Q = bit(insn, 30);
+	size = bits(insn, 23, 22);
+	rm = bits(insn, 20, 16);
+	op = bit(insn, 14);	/* 0 = UZP1 (even), 1 = UZP2 (odd) */
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	memset(&tmp, 0, sizeof(tmp));
+
+	switch (size) {
+	case 0:
+		elems = Q ? 16 : 8;
+		half = elems / 2;
+		for (i = 0; i < half; i++) {
+			tmp.b[i] = cpu->v[rn].b[2 * i + op];
+			tmp.b[half + i] = cpu->v[rm].b[2 * i + op];
+		}
+		break;
+	case 1:
+		elems = Q ? 8 : 4;
+		half = elems / 2;
+		for (i = 0; i < half; i++) {
+			tmp.h[i] = cpu->v[rn].h[2 * i + op];
+			tmp.h[half + i] = cpu->v[rm].h[2 * i + op];
+		}
+		break;
+	case 2:
+		elems = Q ? 4 : 2;
+		half = elems / 2;
+		for (i = 0; i < half; i++) {
+			tmp.s[i] = cpu->v[rn].s[2 * i + op];
+			tmp.s[half + i] = cpu->v[rm].s[2 * i + op];
+		}
+		break;
+	case 3:
+		if (!Q)
+			return EMU_UNIMPL;
+		tmp.d[0] = cpu->v[rn].d[op];
+		tmp.d[1] = cpu->v[rm].d[op];
+		break;
+	}
+
+	cpu->v[rd] = tmp;
+	return EMU_OK;
+}
+
+/*
+ * DUP (element): duplicate a single vector element to all lanes.
+ * Encoding: 0 Q 0 01110000 imm5 0 00001 Rn Rd
+ */
+static int
+exec_dup_element(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, imm5, rn, rd;
+	int		i, elems;
+
+	Q = bit(insn, 30);
+	imm5 = bits(insn, 20, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	if (imm5 & 1) {
+		int idx = (imm5 >> 1) & 0xF;
+		uint8_t val = cpu->v[rn].b[idx];
+		elems = Q ? 16 : 8;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].b[i] = val;
+	} else if (imm5 & 2) {
+		int idx = (imm5 >> 2) & 0x7;
+		uint16_t val = cpu->v[rn].h[idx];
+		elems = Q ? 8 : 4;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].h[i] = val;
+	} else if (imm5 & 4) {
+		int idx = (imm5 >> 3) & 0x3;
+		uint32_t val = cpu->v[rn].s[idx];
+		elems = Q ? 4 : 2;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].s[i] = val;
+	} else if (imm5 & 8) {
+		int idx = (imm5 >> 4) & 0x1;
+		uint64_t val = cpu->v[rn].d[idx];
+		elems = Q ? 2 : 1;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].d[i] = val;
+	} else {
+		return EMU_UNIMPL;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * INS (element to element): copy element between vectors.
+ * Encoding: 0 1 1 01110000 imm5 0 imm4 1 Rn Rd
+ */
+static int
+exec_ins_element(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	imm5, imm4, rn, rd;
+
+	imm5 = bits(insn, 20, 16);
+	imm4 = bits(insn, 14, 11);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	if (imm5 & 1) {
+		int dst_idx = (imm5 >> 1) & 0xF;
+		int src_idx = (imm4) & 0xF;
+		cpu->v[rd].b[dst_idx] = cpu->v[rn].b[src_idx];
+	} else if (imm5 & 2) {
+		int dst_idx = (imm5 >> 2) & 0x7;
+		int src_idx = (imm4 >> 1) & 0x7;
+		cpu->v[rd].h[dst_idx] = cpu->v[rn].h[src_idx];
+	} else if (imm5 & 4) {
+		int dst_idx = (imm5 >> 3) & 0x3;
+		int src_idx = (imm4 >> 2) & 0x3;
+		cpu->v[rd].s[dst_idx] = cpu->v[rn].s[src_idx];
+	} else if (imm5 & 8) {
+		int dst_idx = (imm5 >> 4) & 0x1;
+		int src_idx = (imm4 >> 3) & 0x1;
+		cpu->v[rd].d[dst_idx] = cpu->v[rn].d[src_idx];
+	} else {
+		return EMU_UNIMPL;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * CMHI/CMHS (vector): unsigned compare higher / higher-or-same.
+ * CMHI: 0 Q 1 01110 size 1 Rm 00110 1 Rn Rd
+ * CMHS: 0 Q 1 01110 size 1 Rm 00111 1 Rn Rd
+ */
+static int
+exec_cmhi_cmhs(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, size, rm, rn, rd;
+	int		eq, i, elems;
+
+	Q = bit(insn, 30);
+	size = bits(insn, 23, 22);
+	rm = bits(insn, 20, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+	eq = bit(insn, 11);	/* 1 = CMHS (>=), 0 = CMHI (>) */
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	switch (size) {
+	case 0:
+		elems = Q ? 16 : 8;
+		for (i = 0; i < elems; i++) {
+			int cmp = eq ? (cpu->v[rn].b[i] >= cpu->v[rm].b[i])
+			    : (cpu->v[rn].b[i] > cpu->v[rm].b[i]);
+			cpu->v[rd].b[i] = cmp ? 0xFF : 0x00;
+		}
+		break;
+	case 1:
+		elems = Q ? 8 : 4;
+		for (i = 0; i < elems; i++) {
+			int cmp = eq ? (cpu->v[rn].h[i] >= cpu->v[rm].h[i])
+			    : (cpu->v[rn].h[i] > cpu->v[rm].h[i]);
+			cpu->v[rd].h[i] = cmp ? 0xFFFF : 0x0000;
+		}
+		break;
+	case 2:
+		elems = Q ? 4 : 2;
+		for (i = 0; i < elems; i++) {
+			int cmp = eq ? (cpu->v[rn].s[i] >= cpu->v[rm].s[i])
+			    : (cpu->v[rn].s[i] > cpu->v[rm].s[i]);
+			cpu->v[rd].s[i] = cmp ? 0xFFFFFFFF : 0;
+		}
+		break;
+	case 3:
+		elems = Q ? 2 : 1;
+		for (i = 0; i < elems; i++) {
+			int cmp = eq ? (cpu->v[rn].d[i] >= cpu->v[rm].d[i])
+			    : (cpu->v[rn].d[i] > cpu->v[rm].d[i]);
+			cpu->v[rd].d[i] = cmp ? ~0ULL : 0;
+		}
+		break;
+	}
+
+	return EMU_OK;
+}
+
+/*
+ * CMEQ (vector, register): compare equal.
+ * Encoding: 0 Q 1 01110 size 1 Rm 10001 1 Rn Rd
+ */
+static int
+exec_cmeq_vector(cpu_state_t *cpu, uint32_t insn)
+{
+	uint32_t	Q, size, rm, rn, rd;
+	int		i, elems;
+
+	Q = bit(insn, 30);
+	size = bits(insn, 23, 22);
+	rm = bits(insn, 20, 16);
+	rn = bits(insn, 9, 5);
+	rd = bits(insn, 4, 0);
+
+	memset(&cpu->v[rd], 0, sizeof(vreg_t));
+
+	switch (size) {
+	case 0:
+		elems = Q ? 16 : 8;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].b[i] = cpu->v[rn].b[i] == cpu->v[rm].b[i]
+			    ? 0xFF : 0x00;
+		break;
+	case 1:
+		elems = Q ? 8 : 4;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].h[i] = cpu->v[rn].h[i] == cpu->v[rm].h[i]
+			    ? 0xFFFF : 0x0000;
+		break;
+	case 2:
+		elems = Q ? 4 : 2;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].s[i] = cpu->v[rn].s[i] == cpu->v[rm].s[i]
+			    ? 0xFFFFFFFF : 0;
+		break;
+	case 3:
+		elems = Q ? 2 : 1;
+		for (i = 0; i < elems; i++)
+			cpu->v[rd].d[i] = cpu->v[rn].d[i] == cpu->v[rm].d[i]
+			    ? ~0ULL : 0;
+		break;
+	}
+
+	return EMU_OK;
+}
+
 int
 exec_simd(cpu_state_t *cpu, uint32_t insn)
 {
@@ -1033,6 +1829,16 @@ exec_simd(cpu_state_t *cpu, uint32_t insn)
 		}
 		return EMU_OK;
 	}
+
+	/* DUP (element): 0 Q 0 01110000 imm5 0 00001 Rn Rd */
+	if (bits(insn, 29, 21) == 0x070 && bits(insn, 15, 10) == 0x01)
+		return exec_dup_element(cpu, insn);
+
+	/* INS (element): 0 1 1 01110000 imm5 0 imm4 1 Rn Rd */
+	if (bit(insn, 31) == 0 && bit(insn, 29) == 1 &&
+	    bits(insn, 28, 21) == 0x70 && bit(insn, 10) == 1 &&
+	    bit(insn, 15) == 0)
+		return exec_ins_element(cpu, insn);
 
 	/* SSHLL/SXTL: 0 Q 0 01111 immh immb 10100 1 Rn Rd */
 	if (bits(insn, 29, 29) == 0 && bits(insn, 28, 24) == 0x0F &&
@@ -1129,6 +1935,159 @@ exec_simd(cpu_state_t *cpu, uint32_t insn)
 	if (bit(insn, 31) == 0 && bits(insn, 29, 24) == 0x0C &&
 	    bit(insn, 21) == 0)
 		return exec_simd_ldst1(cpu, insn);
+
+	/*
+	 * USHLL/UXTL: 0 Q 1 01111 immh immb 10100 1 Rn Rd
+	 * bit[29] = 1 distinguishes from SSHLL (bit[29]=0).
+	 */
+	if (bit(insn, 29) == 1 && bits(insn, 28, 24) == 0x0F &&
+	    bits(insn, 15, 10) == 0x29)
+		return exec_ushll(cpu, insn);
+
+	/*
+	 * SHL (vector, imm): 0 Q 0 01111 immh immb 01010 1 Rn Rd
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0F &&
+	    bits(insn, 15, 10) == 0x15)
+		return exec_shl_vector(cpu, insn);
+
+	/*
+	 * SSHR (vector, imm): 0 Q 0 01111 immh immb 00000 1 Rn Rd
+	 * bit[29] = 0
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0F &&
+	    bits(insn, 15, 10) == 0x01)
+		return exec_sshr_vector(cpu, insn);
+
+	/*
+	 * USHR (vector, imm): 0 Q 1 01111 immh immb 00000 1 Rn Rd
+	 * bit[29] = 1
+	 */
+	if (bit(insn, 29) == 1 && bits(insn, 28, 24) == 0x0F &&
+	    bits(insn, 15, 10) == 0x01)
+		return exec_ushr_vector(cpu, insn);
+
+	/*
+	 * ADD (vector): 0 Q 0 01110 size 1 Rm 10000 1 Rn Rd
+	 * bit[29] = 0, bits[15:10] = 100001 (= 0x21)
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0E &&
+	    bit(insn, 21) == 1 && bits(insn, 15, 10) == 0x21)
+		return exec_add_vector(cpu, insn);
+
+	/*
+	 * SUB (vector): 0 Q 1 01110 size 1 Rm 10000 1 Rn Rd
+	 * bit[29] = 1, bits[15:10] = 100001 (= 0x21)
+	 */
+	if (bit(insn, 29) == 1 && bits(insn, 28, 24) == 0x0E &&
+	    bit(insn, 21) == 1 && bits(insn, 15, 10) == 0x21)
+		return exec_sub_vector(cpu, insn);
+
+	/*
+	 * EOR (vector): 0 Q 1 01110 00 1 Rm 00011 1 Rn Rd
+	 * bits[29] = 1, bits[23:21] = 001, bits[15:10] = 000111
+	 */
+	if (bit(insn, 29) == 1 && bits(insn, 28, 24) == 0x0E &&
+	    bits(insn, 23, 21) == 0x01 && bits(insn, 15, 10) == 0x07)
+		return exec_eor_vector(cpu, insn);
+
+	/*
+	 * BIC (vector, reg): 0 Q 0 01110 size 1 Rm 00011 1 Rn Rd
+	 * bits[29] = 0, bits[23:22] = size (not 10), bits[15:10] = 000111
+	 * size field distinguishes from ORR (size=10) and AND (size=00).
+	 * BIC: bit[23]=0, bit[22]=1 => size=01.
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0E &&
+	    bits(insn, 23, 21) == 0x03 && bits(insn, 15, 10) == 0x07)
+		return exec_bic_vector(cpu, insn);
+
+	/*
+	 * NOT/MVN (vector): 0 Q 1 01110 00 10000 00101 10 Rn Rd
+	 * bit[29] = 1, bits[23:22] = 00, bits[21:17] = 10000,
+	 * bit[16] = 0, bits[15:10] = 001011 (= 0x0B) -- wait, let me
+	 * double-check: NOT = 0 Q 1 01110 00 10000 00101 10 Rn Rd
+	 * bits[20:16] = 00000, bits[15:10] = 010110 (= 0x16)?
+	 *
+	 * Correct encoding: 2E 20 58 xx pattern.
+	 * bits[29]=1, bits[28:24]=0x0E, bits[23:22]=00,
+	 * bits[21:10]=100000010110 => 0x816
+	 * So bits[21:17]=10000, bit[16]=0, bits[15:10]=010110 (=0x16)
+	 */
+	if (bit(insn, 29) == 1 && bits(insn, 28, 24) == 0x0E &&
+	    bits(insn, 23, 22) == 0x00 && bits(insn, 21, 17) == 0x10 &&
+	    bit(insn, 16) == 0 && bits(insn, 15, 10) == 0x16)
+		return exec_not_vector(cpu, insn);
+
+	/*
+	 * CNT (vector): 0 Q 0 01110 size 10000 00101 10 Rn Rd
+	 * bit[29] = 0, bits[21:17] = 10000, bit[16] = 0,
+	 * bits[15:10] = 010110 (= 0x16)
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0E &&
+	    bits(insn, 21, 17) == 0x10 && bit(insn, 16) == 0 &&
+	    bits(insn, 15, 10) == 0x16)
+		return exec_cnt_vector(cpu, insn);
+
+	/*
+	 * ADDP (vector): 0 Q 0 01110 size 1 Rm 10111 1 Rn Rd
+	 * bit[29] = 0, bits[15:10] = 101111 (= 0x2F)
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0E &&
+	    bit(insn, 21) == 1 && bits(insn, 15, 10) == 0x2F)
+		return exec_addp_vector(cpu, insn);
+
+	/*
+	 * TBL: 0 Q 0 01110 000 Rm 0 len 000 Rn Rd
+	 * bits[29:24] = 001110, bits[23:22] = 00, bit[21] = 0,
+	 * bit[15] = 0, bits[12:10] = 000
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0E &&
+	    bits(insn, 23, 22) == 0x00 && bit(insn, 21) == 0 &&
+	    bit(insn, 15) == 0 && bits(insn, 12, 10) == 0x00)
+		return exec_tbl(cpu, insn);
+
+	/*
+	 * ZIP1: 0 Q 0 01110 size 0 Rm 0 011 1 0 Rn Rd
+	 * ZIP2: 0 Q 0 01110 size 0 Rm 0 111 1 0 Rn Rd
+	 * bits[29] = 0, bit[21] = 0, bit[10] = 0,
+	 * bits[15] = 0, bits[13:12] = 11
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0E &&
+	    bit(insn, 21) == 0 && bit(insn, 15) == 0 &&
+	    bits(insn, 13, 12) == 0x03 && bit(insn, 10) == 0 &&
+	    bit(insn, 11) == 1)
+		return exec_zip(cpu, insn);
+
+	/*
+	 * UZP1: 0 Q 0 01110 size 0 Rm 0 001 1 0 Rn Rd
+	 * UZP2: 0 Q 0 01110 size 0 Rm 0 101 1 0 Rn Rd
+	 * bits[29] = 0, bit[21] = 0, bit[10] = 0,
+	 * bit[15] = 0, bits[13:12] = 01
+	 */
+	if (bit(insn, 29) == 0 && bits(insn, 28, 24) == 0x0E &&
+	    bit(insn, 21) == 0 && bit(insn, 15) == 0 &&
+	    bits(insn, 13, 12) == 0x01 && bit(insn, 10) == 0 &&
+	    bit(insn, 11) == 1)
+		return exec_uzp(cpu, insn);
+
+	/*
+	 * CMHI (vector): 0 Q 1 01110 size 1 Rm 0011 0 1 Rn Rd
+	 * CMHS (vector): 0 Q 1 01110 size 1 Rm 0011 1 1 Rn Rd
+	 * bit[29] = 1, bit[21] = 1, bits[15:12] = 0011,
+	 * bit[10] = 1
+	 */
+	if (bit(insn, 29) == 1 && bits(insn, 28, 24) == 0x0E &&
+	    bit(insn, 21) == 1 && bits(insn, 15, 12) == 0x03 &&
+	    bit(insn, 10) == 1)
+		return exec_cmhi_cmhs(cpu, insn);
+
+	/*
+	 * CMEQ (vector, register): 0 Q 1 01110 size 1 Rm 10001 1 Rn Rd
+	 * bit[29] = 1, bit[21] = 1, bits[15:10] = 100011 (= 0x23)
+	 */
+	if (bit(insn, 29) == 1 && bits(insn, 28, 24) == 0x0E &&
+	    bit(insn, 21) == 1 && bits(insn, 15, 10) == 0x23)
+		return exec_cmeq_vector(cpu, insn);
 
 	LOG_WARN("unimplemented SIMD/FP at 0x%llx: 0x%08x",
 	    (unsigned long long)cpu->pc, insn);

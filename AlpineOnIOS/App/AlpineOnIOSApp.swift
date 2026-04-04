@@ -94,7 +94,7 @@ struct AlpineOnIOSApp: App {
         }
     }
 
-    /// Create busybox applet symlinks in the rootfs (instant in Swift).
+    /// Create busybox applet symlinks and essential config in the rootfs.
     private func createBusyboxSymlinks(rootfs: String) {
         let fm = FileManager.default
         let busybox = rootfs + "/bin/busybox"
@@ -105,6 +105,17 @@ struct AlpineOnIOSApp: App {
             let full = rootfs + dir
             try? fm.createDirectory(atPath: full,
                 withIntermediateDirectories: true, attributes: nil)
+        }
+
+        /* Ensure /etc/resolv.conf exists for DNS resolution. */
+        let etcDir = rootfs + "/etc"
+        try? fm.createDirectory(atPath: etcDir,
+            withIntermediateDirectories: true, attributes: nil)
+        let resolvConf = etcDir + "/resolv.conf"
+        if !fm.fileExists(atPath: resolvConf) {
+            let content = "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+            fm.createFile(atPath: resolvConf,
+                contents: content.data(using: .utf8), attributes: nil)
         }
 
         /* Common applets to create as symlinks to busybox */

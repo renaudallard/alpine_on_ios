@@ -103,20 +103,6 @@ struct TerminalView: View {
         }
 
         bridge.write(data: data)
-
-        /* Local echo for typed characters (no tty driver).
-         * Only echo printable chars and backspace, not newline
-         * (the shell output handles that). */
-        for byte in data {
-            if byte == 0x08 {
-                /* Backspace */
-                parser?.feed(Data([0x08, 0x20, 0x08]))
-            } else if byte >= 0x20 && byte < 0x7F {
-                /* Printable ASCII */
-                parser?.feed(Data([byte]))
-            }
-            /* Skip newline/CR - shell handles line output */
-        }
     }
 }
 

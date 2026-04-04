@@ -106,11 +106,7 @@ class EmulatorBridge: ObservableObject {
          * Interactive shell mode crashes in musl's printf, but
          * -c mode works. This REPL gives interactive behavior. */
         let path = "/bin/busybox"
-        let argv = ["sh", "-c",
-            "mkdir -p /proc /dev /tmp 2>/dev/null; " +
-            "echo 'Alpine Linux'; " +
-            "while true; do echo -n '$ '; read cmd || break; " +
-            "eval \"$cmd\" 2>&1; done"]
+        let argv = ["sh"]
         let envp = [
             "HOME=/root",
             "TERM=xterm-256color",

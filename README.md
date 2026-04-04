@@ -34,6 +34,10 @@
 - **Touch input** mapped to Linux evdev mouse events
 - **Thread support** with full `clone()` and `futex()`
 - **100+ Linux syscalls** including epoll, eventfd, timerfd
+- **Comprehensive SIMD/NEON** support (vector arithmetic, shifts, permute, compare, table lookup)
+- **Virtual /proc and /dev** with stat support for proper filesystem traversal
+- **Interactive shell** with correct terminal attributes (ECHO, ICANON, ISIG)
+- **DNS resolution** via /etc/resolv.conf created at first launch
 - **X11 ready** with preconfigured xorg.conf for fbdev
 
 ## How It Works

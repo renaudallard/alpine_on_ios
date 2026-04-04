@@ -104,10 +104,15 @@
 /* Linux ioctl for terminal */
 #define LINUX_TCGETS		0x5401
 #define LINUX_TCSETS		0x5402
+#define LINUX_TCSETSW		0x5403
+#define LINUX_TCSETSF		0x5404
 #define LINUX_TIOCGWINSZ	0x5413
 #define LINUX_TIOCSWINSZ	0x5414
 #define LINUX_TIOCGPGRP		0x540F
 #define LINUX_TIOCSPGRP		0x5410
+#define LINUX_TIOCSCTTY		0x540E
+#define LINUX_TIOCNOTTY		0x5422
+#define LINUX_FIONREAD		0x541B
 
 /* Linux AT_* flags */
 #define LINUX_AT_REMOVEDIR		0x200
@@ -653,16 +658,58 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	case LINUX_TIOCSWINSZ:
 		return 0;
 	case LINUX_TCGETS: {
-		/* Return a basic termios. */
-		uint8_t	termios[60];
+		/*
+		 * Return a termios with standard interactive flags.
+		 * Linux AArch64 struct termios layout:
+		 *   c_iflag (4), c_oflag (4), c_cflag (4), c_lflag (4),
+		 *   c_line (1), c_cc[19] (19)
+		 * Total: 36 bytes.
+		 */
+		uint8_t	termios[36];
+		uint32_t iflag, oflag, cflag, lflag;
 
 		memset(termios, 0, sizeof(termios));
-		if (mem_copy_to(proc->mem, a2, termios, sizeof(termios)) != 0)
+
+		iflag = 0x100;		/* ICRNL */
+		oflag = 0x05;		/* OPOST | ONLCR */
+		cflag = 0xB0;		/* CS8 | CREAD */
+		lflag = 0x0B;		/* ISIG | ICANON | ECHO */
+
+		memcpy(termios, &iflag, 4);
+		memcpy(termios + 4, &oflag, 4);
+		memcpy(termios + 8, &cflag, 4);
+		memcpy(termios + 12, &lflag, 4);
+
+		/* c_cc defaults: VINTR=^C, VEOF=^D, VERASE=^? */
+		termios[17 + 0] = 3;	/* VINTR = ^C */
+		termios[17 + 1] = 28;	/* VQUIT = ^\ */
+		termios[17 + 2] = 127;	/* VERASE = DEL */
+		termios[17 + 3] = 21;	/* VKILL = ^U */
+		termios[17 + 4] = 4;	/* VEOF = ^D */
+		termios[17 + 5] = 0;	/* VTIME */
+		termios[17 + 6] = 1;	/* VMIN */
+
+		if (mem_copy_to(proc->mem, a2, termios,
+		    sizeof(termios)) != 0)
 			return -LINUX_EFAULT;
 		return 0;
 	}
 	case LINUX_TCSETS:
+	case LINUX_TCSETSW:
+	case LINUX_TCSETSF:
+		/* Accept terminal attribute changes silently. */
 		return 0;
+	case LINUX_TIOCSCTTY:
+	case LINUX_TIOCNOTTY:
+		return 0;
+	case LINUX_FIONREAD: {
+		/* Return 0 bytes available. */
+		uint32_t	avail = 0;
+		if (mem_copy_to(proc->mem, a2, &avail,
+		    sizeof(avail)) != 0)
+			return -LINUX_EFAULT;
+		return 0;
+	}
 	case LINUX_TIOCGPGRP: {
 		uint32_t	pgrp;
 
@@ -986,6 +1033,8 @@ do_newfstatat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 {
 	int		dirfd, flags;
 	char		host_path[PATH_MAX];
+	char		guest_path[PATH_MAX];
+	char		abs_path[PATH_MAX];
 	struct stat	hst;
 	struct emu_stat	est;
 
@@ -1007,9 +1056,57 @@ do_newfstatat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		return 0;
 	}
 
+	/*
+	 * Check virtual mounts before resolving to host path.
+	 * resolve_path returns -1 for virtual mounts (/proc, /dev),
+	 * so stat them via the mount's stat op or a synthetic stat.
+	 */
 	if (resolve_path(proc, dirfd, a1, host_path,
-	    sizeof(host_path)) != 0)
+	    sizeof(host_path)) != 0) {
+		const char	*subpath;
+		vfs_mount_t	*mnt;
+
+		/* Build absolute guest path. */
+		if (mem_read_str(proc->mem, a1, guest_path,
+		    sizeof(guest_path)) != 0)
+			return -LINUX_EFAULT;
+
+		if (guest_path[0] != '/') {
+			vfs_normalize_path(proc->cwd, guest_path,
+			    abs_path, sizeof(abs_path));
+		} else {
+			vfs_normalize_path("/", guest_path,
+			    abs_path, sizeof(abs_path));
+		}
+
+		mnt = vfs_find_mount(proc->vfs, abs_path, &subpath);
+		if (mnt != NULL) {
+			/* Try mount stat op first. */
+			if (mnt->ops->stat != NULL &&
+			    mnt->ops->stat(mnt->ctx, subpath,
+			    &est) == 0) {
+				if (mem_copy_to(proc->mem, a2, &est,
+				    sizeof(est)) != 0)
+					return -LINUX_EFAULT;
+				return 0;
+			}
+			/*
+			 * No stat op or it failed; return a
+			 * synthetic directory stat for the mount
+			 * root itself.
+			 */
+			memset(&est, 0, sizeof(est));
+			est.st_mode = 0040755;	/* S_IFDIR | 0755 */
+			est.st_nlink = 2;
+			est.st_ino = 1;
+			est.st_blksize = 4096;
+			if (mem_copy_to(proc->mem, a2, &est,
+			    sizeof(est)) != 0)
+				return -LINUX_EFAULT;
+			return 0;
+		}
 		return -LINUX_ENOENT;
+	}
 
 	if (flags & LINUX_AT_SYMLINK_NOFOLLOW) {
 		if (lstat(host_path, &hst) < 0)
