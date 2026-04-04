@@ -38,10 +38,10 @@ targets:
       - sdk: MetalKit.framework
     postBuildScripts:
       - script: |
-          # Copy Alpine rootfs into the app bundle and convert absolute
-          # symlinks to relative ones. iOS breaks absolute symlinks
-          # (like /bin/sh -> /bin/busybox) during IPA installation
-          # because the targets don't exist on the host filesystem.
+          # Copy Alpine rootfs into the app bundle and replace all
+          # symlinks with actual file copies. iOS/AltStore may not
+          # preserve symlinks during IPA installation, causing
+          # broken (empty) files.
           ROOTFS="${SRCROOT}/rootfs/alpine"
           DEST="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/alpine"
           if [ -d "$ROOTFS" ]; then
@@ -49,22 +49,31 @@ targets:
             rm -rf "$DEST"
             cp -a "$ROOTFS" "$DEST"
 
-            echo "Converting absolute symlinks to relative..."
+            echo "Replacing symlinks with file copies..."
             find "$DEST" -type l | while read -r link; do
               target=$(readlink "$link")
+              # Resolve the target relative to the rootfs
               if [ "${target#/}" != "$target" ]; then
-                # Absolute symlink: convert to relative
-                link_dir=$(dirname "$link")
-                # Compute relative path from link location to rootfs + target
-                abs_target="${DEST}${target}"
-                rel_target=$(python3 -c "import os.path; print(os.path.relpath('$abs_target', '$link_dir'))")
+                # Absolute target: resolve within rootfs
+                real_target="${DEST}${target}"
+              else
+                # Relative target: resolve from symlink directory
+                real_target="$(dirname "$link")/${target}"
+              fi
+              if [ -f "$real_target" ]; then
                 rm "$link"
-                ln -s "$rel_target" "$link"
+                cp "$real_target" "$link"
+              elif [ -d "$real_target" ]; then
+                rm "$link"
+                cp -a "$real_target" "$link"
+              else
+                echo "warning: broken symlink $link -> $target"
+                rm "$link"
               fi
             done
 
             echo "Rootfs copied: $(du -sh "$DEST" | cut -f1)"
-            echo "Symlinks converted: $(find "$DEST" -type l | wc -l) remaining"
+            echo "Remaining symlinks: $(find "$DEST" -type l | wc -l)"
           else
             echo "warning: rootfs not found at $ROOTFS"
           fi
