@@ -61,6 +61,7 @@ typedef struct emu_process {
 	int		uid, gid, euid, egid;
 	int		state;
 	int		exit_status;
+	int		collected;	/* Parent has reaped via wait */
 	int		tgid;		/* Thread group ID */
 	int		tid;		/* Thread ID */
 	uint32_t	umask_val;
@@ -86,6 +87,7 @@ typedef struct emu_process {
 	pthread_t	host_thread;
 	pthread_mutex_t	lock;
 	pthread_cond_t	wait_cond;
+	pthread_cond_t	reap_cond;	/* Child waits for collection */
 
 	struct emu_process	*next;
 } emu_process_t;

@@ -129,6 +129,7 @@ proc_create(emu_process_t *parent)
 
 	pthread_mutex_init(&p->lock, NULL);
 	pthread_cond_init(&p->wait_cond, NULL);
+	pthread_cond_init(&p->reap_cond, NULL);
 
 	/* Add to process list. */
 	pthread_mutex_lock(&proc_lock);
@@ -238,9 +239,9 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 				if (status != NULL)
 					*status = child->exit_status;
 				child->state = PROC_DEAD;
+				child->collected = 1;
+				pthread_cond_signal(&child->reap_cond);
 				pthread_mutex_unlock(&proc_lock);
-				/* Don't destroy: child thread may still be
-				 * returning from proc_exit. Just collect status. */
 				return (ret);
 			}
 		}
@@ -270,6 +271,8 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 				if (status != NULL)
 					*status = child->exit_status;
 				child->state = PROC_DEAD;
+				child->collected = 1;
+				pthread_cond_signal(&child->reap_cond);
 				pthread_mutex_unlock(&proc_lock);
 				pthread_mutex_unlock(&parent->lock);
 				return (ret);
@@ -480,9 +483,42 @@ proc_destroy(emu_process_t *proc)
 
 	pthread_mutex_destroy(&proc->lock);
 	pthread_cond_destroy(&proc->wait_cond);
+	pthread_cond_destroy(&proc->reap_cond);
 
 	LOG_DBG("proc: destroyed pid %d", proc->pid);
 	free(proc);
+}
+
+/*
+ * Exit a process and wait for the parent to collect it.
+ * After collection (or a timeout for orphans), destroy
+ * the process struct.
+ */
+static void
+proc_run_exit(emu_process_t *proc, int status)
+{
+	struct timespec	ts;
+
+	proc_exit(proc, status);
+
+	/*
+	 * Wait up to 2 seconds for the parent to collect our
+	 * exit status via wait().  If not collected (orphaned
+	 * or reparented to pid 1), clean up anyway.
+	 */
+	pthread_mutex_lock(&proc_lock);
+	if (!proc->collected) {
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_sec += 2;
+		while (!proc->collected) {
+			if (pthread_cond_timedwait(&proc->reap_cond,
+			    &proc_lock, &ts) != 0)
+				break;
+		}
+	}
+	pthread_mutex_unlock(&proc_lock);
+
+	proc_destroy(proc);
 }
 
 void *
@@ -501,7 +537,7 @@ proc_run(void *arg)
 	if (proc->mem != NULL && proc->mem->jit_mode && jit_available()) {
 		LOG_INFO("proc: pid %d using JIT execution", proc->pid);
 		jit_run(proc);
-		proc_exit(proc, proc->cpu.exit_code);
+		proc_run_exit(proc, proc->cpu.exit_code);
 		return (NULL);
 	}
 #endif
@@ -523,32 +559,27 @@ proc_run(void *arg)
 		case EMU_UNIMPL:
 			LOG_ERR("proc: pid %d unimplemented insn at pc=0x%lx",
 			    proc->pid, (unsigned long)proc->cpu.pc);
-			proc_exit(proc, 128 + EMU_SIGILL);
+			proc_run_exit(proc, 128 + EMU_SIGILL);
 			return (NULL);
 		case EMU_BREAK:
 			LOG_DBG("proc: pid %d breakpoint at pc=0x%lx",
 			    proc->pid, (unsigned long)proc->cpu.pc);
 			break;
 		case EMU_EXIT:
-			proc_exit(proc, proc->cpu.exit_code);
+			proc_run_exit(proc, proc->cpu.exit_code);
 			return (NULL);
 		default:
 			LOG_ERR("proc: pid %d unexpected cpu_step ret=%d",
 			    proc->pid, ret);
-			proc_exit(proc, 1);
+			proc_run_exit(proc, 1);
 			return (NULL);
 		}
 
 		sig_deliver(proc);
 	}
 
-	/* Process called exit/exit_group (running set to 0).
-	 * Save exit_status before proc_exit because the parent
-	 * may proc_destroy this struct from another thread. */
-	{
-		int es = proc->exit_status;
-		proc_exit(proc, es);
-	}
+	/* Process called exit/exit_group (running set to 0). */
+	proc_run_exit(proc, proc->exit_status);
 	return (NULL);
 }
 
