@@ -195,6 +195,9 @@ typedef struct emu_process emu_process_t;
  */
 void	sys_handle(emu_process_t *proc);
 
+/* Terminal window size (called from emu_set_winsize). */
+void	sys_set_winsize(unsigned short rows, unsigned short cols);
+
 /* Per-subsystem syscall handlers */
 int64_t	sys_file(emu_process_t *, int nr, uint64_t, uint64_t,
 	    uint64_t, uint64_t, uint64_t, uint64_t);

@@ -31,6 +31,7 @@
 #include "memory.h"
 #include "process.h"
 #include "signal_emu.h"
+#include "syscall.h"
 #include "vfs.h"
 
 /* Global state */
@@ -201,14 +202,13 @@ emu_set_winsize(int pid, unsigned short rows, unsigned short cols)
 {
 	emu_process_t	*proc;
 
+	sys_set_winsize(rows, cols);
+
 	proc = proc_find(pid);
 	if (proc == NULL)
 		return (-1);
 
-	(void)rows;
-	(void)cols;
-
-	/* Winsize is handled by ioctl TIOCGWINSZ in sys_file. */
+	sig_send(proc, EMU_SIGWINCH);
 	return (0);
 }
 

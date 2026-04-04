@@ -114,6 +114,20 @@
 #define LINUX_TIOCNOTTY		0x5422
 #define LINUX_FIONREAD		0x541B
 
+/* Terminal window size (set by host via sys_set_winsize). */
+static unsigned short	g_ws_rows = 24;
+static unsigned short	g_ws_cols = 80;
+static pthread_mutex_t	g_ws_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void
+sys_set_winsize(unsigned short rows, unsigned short cols)
+{
+	pthread_mutex_lock(&g_ws_lock);
+	g_ws_rows = rows;
+	g_ws_cols = cols;
+	pthread_mutex_unlock(&g_ws_lock);
+}
+
 /* Linux AT_* flags */
 #define LINUX_AT_REMOVEDIR		0x200
 #define LINUX_AT_SYMLINK_NOFOLLOW	0x100
@@ -654,10 +668,11 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	case LINUX_TIOCSCTTY:
 	case LINUX_TIOCNOTTY:
 		/*
-		 * Return ENOTTY for all terminal ioctls.  Our fds are
-		 * socketpairs, not real terminals.  Returning ENOTTY
-		 * consistently prevents the shell from entering job
-		 * control mode which requires a real controlling terminal.
+		 * Return ENOTTY for terminal control ioctls.  Our fds
+		 * are socketpairs, not real terminals.  Returning ENOTTY
+		 * prevents the shell from entering job control mode.
+		 * TIOCGWINSZ is handled above since it is safe and
+		 * needed by programs to format output.
 		 */
 		return -LINUX_ENOTTY;
 	case LINUX_FIONREAD: {
