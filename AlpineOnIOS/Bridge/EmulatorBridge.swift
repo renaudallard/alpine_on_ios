@@ -102,11 +102,13 @@ class EmulatorBridge: ObservableObject {
     }
 
     private func doSpawnShell() -> Int {
-        /* Use /bin/busybox directly. Busybox checks argv[0] to
-         * determine the applet. argv[0]="sh" makes it run as shell.
-         * This avoids needing /bin/sh to exist as a separate file. */
+        /* Use /bin/busybox with a -c read-eval loop.
+         * Interactive shell mode crashes in musl's printf, but
+         * -c mode works. This REPL gives interactive behavior. */
         let path = "/bin/busybox"
-        let argv = ["sh"]
+        let argv = ["sh", "-c",
+            "while true; do printf \"$(pwd)# \"; read cmd || break; " +
+            "eval \"$cmd\"; done"]
         let envp = [
             "HOME=/root",
             "TERM=xterm-256color",

@@ -817,6 +817,29 @@ exec_movi(cpu_state_t *cpu, uint32_t insn)
 		return EMU_OK;
 	}
 
+	/* MVNI: op=1 with cmode 0x0-0xB → inverted MOVI for 32-bit/16-bit */
+	if (op == 1 && (cmode & 0x0E) <= 0x0A && cmode != 0x0E) {
+		uint32_t shift = 0;
+		int elems;
+
+		if ((cmode >> 1) < 4) {
+			/* 32-bit shifted: cmode 0,1,2,3 → shift 0,8,16,24 */
+			shift = (cmode >> 1) * 8;
+			uint32_t val = ~((uint32_t)imm8 << shift);
+			elems = Q ? 4 : 2;
+			for (i = 0; i < elems; i++)
+				cpu->v[rd].s[i] = val;
+		} else if ((cmode >> 1) < 6) {
+			/* 16-bit shifted: cmode 4,5 → shift 0,8 */
+			shift = ((cmode >> 1) - 4) * 8;
+			uint16_t val = (uint16_t)~((uint16_t)imm8 << shift);
+			elems = Q ? 8 : 4;
+			for (i = 0; i < elems; i++)
+				cpu->v[rd].h[i] = val;
+		}
+		return EMU_OK;
+	}
+
 	if (op == 1 && cmode == 0x0E) {
 		/* MOVI Dd/MOVI Vd.2D, #imm64 */
 		/* Each bit of imm8 maps to a byte of 0x00 or 0xFF */
