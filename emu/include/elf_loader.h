@@ -18,6 +18,7 @@ typedef struct elf_info {
 	uint64_t	phent;		/* Size of one phdr entry */
 	uint64_t	phnum;		/* Number of phdr entries */
 	uint64_t	base;		/* Load base address (for PIE/interp) */
+	uint64_t	brk;		/* Initial brk (end of loaded segments) */
 	uint64_t	interp_base;	/* Interpreter load base (0 if static) */
 	uint64_t	interp_entry;	/* Interpreter entry point */
 	char		interp[256];	/* Interpreter path (empty if static) */

@@ -416,6 +416,10 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		entry = interp_info.entry;
 	}
 
+	/* Set initial brk to end of loaded binary. */
+	newmem->brk_base = info.brk;
+	newmem->brk_current = info.brk;
+
 	/* Set up stack. */
 	sp = elf_setup_stack(newmem, &info, argv, envp, stack_top);
 	if (sp == 0) {

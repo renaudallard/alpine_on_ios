@@ -212,6 +212,9 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 		base = 0;
 	}
 
+	/* Set initial brk to end of loaded segments (page-aligned). */
+	info->brk = (base + vmax + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+
 	/* Second pass: load segments. */
 	for (i = 0; i < ehdr.e_phnum; i++) {
 		uint64_t	addr, map_addr, map_size, file_off;
