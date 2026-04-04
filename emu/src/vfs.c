@@ -129,6 +129,7 @@ vfs_resolve(vfs_t *vfs, const char *guest_path, char *host_path,
 	char		 link[PATH_MAX];
 	char		*components[256];
 	char		 pathbuf[PATH_MAX];
+	char		*saveptr, *saveptr2;
 	int		 ncomp, depth, i;
 	ssize_t		 llen;
 	struct stat	 st;
@@ -150,8 +151,8 @@ vfs_resolve(vfs_t *vfs, const char *guest_path, char *host_path,
 		return (-1);
 
 	ncomp = 0;
-	for (char *tok = strtok(scratch, "/"); tok != NULL;
-	    tok = strtok(NULL, "/")) {
+	for (char *tok = strtok_r(scratch, "/", &saveptr); tok != NULL;
+	    tok = strtok_r(NULL, "/", &saveptr)) {
 		if (ncomp >= 255)
 			return (-1);
 		components[ncomp++] = tok;
@@ -196,8 +197,8 @@ vfs_resolve(vfs_t *vfs, const char *guest_path, char *host_path,
 			    sizeof(linkbuf))
 				return (-1);
 
-			for (char *tok = strtok(linkbuf, "/"); tok != NULL;
-			    tok = strtok(NULL, "/")) {
+			for (char *tok = strtok_r(linkbuf, "/", &saveptr2); tok != NULL;
+			    tok = strtok_r(NULL, "/", &saveptr2)) {
 				if (new_ncomp >= 255)
 					return (-1);
 				new_components[new_ncomp++] = tok;

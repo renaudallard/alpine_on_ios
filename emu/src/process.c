@@ -338,6 +338,20 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	/* Load ELF. */
 	memset(&info, 0, sizeof(info));
 	ret = elf_load(host_path, newmem, bin_base, &info);
+	if (ret != 0 && use_jit) {
+		/* JIT mmap may have failed; fall back to interpreter. */
+		LOG_WARN("proc: execve: JIT load failed, trying interpreter");
+		mem_space_destroy(newmem);
+		newmem = mem_space_create();
+		if (newmem == NULL)
+			return (-ENOMEM);
+		use_jit = 0;
+		bin_base = 0;
+		interp_base = INTERP_INTERP_BASE;
+		stack_top = INTERP_STACK_TOP;
+		memset(&info, 0, sizeof(info));
+		ret = elf_load(host_path, newmem, bin_base, &info);
+	}
 	if (ret != 0) {
 		LOG_ERR("proc: execve: failed to load %s", host_path);
 		mem_space_destroy(newmem);

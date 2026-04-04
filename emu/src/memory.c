@@ -18,6 +18,7 @@
 
 #include <sys/mman.h>
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -403,6 +404,11 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		r->host = mmap((void *)addr, aligned_size,
 		    mprot, mflags, -1, 0);
 		if (r->host == MAP_FAILED) {
+			LOG_ERR("mem_mmap: mmap failed addr=0x%lx "
+			    "size=0x%lx prot=0x%x flags=0x%x: %s",
+			    (unsigned long)addr,
+			    (unsigned long)aligned_size,
+			    mprot, mflags, strerror(errno));
 			free(r);
 			pthread_mutex_unlock(&ms->lock);
 			return (uint64_t)-1;
