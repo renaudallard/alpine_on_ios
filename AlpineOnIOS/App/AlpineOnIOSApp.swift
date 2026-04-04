@@ -35,18 +35,19 @@ struct AlpineOnIOSApp: App {
         guard !isSetup else { return }
         isSetup = true
 
-        /*
-         * Use the rootfs directly from the app bundle. The bundle
-         * preserves symlinks correctly (copied with cp -a / ditto).
-         * FileManager.copyItem breaks absolute symlinks like
-         * /bin/sh -> /bin/busybox because it resolves them against
-         * the host filesystem, not the rootfs.
-         */
-        let rootfs = Bundle.main.bundlePath + "/alpine"
         let fm = FileManager.default
+        let rootfs = rootfsPath()
 
-        if !fm.fileExists(atPath: rootfs + "/bin") {
-            var diag = "Rootfs not found in bundle.\n"
+        /* First launch: copy rootfs from bundle to Documents
+         * (Documents is writable, bundle is read-only).
+         * The bundle has no symlinks - busybox --install creates them. */
+        if !fm.fileExists(atPath: rootfs + "/bin/busybox") {
+            bridge.state = .extracting
+            extractRootfs()
+        }
+
+        if !fm.fileExists(atPath: rootfs + "/bin/busybox") {
+            var diag = "Rootfs: \(rootfs)\n"
             diag += "Bundle: \(Bundle.main.bundlePath)\n"
             let items = (try? fm.contentsOfDirectory(
                 atPath: Bundle.main.bundlePath)) ?? []
@@ -55,6 +56,37 @@ struct AlpineOnIOSApp: App {
             return
         }
 
+        /* Start emulator. It will run busybox --install before
+         * spawning the shell if /bin/sh doesn't exist yet. */
         bridge.startAll(rootfsPath: rootfs)
+    }
+
+    private func rootfsPath() -> String {
+        let docs = FileManager.default.urls(for: .documentDirectory,
+                                            in: .userDomainMask).first!
+        return docs.appendingPathComponent("alpine").path
+    }
+
+    private func extractRootfs() {
+        let fm = FileManager.default
+        let dest = rootfsPath()
+
+        /* Remove stale/incomplete rootfs */
+        if fm.fileExists(atPath: dest) &&
+           !fm.fileExists(atPath: dest + "/bin/busybox") {
+            try? fm.removeItem(atPath: dest)
+        }
+
+        guard !fm.fileExists(atPath: dest) else { return }
+
+        /* Copy from bundle (no symlinks, just real files) */
+        let src = Bundle.main.bundlePath + "/alpine"
+        guard fm.fileExists(atPath: src) else { return }
+
+        do {
+            try fm.copyItem(atPath: src, toPath: dest)
+        } catch {
+            bridge.state = .error("Copy failed: \(error.localizedDescription)")
+        }
     }
 }

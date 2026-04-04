@@ -49,7 +49,24 @@ class EmulatorBridge: ObservableObject {
                 return
             }
 
-            /* Step 2: Spawn shell */
+            /* Step 2: Run busybox --install if /bin/sh doesn't exist */
+            let shPath = rootfsPath + "/bin/sh"
+            if !FileManager.default.fileExists(atPath: shPath) {
+                updateState(.extracting)
+                let installResult = doRunCommand(
+                    path: "/bin/busybox",
+                    argv: ["/bin/busybox", "--install", "-s", "/bin"],
+                    envp: ["PATH=/bin"])
+                if installResult < 0 {
+                    let detail = String(cString: emu_last_error())
+                    updateState(.error("busybox --install failed: \(detail)"))
+                    return
+                }
+                /* Wait for install to complete */
+                emu_waitpid(Int32(installResult), nil, 0)
+            }
+
+            /* Step 3: Spawn shell */
             updateState(.spawning)
             let spawnResult = doSpawnShell()
             if spawnResult < 0 {
@@ -86,6 +103,20 @@ class EmulatorBridge: ObservableObject {
     }
 
     // MARK: - Process management
+
+    /// Run a command and return its PID (for busybox --install etc.)
+    private func doRunCommand(path: String, argv: [String], envp: [String]) -> Int {
+        var fd: Int32 = -1
+        let result = withCStrings(argv) { cArgv in
+            withCStrings(envp) { cEnvp in
+                path.withCString { cPath in
+                    emu_spawn(cPath, cArgv, cEnvp, &fd)
+                }
+            }
+        }
+        if fd >= 0 { close(fd) }  /* Don't need terminal for install */
+        return Int(result)
+    }
 
     private func doSpawnShell() -> Int {
         let path = "/bin/sh"
