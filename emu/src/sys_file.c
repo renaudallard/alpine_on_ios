@@ -643,35 +643,23 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EBADF;
 
 	switch (a1) {
-	case LINUX_TIOCGWINSZ: {
-		/* Return a default window size. */
-		uint16_t	ws[4];
-
-		ws[0] = 24;	/* rows */
-		ws[1] = 80;	/* cols */
-		ws[2] = 0;	/* xpixel */
-		ws[3] = 0;	/* ypixel */
-		if (mem_copy_to(proc->mem, a2, ws, sizeof(ws)) != 0)
-			return -LINUX_EFAULT;
-		return 0;
-	}
+	case LINUX_TIOCGWINSZ:
 	case LINUX_TIOCSWINSZ:
-		return 0;
 	case LINUX_TCGETS:
-		/*
-		 * Return ENOTTY so the shell uses simple line mode
-		 * instead of complex interactive terminal handling
-		 * which crashes on unimplemented features.
-		 */
-		return -LINUX_ENOTTY;
 	case LINUX_TCSETS:
 	case LINUX_TCSETSW:
 	case LINUX_TCSETSF:
-		/* Accept terminal attribute changes silently. */
-		return 0;
+	case LINUX_TIOCGPGRP:
+	case LINUX_TIOCSPGRP:
 	case LINUX_TIOCSCTTY:
 	case LINUX_TIOCNOTTY:
-		return 0;
+		/*
+		 * Return ENOTTY for all terminal ioctls.  Our fds are
+		 * socketpairs, not real terminals.  Returning ENOTTY
+		 * consistently prevents the shell from entering job
+		 * control mode which requires a real controlling terminal.
+		 */
+		return -LINUX_ENOTTY;
 	case LINUX_FIONREAD: {
 		/* Return 0 bytes available. */
 		uint32_t	avail = 0;
@@ -680,16 +668,6 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 			return -LINUX_EFAULT;
 		return 0;
 	}
-	case LINUX_TIOCGPGRP: {
-		uint32_t	pgrp;
-
-		pgrp = (uint32_t)proc->pgid;
-		if (mem_copy_to(proc->mem, a2, &pgrp, sizeof(pgrp)) != 0)
-			return -LINUX_EFAULT;
-		return 0;
-	}
-	case LINUX_TIOCSPGRP:
-		return 0;
 	case FBIOGET_VSCREENINFO: {
 		struct fb_var_screeninfo	vi;
 		framebuffer_t			*fb;
