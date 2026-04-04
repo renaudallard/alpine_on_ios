@@ -43,8 +43,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alpineonios.app
-        MARKETING_VERSION: "0.3.2"
-        CURRENT_PROJECT_VERSION: 8
+        MARKETING_VERSION: "0.3.3"
+        CURRENT_PROJECT_VERSION: 9
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_ALLOWED: "NO"
         INFOPLIST_KEY_CFBundleDisplayName: "Alpine Terminal"
