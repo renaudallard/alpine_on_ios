@@ -49,18 +49,6 @@ class EmulatorBridge: ObservableObject {
                 return
             }
 
-            /* Check if JIT is available (required for aarch64) */
-            if emu_jit_enabled() == 0 {
-                updateState(.error(
-                    "JIT not available.\n\n" +
-                    "This app requires JIT (Just-In-Time compilation) " +
-                    "which is not enabled on your device.\n\n" +
-                    "To enable JIT, install via TrollStore " +
-                    "(permanent JIT) or enable JIT through " +
-                    "AltStore (Settings > Enable JIT)."))
-                return
-            }
-
             /* Step 2: Spawn shell */
             updateState(.spawning)
             let spawnResult = doSpawnShell()
