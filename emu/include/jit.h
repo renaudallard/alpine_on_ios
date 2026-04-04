@@ -49,15 +49,16 @@ void	jit_patch_code(void *code, size_t size);
 
 /*
  * W^X toggle for JIT code regions.
- * On Apple platforms (macOS 11+, iOS 14.2+):
- *   pthread_jit_write_protect_np(0) makes MAP_JIT pages writable.
- *   pthread_jit_write_protect_np(1) makes them executable.
+ * On Apple platforms, pthread_jit_write_protect_np toggles MAP_JIT
+ * page permissions. The function exists at runtime on iOS 14.2+ and
+ * macOS 11+ but iOS SDK headers mark it __API_UNAVAILABLE(ios).
+ * We resolve it via dlsym to bypass the availability check.
  * On Linux: RWX pages, no toggle needed.
  */
 #if defined(__APPLE__) && defined(__MACH__)
-#include <pthread.h>
-#define JIT_WRITE_ENABLE()	pthread_jit_write_protect_np(0)
-#define JIT_WRITE_DISABLE()	pthread_jit_write_protect_np(1)
+void	jit_write_protect(int enabled);
+#define JIT_WRITE_ENABLE()	jit_write_protect(0)
+#define JIT_WRITE_DISABLE()	jit_write_protect(1)
 #else
 #define JIT_WRITE_ENABLE()	do {} while (0)
 #define JIT_WRITE_DISABLE()	do {} while (0)

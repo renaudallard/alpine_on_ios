@@ -24,6 +24,24 @@
 #include "process.h"
 #include "syscall.h"
 
+#if defined(__APPLE__) && defined(__MACH__)
+#include <dlfcn.h>
+
+/*
+ * pthread_jit_write_protect_np is available at runtime on iOS 14.2+
+ * and macOS 11+ but iOS SDK headers mark it __API_UNAVAILABLE(ios).
+ * Resolve via dlsym to bypass the header restriction.
+ */
+static void (*jit_write_protect_fn)(int);
+
+void
+jit_write_protect(int enabled)
+{
+	if (jit_write_protect_fn != NULL)
+		jit_write_protect_fn(enabled);
+}
+#endif
+
 #ifdef __aarch64__
 
 #include <signal.h>
@@ -125,6 +143,16 @@ int
 jit_init(void)
 {
 	struct sigaction	sa;
+
+#ifdef __APPLE__
+	/* Resolve pthread_jit_write_protect_np at runtime */
+	jit_write_protect_fn = (void (*)(int))
+	    dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
+	if (jit_write_protect_fn != NULL)
+		LOG_INFO("jit: pthread_jit_write_protect_np available");
+	else
+		LOG_WARN("jit: pthread_jit_write_protect_np not found");
+#endif
 
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_sigaction = jit_sigtrap_handler;
