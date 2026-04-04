@@ -55,13 +55,20 @@ class EmulatorBridge: ObservableObject {
                 return
             }
 
-            /* Step 3: Start reader thread (if callback already registered) */
+            /* Step 3: Mark as running - UI will show TerminalView */
             updateState(.running)
+
+            /* Step 4: Wait briefly for TerminalView.onAppear to register
+             * the read callback, then start reader if available. */
+            for _ in 0..<20 {
+                if readCallback != nil { break }
+                usleep(50000)
+            }
             if let cb = readCallback {
                 startReaderThread(callback: cb)
             }
 
-            /* Step 4: Run emulator loop */
+            /* Step 5: Run emulator loop on this thread */
             emu_run()
             updateState(.idle)
         }
@@ -119,12 +126,11 @@ class EmulatorBridge: ObservableObject {
         }
     }
 
-    /// Register a read callback. If the emulator is already running,
-    /// starts the reader immediately. Otherwise, it will start when
-    /// the emulator reaches the running state.
+    /// Register a read callback. Starts the reader thread immediately
+    /// if the terminal fd is valid.
     func startReading(callback: @escaping (Data) -> Void) {
         readCallback = callback
-        if state == .running && termFD >= 0 {
+        if termFD >= 0 {
             startReaderThread(callback: callback)
         }
     }
