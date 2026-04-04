@@ -107,7 +107,12 @@ struct TerminalView: View {
         /* Local echo: the REPL shell doesn't echo typed characters
          * (no tty driver). Echo them locally in the terminal view. */
         if !ctrlPressed {
-            parser?.feed(data)
+            if data.count == 1 && data[0] == 0x08 {
+                /* Backspace: move back, erase, move back */
+                parser?.feed(Data([0x08, 0x20, 0x08]))
+            } else {
+                parser?.feed(data)
+            }
         }
     }
 }
@@ -263,12 +268,15 @@ struct KeyboardInputView: UIViewRepresentable {
         func textField(_ textField: UITextField,
                         shouldChangeCharactersIn range: NSRange,
                         replacementString string: String) -> Bool {
-            if !string.isEmpty {
+            if string.isEmpty {
+                /* Backspace/delete: send BS (0x08) */
+                onKeyPress("\u{08}")
+            } else {
                 onKeyPress(string)
             }
             /* Clear the field to keep it ready for next input */
             DispatchQueue.main.async {
-                textField.text = ""
+                textField.text = " "  /* Keep a space so backspace works */
             }
             return false
         }
