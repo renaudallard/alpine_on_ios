@@ -64,7 +64,6 @@ do_exit(emu_process_t *proc, uint64_t a0)
 
 	status = (int)a0;
 	proc->exit_status = (status & 0xff) << 8;
-	proc->state = PROC_ZOMBIE;
 	proc->cpu.running = 0;
 
 	LOG_DBG("exit: pid=%d status=%d", proc->pid, status);

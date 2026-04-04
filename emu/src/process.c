@@ -210,8 +210,8 @@ proc_exit(emu_process_t *proc, int status)
 		}
 	}
 
-	LOG_DBG("proc: pid %d (tgid %d) exited with status %d",
-	    proc->pid, proc->tgid, status);
+	LOG_DBG("proc: pid %d exited status %d",
+	    proc->pid, status);
 }
 
 int
@@ -239,7 +239,8 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 					*status = child->exit_status;
 				child->state = PROC_DEAD;
 				pthread_mutex_unlock(&proc_lock);
-				proc_destroy(child);
+				/* Don't destroy: child thread may still be
+				 * returning from proc_exit. Just collect status. */
 				return (ret);
 			}
 		}
@@ -251,12 +252,6 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 		if (options & LINUX_WNOHANG)
 			return (0);
 
-		/*
-		 * Hold parent->lock across the re-check and cond_wait to
-		 * avoid a lost wakeup: the child signals under parent->lock,
-		 * so if we check state while holding it we cannot miss the
-		 * broadcast.
-		 */
 		pthread_mutex_lock(&parent->lock);
 
 		/* Re-check under parent->lock before sleeping. */
@@ -277,7 +272,6 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 				child->state = PROC_DEAD;
 				pthread_mutex_unlock(&proc_lock);
 				pthread_mutex_unlock(&parent->lock);
-				proc_destroy(child);
 				return (ret);
 			}
 		}
@@ -544,6 +538,13 @@ proc_run(void *arg)
 		sig_deliver(proc);
 	}
 
+	/* Process called exit/exit_group (running set to 0).
+	 * Save exit_status before proc_exit because the parent
+	 * may proc_destroy this struct from another thread. */
+	{
+		int es = proc->exit_status;
+		proc_exit(proc, es);
+	}
 	return (NULL);
 }
 
