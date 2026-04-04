@@ -251,8 +251,43 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 		if (options & LINUX_WNOHANG)
 			return (0);
 
-		/* Wait for a child state change. */
+		/*
+		 * Hold parent->lock across the re-check and cond_wait to
+		 * avoid a lost wakeup: the child signals under parent->lock,
+		 * so if we check state while holding it we cannot miss the
+		 * broadcast.
+		 */
 		pthread_mutex_lock(&parent->lock);
+
+		/* Re-check under parent->lock before sleeping. */
+		pthread_mutex_lock(&proc_lock);
+		found = 0;
+		for (child = proc_list; child != NULL; child = child->next) {
+			if (child->ppid != parent->pid)
+				continue;
+			if (pid > 0 && child->pid != pid)
+				continue;
+
+			found = 1;
+
+			if (child->state == PROC_ZOMBIE) {
+				ret = child->pid;
+				if (status != NULL)
+					*status = child->exit_status;
+				child->state = PROC_DEAD;
+				pthread_mutex_unlock(&proc_lock);
+				pthread_mutex_unlock(&parent->lock);
+				proc_destroy(child);
+				return (ret);
+			}
+		}
+		pthread_mutex_unlock(&proc_lock);
+
+		if (!found) {
+			pthread_mutex_unlock(&parent->lock);
+			return (-ECHILD);
+		}
+
 		pthread_cond_wait(&parent->wait_cond, &parent->lock);
 		pthread_mutex_unlock(&parent->lock);
 	}
@@ -574,20 +609,22 @@ fd_table_release(fd_table_t *tbl)
 
 	pthread_mutex_lock(&tbl->lock);
 	rc = --tbl->refcount;
-	pthread_mutex_unlock(&tbl->lock);
-
-	if (rc > 0)
+	if (rc > 0) {
+		pthread_mutex_unlock(&tbl->lock);
 		return;
+	}
 
+	/* Last reference. Close fds while lock is held. */
 	for (i = 0; i < MAX_FDS; i++) {
 		if (tbl->fds[i].type != FD_NONE) {
-			if (tbl->fds[i].real_fd >= 0)
-				close(tbl->fds[i].real_fd);
 			if (tbl->fds[i].private != NULL)
 				free(tbl->fds[i].private);
+			if (tbl->fds[i].real_fd >= 0)
+				close(tbl->fds[i].real_fd);
 		}
 	}
 
+	pthread_mutex_unlock(&tbl->lock);
 	pthread_mutex_destroy(&tbl->lock);
 	free(tbl);
 }

@@ -16,10 +16,12 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <pthread.h>
 
 #include "log.h"
 
 static int log_level = LOG_LVL_INFO;
+static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static const char *level_prefix[] = {
 	"[ERR]",
@@ -49,6 +51,8 @@ log_msg(int level, const char *fmt, ...)
 	if (level > log_level)
 		return;
 
+	pthread_mutex_lock(&log_lock);
+
 	if (level >= 0 && level <= LOG_LVL_TRACE)
 		fprintf(stderr, "%s ", level_prefix[level]);
 
@@ -57,4 +61,6 @@ log_msg(int level, const char *fmt, ...)
 	va_end(ap);
 
 	fputc('\n', stderr);
+
+	pthread_mutex_unlock(&log_lock);
 }

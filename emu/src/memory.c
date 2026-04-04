@@ -102,11 +102,12 @@ mem_space_destroy(mem_space_t *ms)
 
 	pthread_mutex_lock(&ms->lock);
 	rc = --ms->refcount;
-	pthread_mutex_unlock(&ms->lock);
-
-	if (rc > 0)
+	if (rc > 0) {
+		pthread_mutex_unlock(&ms->lock);
 		return;
+	}
 
+	/* Last reference. Free regions while lock is held. */
 	for (r = ms->regions; r != NULL; r = next) {
 		next = r->next;
 		if (ms->jit_mode)
@@ -115,7 +116,9 @@ mem_space_destroy(mem_space_t *ms)
 			free(r->host);
 		free(r);
 	}
+	ms->regions = NULL;
 
+	pthread_mutex_unlock(&ms->lock);
 	pthread_mutex_destroy(&ms->lock);
 	free(ms);
 }

@@ -16,7 +16,10 @@
 
 #include <sys/socket.h>
 
+#include <errno.h>
 #include <pthread.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -33,6 +36,23 @@ static vfs_t		*g_vfs;
 static int		 g_initialized;
 static int		 g_jit_enabled;
 static pthread_mutex_t	 g_lock = PTHREAD_MUTEX_INITIALIZER;
+static char		 g_last_error[512];
+
+static void
+set_error(const char *fmt, ...)
+{
+	va_list	ap;
+	va_start(ap, fmt);
+	vsnprintf(g_last_error, sizeof(g_last_error), fmt, ap);
+	va_end(ap);
+	LOG_ERR("%s", g_last_error);
+}
+
+const char *
+emu_last_error(void)
+{
+	return (g_last_error);
+}
 
 int
 emu_init(const char *rootfs_path)
@@ -72,14 +92,19 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 	int		 sockpair[2];
 	int		 ret;
 
-	if (!g_initialized)
+	if (!g_initialized) {
+		set_error("not initialized");
 		return (-1);
+	}
 
-	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockpair) < 0)
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockpair) < 0) {
+		set_error("socketpair: %s", strerror(errno));
 		return (-1);
+	}
 
 	proc = proc_create(NULL);
 	if (proc == NULL) {
+		set_error("proc_create failed");
 		close(sockpair[0]);
 		close(sockpair[1]);
 		return (-1);
@@ -96,7 +121,7 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 		fd2 = dup(sockpair[1]);
 		close(sockpair[1]);
 		if (fd0 < 0 || fd1 < 0 || fd2 < 0) {
-			LOG_ERR("emu_spawn: dup failed");
+			set_error("dup: %s", strerror(errno));
 			if (fd0 >= 0) close(fd0);
 			if (fd1 >= 0) close(fd1);
 			if (fd2 >= 0) close(fd2);
@@ -114,6 +139,7 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 
 	ret = proc_execve(proc, path, argv, envp);
 	if (ret != 0) {
+		set_error("execve %s: error %d", path, ret);
 		close(sockpair[0]);
 		proc_destroy(proc);
 		return (-1);
@@ -121,6 +147,7 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 
 	ret = pthread_create(&proc->host_thread, NULL, proc_run, proc);
 	if (ret != 0) {
+		set_error("pthread_create: %s", strerror(ret));
 		close(sockpair[0]);
 		proc_destroy(proc);
 		return (-1);

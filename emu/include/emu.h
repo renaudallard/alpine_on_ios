@@ -84,4 +84,9 @@ int emu_set_jit_enabled(int on);
  */
 int emu_jit_enabled(void);
 
+/*
+ * Get the last error message (for diagnostics on iOS).
+ */
+const char *emu_last_error(void);
+
 #endif /* EMU_H */

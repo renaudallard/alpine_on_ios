@@ -92,7 +92,7 @@ sig_send(emu_process_t *proc, int sig)
 	if (sig == 0)
 		return (0);	/* Signal 0 is used for permission check. */
 
-	proc->sig_pending |= SIGMASK(sig);
+	__atomic_or_fetch(&proc->sig_pending, SIGMASK(sig), __ATOMIC_SEQ_CST);
 	return (0);
 }
 
@@ -143,7 +143,8 @@ sig_deliver(emu_process_t *proc)
 	int			 sig;
 	struct emu_sigaction	*sa;
 
-	deliverable = proc->sig_pending & ~proc->sig_blocked;
+	deliverable = __atomic_load_n(&proc->sig_pending, __ATOMIC_SEQ_CST)
+	    & ~proc->sig_blocked;
 	if (deliverable == 0)
 		return;
 
@@ -156,7 +157,8 @@ sig_deliver(emu_process_t *proc)
 		return;
 
 	/* Clear from pending. */
-	proc->sig_pending &= ~SIGMASK(sig);
+	__atomic_and_fetch(&proc->sig_pending, ~SIGMASK(sig),
+	    __ATOMIC_SEQ_CST);
 
 	sa = &proc->sigactions[sig];
 

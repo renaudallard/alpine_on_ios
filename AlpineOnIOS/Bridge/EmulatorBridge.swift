@@ -33,6 +33,7 @@ class EmulatorBridge: ObservableObject {
     private(set) var termFD: Int32 = -1
     private var readThread: Thread?
     private var readCallback: ((Data) -> Void)?
+    private let readerLock = NSLock()
 
     // MARK: - Full startup sequence
 
@@ -43,7 +44,8 @@ class EmulatorBridge: ObservableObject {
             updateState(.initializing)
             let rc = rootfsPath.withCString { emu_init($0) }
             if rc != 0 {
-                updateState(.error("emu_init failed (\(rc))"))
+                let detail = String(cString: emu_last_error())
+                updateState(.error("emu_init failed: \(detail)"))
                 return
             }
 
@@ -51,7 +53,8 @@ class EmulatorBridge: ObservableObject {
             updateState(.spawning)
             let spawnResult = doSpawnShell()
             if spawnResult < 0 {
-                updateState(.error("emu_spawn failed (\(spawnResult))"))
+                let detail = String(cString: emu_last_error())
+                updateState(.error("emu_spawn failed: \(detail)"))
                 return
             }
 
@@ -136,6 +139,8 @@ class EmulatorBridge: ObservableObject {
     }
 
     private func startReaderThread(callback: @escaping (Data) -> Void) {
+        readerLock.lock()
+        defer { readerLock.unlock() }
         guard termFD >= 0, readThread == nil else { return }
 
         let fd = termFD
