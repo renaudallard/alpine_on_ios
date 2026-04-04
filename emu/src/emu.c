@@ -15,6 +15,7 @@
  */
 
 #include <sys/mman.h>
+#include <signal.h>
 #include <sys/socket.h>
 
 #include <errno.h>
