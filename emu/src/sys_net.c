@@ -94,7 +94,7 @@ do_socket(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EMFILE;
 	}
 
-	fde = fd_get(proc->fds, efd);
+	fde = &proc->fds->fds[efd];
 	fde->type = FD_SOCKET;
 	fde->real_fd = hfd;
 	fde->flags = 0;
@@ -129,7 +129,7 @@ do_socketpair(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		close(sv[1]);
 		return -LINUX_EMFILE;
 	}
-	fde = fd_get(proc->fds, efd0);
+	fde = &proc->fds->fds[efd0];
 	fde->type = FD_SOCKET;
 	fde->real_fd = sv[0];
 	fde->cloexec = is_cloexec;
@@ -140,7 +140,7 @@ do_socketpair(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		close(sv[1]);
 		return -LINUX_EMFILE;
 	}
-	fde = fd_get(proc->fds, efd1);
+	fde = &proc->fds->fds[efd1];
 	fde->type = FD_SOCKET;
 	fde->real_fd = sv[1];
 	fde->cloexec = is_cloexec;
@@ -220,7 +220,7 @@ do_accept(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		return -LINUX_EMFILE;
 	}
 
-	nfde = fd_get(proc->fds, efd);
+	nfde = &proc->fds->fds[efd];
 	nfde->type = FD_SOCKET;
 	nfde->real_fd = hfd;
 	nfde->cloexec = is_cloexec;

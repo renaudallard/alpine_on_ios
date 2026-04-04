@@ -106,7 +106,7 @@ class EmulatorBridge: ObservableObject {
          * determine the applet. argv[0]="sh" makes it run as shell.
          * This avoids needing /bin/sh to exist as a separate file. */
         let path = "/bin/busybox"
-        let argv = ["sh", "-l"]
+        let argv = ["sh"]
         let envp = [
             "HOME=/root",
             "TERM=xterm-256color",

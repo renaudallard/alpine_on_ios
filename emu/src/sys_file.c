@@ -371,7 +371,7 @@ do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 			close(hfd);
 			return -LINUX_EMFILE;
 		}
-		fde = fd_get(proc->fds, efd);
+		fde = &proc->fds->fds[efd];
 		fde->type = fd_type;
 		fde->real_fd = hfd;
 		fde->flags = linux_flags;
@@ -399,7 +399,7 @@ do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		return -LINUX_EMFILE;
 	}
 
-	fde = fd_get(proc->fds, efd);
+	fde = &proc->fds->fds[efd];
 	fde->type = FD_FILE;
 	fde->real_fd = hfd;
 	fde->flags = linux_flags;
@@ -765,7 +765,7 @@ do_fcntl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		newfd = fd_alloc(proc->fds, (int)a2);
 		if (newfd < 0)
 			return -LINUX_EMFILE;
-		nfde = fd_get(proc->fds, newfd);
+		nfde = &proc->fds->fds[newfd];
 		nfde->type = fde->type;
 		nfde->real_fd = dup(fde->real_fd);
 		nfde->flags = fde->flags;
@@ -793,7 +793,7 @@ do_dup(emu_process_t *proc, uint64_t a0)
 	if (newfd < 0)
 		return -LINUX_EMFILE;
 
-	nfde = fd_get(proc->fds, newfd);
+	nfde = &proc->fds->fds[newfd];
 	nfde->type = fde->type;
 	nfde->real_fd = dup(fde->real_fd);
 	nfde->flags = fde->flags;
@@ -850,7 +850,7 @@ do_pipe2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 		close(pipefd[1]);
 		return -LINUX_EMFILE;
 	}
-	fde = fd_get(proc->fds, efd0);
+	fde = &proc->fds->fds[efd0];
 	fde->type = FD_PIPE;
 	fde->real_fd = pipefd[0];
 	fde->cloexec = is_cloexec;
@@ -861,7 +861,7 @@ do_pipe2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 		close(pipefd[1]);
 		return -LINUX_EMFILE;
 	}
-	fde = fd_get(proc->fds, efd1);
+	fde = &proc->fds->fds[efd1];
 	fde->type = FD_PIPE;
 	fde->real_fd = pipefd[1];
 	fde->cloexec = is_cloexec;
@@ -1554,7 +1554,7 @@ do_epoll_create1(emu_process_t *proc, uint64_t a0)
 		return -LINUX_EMFILE;
 	}
 
-	fde = fd_get(proc->fds, efd);
+	fde = &proc->fds->fds[efd];
 	fde->type = FD_EPOLL;
 	fde->real_fd = -1;
 	fde->flags = 0;
@@ -1780,7 +1780,7 @@ do_eventfd2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 		return -LINUX_EMFILE;
 	}
 
-	fde = fd_get(proc->fds, efd);
+	fde = &proc->fds->fds[efd];
 	fde->type = FD_EVENT;
 	fde->real_fd = evs->pipefd[0];
 	fde->flags = 0;
@@ -1880,7 +1880,7 @@ do_timerfd_create(emu_process_t *proc, uint64_t a0, uint64_t a1)
 		return -LINUX_EMFILE;
 	}
 
-	fde = fd_get(proc->fds, efd);
+	fde = &proc->fds->fds[efd];
 	fde->type = FD_PIPE;
 	fde->real_fd = tfs->pipefd[0];
 	fde->flags = 0;
