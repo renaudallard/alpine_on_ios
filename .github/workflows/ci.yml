@@ -66,8 +66,8 @@ jobs:
             -showBuildSettings CODE_SIGNING_ALLOWED=NO \
             | grep -m1 'BUILT_PRODUCTS_DIR' | awk '{print $3}')
           mkdir -p Payload
-          cp -r "$BUILD_DIR/AlpineOnIOS.app" Payload/
-          zip -r AlpineOnIOS.ipa Payload/
+          ditto "$BUILD_DIR/AlpineOnIOS.app" Payload/AlpineOnIOS.app
+          zip -ry AlpineOnIOS.ipa Payload/
           rm -rf Payload
 
       - name: Upload IPA
