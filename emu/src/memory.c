@@ -35,6 +35,7 @@
 #define PAGE_MASK	(~((uint64_t)PAGE_SIZE - 1))
 #define MMAP_START	0x7F0000000000ULL
 
+
 static uint64_t
 page_align_down(uint64_t addr)
 {
@@ -524,9 +525,12 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 			r->prot = prot;
 		} else {
 			/*
-			 * Partial overlap: split the region. Create a
-			 * new region for the protected range and adjust
-			 * the original for the remainder.
+			 * Partial overlap: split the region.
+			 *
+			 * In interpreter mode each split piece gets its
+			 * own host allocation so free() is safe later.
+			 * In JIT mode host==guest so we just adjust
+			 * pointers (no separate alloc needed).
 			 */
 			old_prot = r->prot;
 
@@ -539,21 +543,70 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 				nr->size = overlap_end - overlap_start;
 				nr->prot = prot;
 				nr->flags = r->flags;
-				nr->host = r->host + (overlap_start - r->base);
+
+				if (!ms->jit_mode) {
+					nr->host = calloc(1, nr->size);
+					if (nr->host == NULL) {
+						free(nr);
+						break;
+					}
+					memcpy(nr->host,
+					    r->host + (overlap_start - r->base),
+					    nr->size);
+				} else {
+					nr->host = r->host +
+					    (overlap_start - r->base);
+				}
 
 				if (overlap_end < rend) {
 					/* Also need a tail region */
 					mem_region_t *tr = calloc(1, sizeof(*tr));
-					if (tr == NULL) { free(nr); break; }
+					if (tr == NULL) {
+						if (!ms->jit_mode)
+							free(nr->host);
+						free(nr);
+						break;
+					}
 					tr->base = overlap_end;
 					tr->size = rend - overlap_end;
 					tr->prot = r->prot;
 					tr->flags = r->flags;
-					tr->host = r->host + (overlap_end - r->base);
+
+					if (!ms->jit_mode) {
+						tr->host = calloc(1, tr->size);
+						if (tr->host == NULL) {
+							free(nr->host);
+							free(nr);
+							free(tr);
+							break;
+						}
+						memcpy(tr->host,
+						    r->host +
+						    (overlap_end - r->base),
+						    tr->size);
+					} else {
+						tr->host = r->host +
+						    (overlap_end - r->base);
+					}
 					tr->next = r->next;
 					nr->next = tr;
 				} else {
 					nr->next = r->next;
+				}
+
+				if (!ms->jit_mode) {
+					/* Shrink original's host buffer. */
+					uint64_t newsize;
+					uint8_t *newhost;
+
+					newsize = overlap_start - r->base;
+					newhost = calloc(1, newsize);
+					if (newhost != NULL) {
+						memcpy(newhost, r->host,
+						    newsize);
+						free(r->host);
+						r->host = newhost;
+					}
 				}
 				r->size = overlap_start - r->base;
 				r->next = nr;
@@ -567,7 +620,33 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 				nr->size = rend - overlap_end;
 				nr->prot = r->prot;
 				nr->flags = r->flags;
-				nr->host = r->host + (overlap_end - r->base);
+
+				if (!ms->jit_mode) {
+					nr->host = calloc(1, nr->size);
+					if (nr->host == NULL) {
+						free(nr);
+						break;
+					}
+					memcpy(nr->host,
+					    r->host + (overlap_end - r->base),
+					    nr->size);
+					/* Shrink original's host buffer. */
+					uint64_t newsize;
+					uint8_t *newhost;
+
+					newsize = overlap_end - r->base;
+					newhost = calloc(1, newsize);
+					if (newhost != NULL) {
+						memcpy(newhost, r->host,
+						    newsize);
+						free(r->host);
+						r->host = newhost;
+					}
+				} else {
+					nr->host = r->host +
+					    (overlap_end - r->base);
+				}
+
 				nr->next = r->next;
 				r->size = overlap_end - r->base;
 				r->prot = prot;
