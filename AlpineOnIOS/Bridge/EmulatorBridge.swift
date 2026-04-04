@@ -73,7 +73,7 @@ class EmulatorBridge: ObservableObject {
 
             /* Step 5: Run emulator loop on this thread */
             emu_run()
-            updateState(.idle)
+            updateState(.error("Shell exited. Restart the app."))
         }
     }
 
@@ -107,6 +107,10 @@ class EmulatorBridge: ObservableObject {
          * -c mode works. This REPL gives interactive behavior. */
         let path = "/bin/busybox"
         let argv = ["sh", "-c",
+            "busybox --install -s /bin 2>/dev/null; " +
+            "busybox --install -s /sbin 2>/dev/null; " +
+            "busybox --install -s /usr/bin 2>/dev/null; " +
+            "busybox --install -s /usr/sbin 2>/dev/null; " +
             "while true; do echo -n \"# \"; read cmd || break; " +
             "eval \"$cmd\"; done"]
         let envp = [
