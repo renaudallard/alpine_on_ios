@@ -103,17 +103,6 @@ struct TerminalView: View {
         }
 
         bridge.write(data: data)
-
-        /* Local echo: the REPL shell doesn't echo typed characters
-         * (no tty driver). Echo them locally in the terminal view. */
-        if !ctrlPressed {
-            if data.count == 1 && data[0] == 0x08 {
-                /* Backspace: move back, erase, move back */
-                parser?.feed(Data([0x08, 0x20, 0x08]))
-            } else {
-                parser?.feed(data)
-            }
-        }
     }
 }
 
