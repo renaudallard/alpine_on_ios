@@ -113,7 +113,7 @@ struct AlpineOnIOSApp: App {
             withIntermediateDirectories: true, attributes: nil)
         let resolvConf = etcDir + "/resolv.conf"
         if !fm.fileExists(atPath: resolvConf) {
-            let content = "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+            let content = "nameserver 9.9.9.9\nnameserver 149.112.112.112\n"
             fm.createFile(atPath: resolvConf,
                 contents: content.data(using: .utf8), attributes: nil)
         }
