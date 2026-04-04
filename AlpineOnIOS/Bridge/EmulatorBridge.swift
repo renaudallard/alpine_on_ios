@@ -107,7 +107,7 @@ class EmulatorBridge: ObservableObject {
          * -c mode works. This REPL gives interactive behavior. */
         let path = "/bin/busybox"
         let argv = ["sh", "-c",
-            "while true; do printf \"$(pwd)# \"; read cmd || break; " +
+            "while true; do echo -n \"# \"; read cmd || break; " +
             "eval \"$cmd\"; done"]
         let envp = [
             "HOME=/root",
