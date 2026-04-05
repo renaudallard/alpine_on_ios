@@ -677,8 +677,8 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		return EMU_OK;
 	}
 
-	if (o2 == 1 && o0 == 0) {
-		/* STLR / LDAR (load-acquire / store-release) */
+	if (o2 == 1 && (o0 == 0 || o0 == 1)) {
+		/* STLR/STLLR / LDAR/LDAPR (load-acquire / store-release) */
 		if (L == 0) {
 			/* STLR */
 			switch (size) {
