@@ -73,8 +73,8 @@ jobs:
               exit 0
             fi
 
-            ALL_PKGS=$(cat /tmp/remaining.txt | tr '\n' ' ')
-            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $ALL_PKGS
+            # Pass package list as a file (avoids arg-list-too-long)
+            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 /tmp/remaining.txt
           fi
 
       - name: Repository stats

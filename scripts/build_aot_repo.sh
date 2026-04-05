@@ -66,12 +66,22 @@ done
 # Parse all packages into a dependency database.
 cat "$WORKDIR"/idx_*/APKINDEX > "$WORKDIR/allindex"
 
+# Write requested packages to a file (avoids arg-list-too-long).
+# If a single arg is a file, read packages from it.
+if [ $# -eq 1 ] && [ -f "$1" ]; then
+	cp "$1" "$WORKDIR/requested.txt"
+else
+	printf '%s\n' "$@" > "$WORKDIR/requested.txt"
+fi
+export REQFILE="$WORKDIR/requested.txt"
+
 # Recursive dependency resolver using awk.
-REQUESTED="$*" awk '
+awk '
 BEGIN {
-	# Read requested packages from env
-	split(ENVIRON["REQUESTED"], req, " ")
-	for (i in req) queue[req[i]] = 1
+	# Read requested packages from file
+	while ((getline pkg < ENVIRON["REQFILE"]) > 0)
+		queue[pkg] = 1
+	close(ENVIRON["REQFILE"])
 }
 
 # Parse APKINDEX
@@ -142,6 +152,7 @@ END {
 	}
 }
 ' "$WORKDIR/allindex" | sort -u > "$RESOLVED"
+unset REQFILE
 
 NPKGS=$(wc -l < "$RESOLVED" | tr -d ' ')
 echo "Resolved $NPKGS packages (from $# requested)"
