@@ -548,7 +548,6 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	int		fd, i;
 	fd_entry_t	*fde;
 	uint64_t	iov_ptr, iov_count;
-	ssize_t		total;
 
 	fd = (int)a0;
 	fde = fd_get(proc->fds, fd);
@@ -560,35 +559,86 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	if (mem_read64(proc->mem, a1 + 24, &iov_count) != 0)
 		return -LINUX_EFAULT;
 
-	total = 0;
-	for (i = 0; i < (int)iov_count; i++) {
-		uint64_t	base, len;
-		void		*buf;
+	/*
+	 * Use host recvmsg for proper msg_name/msg_control handling.
+	 * musl's DNS resolver checks msg_namelen after recvmsg.
+	 */
+	{
+		struct iovec	*hiov;
+		void		**hbufs;
+		struct msghdr	 hmsg;
+		struct sockaddr_storage	ss;
+		uint64_t	msg_name;
+		uint64_t	msg_namelen_val;
 		ssize_t		n;
 
-		if (mem_read64(proc->mem, iov_ptr + (uint64_t)i * 16,
-		    &base) != 0)
-			return -LINUX_EFAULT;
-		if (mem_read64(proc->mem, iov_ptr + (uint64_t)i * 16 + 8,
-		    &len) != 0)
-			return -LINUX_EFAULT;
+		hiov = calloc((size_t)iov_count, sizeof(struct iovec));
+		hbufs = calloc((size_t)iov_count, sizeof(void *));
+		if (hiov == NULL || hbufs == NULL) {
+			free(hiov);
+			free(hbufs);
+			return -12;	/* LINUX_ENOMEM */
+		}
 
-		if (len == 0)
-			continue;
+		for (i = 0; i < (int)iov_count; i++) {
+			uint64_t	base, len;
 
-		buf = mem_translate(proc->mem, base, len, MEM_PROT_WRITE);
-		if (buf == NULL)
-			return -LINUX_EFAULT;
+			if (mem_read64(proc->mem,
+			    iov_ptr + (uint64_t)i * 16, &base) != 0 ||
+			    mem_read64(proc->mem,
+			    iov_ptr + (uint64_t)i * 16 + 8, &len) != 0) {
+				free(hiov);
+				free(hbufs);
+				return -LINUX_EFAULT;
+			}
 
-		n = recv(fde->real_fd, buf, (size_t)len, (int)a2);
+			if (len > 0) {
+				hbufs[i] = mem_translate(proc->mem, base,
+				    len, MEM_PROT_WRITE);
+				if (hbufs[i] == NULL) {
+					free(hiov);
+					free(hbufs);
+					return -LINUX_EFAULT;
+				}
+			}
+			hiov[i].iov_base = hbufs[i];
+			hiov[i].iov_len = (size_t)len;
+		}
+
+		memset(&hmsg, 0, sizeof(hmsg));
+		hmsg.msg_iov = hiov;
+		hmsg.msg_iovlen = (size_t)iov_count;
+
+		/* Read msg_name pointer from guest msghdr. */
+		mem_read64(proc->mem, a1, &msg_name);
+		if (msg_name != 0) {
+			mem_read64(proc->mem, a1 + 8, &msg_namelen_val);
+			hmsg.msg_name = &ss;
+			hmsg.msg_namelen = sizeof(ss);
+		}
+
+		n = recvmsg(fde->real_fd, &hmsg, (int)a2);
+		free(hiov);
+		free(hbufs);
+
 		if (n < 0)
-			return total > 0 ? total : neg_errno_net(errno);
-		total += n;
-		if (n == 0 || (size_t)n < len)
-			break;
-	}
+			return neg_errno_net(errno);
 
-	return total;
+		/* Write back msg_namelen. */
+		if (msg_name != 0 && hmsg.msg_namelen > 0) {
+			uint32_t wlen = hmsg.msg_namelen;
+			if (wlen > (uint32_t)msg_namelen_val)
+				wlen = (uint32_t)msg_namelen_val;
+			mem_copy_to(proc->mem, msg_name, &ss, wlen);
+			mem_write32(proc->mem, a1 + 8, hmsg.msg_namelen);
+		}
+
+		/* Write back msg_flags. */
+		mem_write32(proc->mem, a1 + 48,
+		    (uint32_t)hmsg.msg_flags);
+
+		return n;
+	}
 }
 
 int64_t
