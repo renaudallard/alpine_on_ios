@@ -97,7 +97,7 @@ struct TerminalView: View {
             lastCols = cols
             lastRows = rows
             termBuffer.resize(newRows: rows, newCols: cols)
-            bridge.setWindowSize(rows: Int16(rows), cols: Int16(cols))
+            bridge.setWindowSize(rows: rows, cols: cols)
         }
     }
 
@@ -168,19 +168,19 @@ struct TerminalGridView: View {
         }
     }
 
-    @ViewBuilder
-    private func cellView(row: Int, col: Int, sbCount: Int) -> some View {
-        let cell: TerminalCell
-        let isGrid: Bool
-
+    private func getCell(row: Int, col: Int, sbCount: Int) -> (TerminalCell, Bool) {
         if row < sbCount {
             let sbRow = buffer.scrollback[row]
-            cell = col < sbRow.count ? sbRow[col] : TerminalCell()
-            isGrid = false
+            let cell = col < sbRow.count ? sbRow[col] : TerminalCell()
+            return (cell, false)
         } else {
-            cell = buffer.grid[row - sbCount][col]
-            isGrid = true
+            return (buffer.grid[row - sbCount][col], true)
         }
+    }
+
+    @ViewBuilder
+    private func cellView(row: Int, col: Int, sbCount: Int) -> some View {
+        let (cell, isGrid) = getCell(row: row, col: col, sbCount: sbCount)
 
         let isCursor = buffer.cursorVisible && isGrid
             && (row - sbCount) == buffer.cursorRow
