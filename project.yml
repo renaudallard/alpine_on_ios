@@ -47,7 +47,9 @@ targets:
             echo "Copying rootfs (no symlinks)..."
             rm -rf "$DEST"
             rsync -a --no-links "$ROOTFS/" "$DEST/"
-            echo "Rootfs: $(du -sh "$DEST" | cut -f1), symlinks: $(find "$DEST" -type l | wc -l)"
+            echo "AOT-patching ELF binaries..."
+            "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST"
+            echo "Rootfs: $(du -sh "$DEST" | cut -f1)"
           else
             echo "warning: rootfs not found at $ROOTFS"
           fi
