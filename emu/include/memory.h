@@ -24,6 +24,7 @@
 #define MEM_MAP_SHARED		0x01
 #define MEM_MAP_FIXED		0x10
 #define MEM_MAP_ANONYMOUS	0x20
+#define MEM_MAP_EXTERNAL	0x40	/* host buf not owned by us */
 
 /* A contiguous region of guest memory */
 typedef struct mem_region {
@@ -55,6 +56,8 @@ void		 mem_space_ref(mem_space_t *);
 /* Memory mapping */
 uint64_t	mem_mmap(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot, int flags, int fd, uint64_t offset);
+uint64_t	mem_mmap_host(mem_space_t *, uint64_t addr, uint64_t size,
+		    int prot, uint8_t *host_buf);
 int		mem_munmap(mem_space_t *, uint64_t addr, uint64_t size);
 int		mem_mprotect(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot);

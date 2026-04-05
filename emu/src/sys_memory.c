@@ -72,35 +72,19 @@ do_mmap(emu_process_t *proc, uint64_t addr, uint64_t length, uint64_t prot,
 			/* bad fd */
 		} else if (fde->type == FD_FB) {
 			/*
-			 * Framebuffer mmap: allocate a guest region
-			 * backed by the shared fb pixel buffer.
+			 * Framebuffer mmap: map the shared pixel buffer
+			 * directly into guest memory so writes from the
+			 * guest are visible to the Metal display view.
 			 */
 			framebuffer_t	*fb;
-			uint64_t	fb_len;
 
 			fb = fb_get();
 			if (!fb->active)
 				return -LINUX_ENOMEM;
-			fb_len = fb->size;
-			if (length > fb_len)
-				length = fb_len;
-			ret = mem_mmap(proc->mem, addr, length,
-			    (int)prot,
-			    (int)(flags | LINUX_MAP_ANONYMOUS),
-			    -1, 0);
-			if (ret != (uint64_t)-1) {
-				void	*dst;
-
-				dst = mem_translate(proc->mem, ret,
-				    length, MEM_PROT_WRITE);
-				if (dst != NULL)
-					memcpy(dst, fb->pixels, length);
-				/*
-				 * Store the guest address so the fb
-				 * pixel data can be synced. For now
-				 * the guest writes directly.
-				 */
-			}
+			if (length > fb->size)
+				length = fb->size;
+			ret = mem_mmap_host(proc->mem, addr, length,
+			    (int)prot, fb->pixels);
 			LOG_TRACE("mmap(fb): ret=0x%llx len=0x%llx",
 			    (unsigned long long)ret,
 			    (unsigned long long)length);

@@ -203,6 +203,8 @@ fail:
 static void
 region_free_host(mem_space_t *ms, mem_region_t *r)
 {
+	if (r->flags & MEM_MAP_EXTERNAL)
+		return;	/* Not owned by us. */
 	if (ms->jit_mode)
 		munmap(r->host, r->size);
 	else
@@ -452,6 +454,68 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 	LOG_TRACE("mmap: addr=0x%llx size=0x%llx prot=%d flags=0x%x",
 	    (unsigned long long)addr, (unsigned long long)aligned_size,
 	    prot, flags);
+
+	return addr;
+}
+
+/*
+ * Map a caller-provided host buffer into the guest address space.
+ * The buffer is NOT freed by munmap or mem_space_destroy.
+ */
+uint64_t
+mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
+    int prot, uint8_t *host_buf)
+{
+	mem_region_t	*r;
+	uint64_t	 aligned_size;
+
+	if (size == 0 || host_buf == NULL)
+		return (uint64_t)-1;
+
+	aligned_size = page_align_up(size);
+
+	pthread_mutex_lock(&ms->lock);
+
+	if (addr == 0)
+		addr = ms->mmap_next;
+	addr = page_align_up(addr);
+
+	/* Find a gap. */
+	for (;;) {
+		mem_region_t	*cur;
+		int		 conflict;
+
+		conflict = 0;
+		for (cur = ms->regions; cur != NULL; cur = cur->next) {
+			uint64_t	ce;
+
+			ce = cur->base + cur->size;
+			if (addr < ce && addr + aligned_size > cur->base) {
+				addr = page_align_up(ce);
+				conflict = 1;
+				break;
+			}
+		}
+		if (!conflict)
+			break;
+	}
+	if (addr + aligned_size > addr)
+		ms->mmap_next = addr + aligned_size;
+
+	r = calloc(1, sizeof(*r));
+	if (r == NULL) {
+		pthread_mutex_unlock(&ms->lock);
+		return (uint64_t)-1;
+	}
+
+	r->base = addr;
+	r->size = aligned_size;
+	r->prot = prot;
+	r->flags = MEM_MAP_PRIVATE | MEM_MAP_EXTERNAL;
+	r->host = host_buf;
+
+	region_insert(ms, r);
+	pthread_mutex_unlock(&ms->lock);
 
 	return addr;
 }
