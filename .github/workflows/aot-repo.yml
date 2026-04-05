@@ -1,0 +1,94 @@
+name: Build AOT Repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Space-separated package list (empty = base set)'
+        required: false
+        default: ''
+  schedule:
+    # Weekly rebuild to pick up Alpine security updates
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: aot-repo
+  cancel-in-progress: true
+
+jobs:
+  build-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build AOT patcher
+        run: cc -O2 -o scripts/.aot_patch scripts/aot_patch.c
+
+      - name: Build AOT repository
+        run: |
+          PKGS="${{ github.event.inputs.packages }}"
+          if [ -z "$PKGS" ]; then
+            # Base set + common tools
+            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 \
+              alpine-baselayout alpine-keys apk-tools busybox \
+              musl libcrypto3 libssl3 zlib ca-certificates \
+              scanelf musl-utils libc-utils ssl_client \
+              libgcc s6 s6-dns s6-linux-utils s6-networking \
+              utmps libbsd libmd libffi \
+              ncurses-terminfo-base ncurses-libs readline \
+              curl wget
+          else
+            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $PKGS
+          fi
+
+      - name: Upload repository artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aot-repo
+          path: repo/
+          retention-days: 30
+
+      - name: Setup Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v4
+
+      - name: Create Pages content
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p _site/alpine/v3.21/aot/aarch64
+          cp repo/aarch64/* _site/alpine/v3.21/aot/aarch64/
+          cat > _site/index.html << 'EOF'
+          <html><body>
+          <h1>Alpine on iOS - AOT Repository</h1>
+          <p>Pre-patched Alpine packages for native execution on iOS.</p>
+          <pre>
+          # Add to /etc/apk/repositories:
+          https://renaudallard.github.io/alpine_on_ios/alpine/v3.21/aot
+
+          # Then: apk update --allow-untrusted
+          </pre>
+          </body></html>
+          EOF
+
+      - name: Upload to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy-pages:
+    if: github.ref == 'refs/heads/main'
+    needs: build-repo
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
