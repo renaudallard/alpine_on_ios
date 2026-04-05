@@ -193,11 +193,18 @@ proc_exit(emu_process_t *proc, int status)
 	 * Only the main thread (tgid == pid) does that.
 	 */
 	if (!is_thread) {
-		/* Reparent children to pid 1. */
+		/* Reparent children to pid 1.  Zombies are marked
+		 * collected immediately since pid 1 never calls wait. */
 		pthread_mutex_lock(&proc_lock);
 		for (child = proc_list; child != NULL; child = child->next) {
-			if (child->ppid == proc->pid)
-				child->ppid = 1;
+			if (child->ppid != proc->pid)
+				continue;
+			child->ppid = 1;
+			if (child->state == PROC_ZOMBIE) {
+				child->state = PROC_DEAD;
+				child->collected = 1;
+				pthread_cond_signal(&child->reap_cond);
+			}
 		}
 		pthread_mutex_unlock(&proc_lock);
 
