@@ -20,36 +20,37 @@
 
 <p align="center">
   Run a full Alpine Linux aarch64 distribution on iPhone and iPad.<br>
-  Near-native speed via JIT, with terminal and graphical display support.
+  Near-native speed via AOT precompilation, no MAP_JIT required.
 </p>
 
 ---
 
 ## Features
 
-- **Full Alpine Linux** with `apk` package manager
-- **JIT execution** on aarch64 hosts for near-native speed
-- **Terminal emulator** with VT100/xterm-256color, ANSI colors, UTF-8
-- **Graphical display** via `/dev/fb0` framebuffer and Metal rendering
+- **Full Alpine Linux** with `apk` package manager and AOT package repository
+- **Near-native execution** via AOT precompilation (no MAP_JIT entitlement needed)
+- **Terminal emulator** with VT100/xterm-256color, ANSI colors, line editing, history
+- **Graphical display** via `/dev/fb0` framebuffer and Metal rendering at 60fps
 - **Touch input** mapped to Linux evdev mouse events
 - **Thread support** with full `clone()` and `futex()`
-- **100+ Linux syscalls** including epoll, eventfd, timerfd
-- **Comprehensive SIMD/NEON** support (vector arithmetic, shifts, permute, compare, table lookup)
-- **Virtual /proc and /dev** with stat support for proper filesystem traversal
-- **Interactive shell** with line editing, history, and fork/exec for external commands
-- **DNS resolution** via /etc/resolv.conf created at first launch
-- **X11 ready** with preconfigured xorg.conf for fbdev
+- **100+ Linux syscalls** including epoll, eventfd, timerfd, copy_file_range
+- **Comprehensive SIMD/NEON** support (3600+ lines: vector, FP, permute, table, shifts)
+- **Networking** with DNS resolution (musl getaddrinfo) and HTTP (wget, curl)
+- **Virtual /proc and /dev** with stat, framebuffer, and evdev input devices
+- **Interactive shell** with Ctrl+C/Ctrl+Z signal support
+- **X11 ready** with preconfigured xorg.conf for fbdev, MATE/openbox/Firefox
 
 ## How It Works
 
 Since iOS devices use ARM64 and Alpine Linux provides aarch64 packages,
-the emulator runs guest code **natively** on the host CPU. Syscalls are
-intercepted by patching `SVC` instructions with `BRK` traps at load
-time and handling them via a `SIGTRAP` signal handler. This gives
-near-native performance with no per-instruction overhead.
+guest code runs **natively** on the host CPU. At build time, `SVC`
+(syscall) instructions are replaced with `BRK` traps. At runtime, a
+`SIGTRAP` handler intercepts the traps and dispatches to emulated Linux
+syscalls. This gives near-native performance with no per-instruction
+overhead and no MAP_JIT entitlement.
 
-On non-aarch64 hosts, a full AArch64 instruction interpreter serves as
-fallback.
+A full AArch64 instruction interpreter serves as fallback for forked
+child processes and non-aarch64 hosts.
 
 ```
 +-----------------------+
@@ -65,8 +66,8 @@ fallback.
       +-----+-----+
             |
       +-----+-----+
-      |  AArch64  |         JIT native / interpreter fallback
-      |  Engine   |
+      | AOT Native |         Pre-patched BRK traps + SIGTRAP handler
+      | / Interp   |         Interpreter fallback for child processes
       +-----+-----+
             |
       +-----+-----+
@@ -75,7 +76,7 @@ fallback.
       +-----+-----+
             |
       +-----+-----+
-      |  VFS      |         rootfs + /proc + /dev + /dev/fb0
+      |  VFS      |         rootfs + overlay + /proc + /dev + /dev/fb0
       +-----------+
 ```
 
@@ -98,20 +99,24 @@ After installing, trust the developer profile in
 ### First launch
 
 1. Open **Alpine Terminal** from your home screen
-2. The app extracts the Alpine rootfs on first launch (a few seconds)
-3. You get an interactive shell
-4. Install packages with `apk`:
+2. The app sets up symlinks and configuration on first launch
+3. You get an interactive shell with line editing and history
+
+### Installing packages
+
+The app is preconfigured with an AOT repository (pre-patched for native
+speed) and Alpine's HTTP mirrors as fallback:
 
 ```
-apk update
+apk update --allow-untrusted
 apk add curl git python3 vim
 ```
 
 ### Graphical mode (X11)
 
 ```
-apk add xorg-server xf86-video-fbdev xterm openbox
-startx_fb   # helper defined in .profile
+apk add --allow-untrusted xorg-server xf86-video-fbdev xterm openbox
+startx
 ```
 
 Switch to the **Display** tab to see the graphical output. Touch
@@ -120,11 +125,11 @@ the display for mouse input.
 ### Firefox
 
 ```sh
-sh /root/start-firefox.sh
+apk add --allow-untrusted firefox-esr font-noto openbox dbus
+sh ~/start-firefox.sh
 ```
 
-This installs X11, openbox, Firefox and fonts, then launches Firefox
-on the framebuffer display.
+Switch to the **Display** tab to browse the web.
 
 ## Building from Source
 
@@ -137,8 +142,7 @@ on the framebuffer display.
 
 ```sh
 ./rootfs/download_rootfs.sh          # download Alpine 3.21 aarch64
-make                                  # build libemu.a
-make test                             # 42 unit tests
+cd emu && make && make test && cd ..  # build and run 42 unit tests
 
 # iOS build
 xcodegen generate
@@ -150,6 +154,9 @@ xcodebuild build -project AlpineOnIOS.xcodeproj \
 ./scripts/package_ipa.sh build/Build/Products/Release-iphoneos
 ```
 
+The Xcode post-build script copies the rootfs into the app bundle and
+runs `scripts/patch_rootfs_aot.sh` to AOT-patch all ELF binaries.
+
 ### CI and releases
 
 | Workflow | Trigger | Action |
@@ -157,6 +164,7 @@ xcodebuild build -project AlpineOnIOS.xcodeproj \
 | `ci.yml` | Push / PR | Test on Linux, build iOS, upload artifact |
 | `version-tag.yml` | `MARKETING_VERSION` change | Auto-create `v*` tag |
 | `release.yml` | `v*` tag | Build .ipa, publish GitHub Release |
+| `aot-repo.yml` | Daily / manual | Build AOT-patched APK repository |
 
 Bump `MARKETING_VERSION` in `project.yml` and push to release.
 
@@ -165,21 +173,26 @@ Bump `MARKETING_VERSION` in `project.yml` and push to release.
 ```
 alpine_on_ios/
   AlpineOnIOS/
-    App/            SwiftUI entry point, ContentView, assets
+    App/            SwiftUI entry point, ContentView, rootfs setup
     Terminal/       VT100 terminal emulator (view, buffer, parser, colors)
     Display/        Metal framebuffer display + touch input mapping
-    Settings/       Font size, display resolution preferences
+    Settings/       Font size preferences
     Bridge/         Swift-to-C bridge, bridging header
   emu/
     include/        C headers (cpu, jit, memory, process, vfs, syscall, ...)
     src/            C implementation + jit_entry.S assembly
-    tests/          Unit tests (42 tests)
+    tests/          Unit + integration tests (42 unit, 2 integration)
   rootfs/
     download_rootfs.sh   Download Alpine minirootfs
-    overlay/             X11 config, .profile, start-firefox.sh, resolv.conf
-  scripts/               build_rootfs.sh, package_ipa.sh
+    overlay/             X11 config, .profile, start-firefox.sh
+  scripts/
+    aot_patch.c          AOT patcher: SVC->BRK in ELF binaries
+    patch_rootfs_aot.sh  Patch all ELFs in a rootfs directory
+    build_aot_repo.sh    Build AOT-patched APK repository
+    build_rootfs.sh      Rootfs assembly
+    package_ipa.sh       IPA packaging
   project.yml            XcodeGen spec
-  .github/workflows/     CI, release, auto-tag
+  .github/workflows/     CI, release, auto-tag, AOT repo
 ```
 
 ## Troubleshooting
@@ -192,12 +205,8 @@ alpine_on_ios/
 | App expires after 7 days | Re-sign with AltStore/Sideloadly, or use TrollStore |
 | No keyboard input | Tap the terminal area to focus the keyboard |
 | Blank terminal | Delete and reinstall the app to re-extract rootfs |
-
-## Support
-
-If you find this project useful, consider supporting its development:
-
-[![PayPal](https://img.shields.io/badge/PayPal-Donate-blue.svg?logo=paypal)](https://www.paypal.me/RenaudAllard)
+| apk signature errors | Use `--allow-untrusted` for the AOT repository |
+| Slow package install | AOT repo packages run natively; fallback repos use interpreter |
 
 ## License
 
