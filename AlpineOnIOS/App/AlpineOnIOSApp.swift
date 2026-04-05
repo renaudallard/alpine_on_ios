@@ -36,18 +36,12 @@ struct AlpineOnIOSApp: App {
         isSetup = true
 
         let fm = FileManager.default
-        let rootfs = rootfsPath()
+        let bundleRootfs = bundleRootfsPath()
+        let overlay = overlayPath()
 
-        /* First launch: copy rootfs from bundle to Documents
-         * (Documents is writable, bundle is read-only).
-         * The bundle has no symlinks - busybox --install creates them. */
-        if !fm.fileExists(atPath: rootfs + "/bin/busybox") {
-            bridge.state = .extracting
-            extractRootfs()
-        }
-
-        if !fm.fileExists(atPath: rootfs + "/bin/busybox") {
-            var diag = "Rootfs: \(rootfs)\n"
+        /* Verify bundle rootfs exists. */
+        if !fm.fileExists(atPath: bundleRootfs + "/bin/busybox") {
+            var diag = "Rootfs not found in bundle\n"
             diag += "Bundle: \(Bundle.main.bundlePath)\n"
             let items = (try? fm.contentsOfDirectory(
                 atPath: Bundle.main.bundlePath)) ?? []
@@ -56,45 +50,89 @@ struct AlpineOnIOSApp: App {
             return
         }
 
-        /* Create busybox applet symlinks in Swift (instant).
-         * Much faster than running busybox --install in the emulator. */
-        if !fm.fileExists(atPath: rootfs + "/bin/ls") {
-            createBusyboxSymlinks(rootfs: rootfs)
+        /* Create writable overlay for config/data. */
+        bridge.state = .extracting
+        createOverlay(bundleRootfs: bundleRootfs, overlay: overlay)
+
+        /* Create busybox symlinks in the overlay. */
+        if !fm.fileExists(atPath: overlay + "/bin/ls") {
+            createBusyboxSymlinks(rootfs: overlay)
         }
 
-        bridge.startAll(rootfsPath: rootfs)
+        /* Use bundle as rootfs (signed, for AOT exec).
+         * Overlay provides writable config/data. */
+        bridge.startAll(rootfsPath: bundleRootfs,
+                        overlayPath: overlay)
     }
 
-    private func rootfsPath() -> String {
+    private func bundleRootfsPath() -> String {
+        #if os(iOS)
+        return Bundle.main.bundlePath + "/alpine"
+        #elseif os(macOS)
+        return Bundle.main.resourcePath! + "/alpine"
+        #endif
+    }
+
+    private func overlayPath() -> String {
         let docs = FileManager.default.urls(for: .documentDirectory,
                                             in: .userDomainMask).first!
         return docs.appendingPathComponent("alpine").path
     }
 
-    private func extractRootfs() {
+    /// Create writable overlay with config files and directories.
+    private func createOverlay(bundleRootfs: String, overlay: String) {
         let fm = FileManager.default
-        let dest = rootfsPath()
 
-        /* Remove stale/incomplete rootfs */
-        if fm.fileExists(atPath: dest) &&
-           !fm.fileExists(atPath: dest + "/bin/busybox") {
-            try? fm.removeItem(atPath: dest)
+        /* Create essential writable directories. */
+        for dir in ["/etc", "/etc/apk", "/root", "/tmp", "/var",
+                    "/home", "/run", "/bin", "/sbin",
+                    "/usr/bin", "/usr/sbin"] {
+            try? fm.createDirectory(atPath: overlay + dir,
+                withIntermediateDirectories: true, attributes: nil)
         }
 
-        guard !fm.fileExists(atPath: dest) else { return }
+        /* Copy mutable config files from bundle if not already in overlay. */
+        let configFiles = ["/etc/resolv.conf", "/etc/apk/repositories",
+                           "/etc/passwd", "/etc/group", "/etc/shadow",
+                           "/root/.profile", "/root/.xinitrc",
+                           "/root/start-firefox.sh"]
+        for file in configFiles {
+            let dest = overlay + file
+            let src = bundleRootfs + file
+            if !fm.fileExists(atPath: dest) && fm.fileExists(atPath: src) {
+                try? fm.copyItem(atPath: src, toPath: dest)
+            }
+        }
 
-        /* Copy from bundle (no symlinks, just real files) */
-        #if os(iOS)
-        let src = Bundle.main.bundlePath + "/alpine"
-        #elseif os(macOS)
-        let src = Bundle.main.resourcePath! + "/alpine"
-        #endif
-        guard fm.fileExists(atPath: src) else { return }
+        createEssentialConfig(overlay: overlay)
+    }
 
-        do {
-            try fm.copyItem(atPath: src, toPath: dest)
-        } catch {
-            bridge.state = .error("Copy failed: \(error.localizedDescription)")
+    /// Create resolv.conf and APK repos if not present.
+    private func createEssentialConfig(overlay: String) {
+        let fm = FileManager.default
+        let etcDir = overlay + "/etc"
+
+        /* Ensure resolv.conf exists. */
+        let resolvConf = etcDir + "/resolv.conf"
+        if !fm.fileExists(atPath: resolvConf) {
+            let dns = "nameserver 9.9.9.9\nnameserver 149.112.112.112\n"
+            fm.createFile(atPath: resolvConf,
+                contents: dns.data(using: .utf8), attributes: nil)
+        }
+
+        /* Configure APK repositories. */
+        let reposDir = etcDir + "/apk"
+        try? fm.createDirectory(atPath: reposDir,
+            withIntermediateDirectories: true, attributes: nil)
+        let reposFile = reposDir + "/repositories"
+        if !fm.fileExists(atPath: reposFile) {
+            let repos = [
+                "https://raw.githubusercontent.com/renaudallard/alpine_on_ios/aot-repo/aarch64",
+                "http://dl-cdn.alpinelinux.org/alpine/v3.21/main",
+                "http://dl-cdn.alpinelinux.org/alpine/v3.21/community",
+            ].joined(separator: "\n") + "\n"
+            fm.createFile(atPath: reposFile,
+                contents: repos.data(using: .utf8), attributes: nil)
         }
     }
 
@@ -109,32 +147,6 @@ struct AlpineOnIOSApp: App {
             try? fm.createDirectory(atPath: full,
                 withIntermediateDirectories: true, attributes: nil)
         }
-
-        /* Ensure /etc/resolv.conf exists for DNS resolution. */
-        let etcDir = rootfs + "/etc"
-        try? fm.createDirectory(atPath: etcDir,
-            withIntermediateDirectories: true, attributes: nil)
-        let resolvConf = etcDir + "/resolv.conf"
-        if !fm.fileExists(atPath: resolvConf) {
-            let content = "nameserver 9.9.9.9\nnameserver 149.112.112.112\n"
-            fm.createFile(atPath: resolvConf,
-                contents: content.data(using: .utf8), attributes: nil)
-        }
-
-        /* Configure APK repositories:
-         * - AOT repo (pre-patched for native speed) as primary
-         * - Alpine HTTP mirrors as fallback */
-        let reposDir = etcDir + "/apk"
-        try? fm.createDirectory(atPath: reposDir,
-            withIntermediateDirectories: true, attributes: nil)
-        let reposFile = reposDir + "/repositories"
-        let repos = [
-            "https://raw.githubusercontent.com/renaudallard/alpine_on_ios/aot-repo/aarch64",
-            "http://dl-cdn.alpinelinux.org/alpine/v3.21/main",
-            "http://dl-cdn.alpinelinux.org/alpine/v3.21/community",
-        ].joined(separator: "\n") + "\n"
-        fm.createFile(atPath: reposFile,
-            contents: repos.data(using: .utf8), attributes: nil)
 
         /* Common applets to create as symlinks to busybox */
         let applets = [

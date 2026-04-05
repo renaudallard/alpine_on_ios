@@ -40,11 +40,14 @@ class EmulatorBridge: ObservableObject {
     // MARK: - Full startup sequence
 
     /// Run the complete startup on a background thread with status updates.
-    func startAll(rootfsPath: String) {
+    func startAll(rootfsPath: String, overlayPath: String? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             /* Step 1: Initialize emulator */
             updateState(.initializing)
             let rc = rootfsPath.withCString { emu_init($0) }
+            if let overlay = overlayPath {
+                overlay.withCString { emu_set_overlay($0) }
+            }
             if rc != 0 {
                 let detail = String(cString: emu_last_error())
                 updateState(.error("emu_init failed: \(detail)"))
