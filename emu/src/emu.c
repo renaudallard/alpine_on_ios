@@ -17,6 +17,9 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <sys/socket.h>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 #include <errno.h>
 #include <pthread.h>
@@ -89,8 +92,11 @@ emu_init(const char *rootfs_path)
 
 	/*
 	 * Enable native execution.  Try JIT (MAP_JIT) first.
-	 * If MAP_JIT is unavailable, keep the SIGTRAP handler
-	 * for AOT mode (file-backed executable mappings).
+	 * On iOS: if MAP_JIT fails (sideloaded), enable AOT
+	 *   (pre-patched file-backed exec, no MAP_JIT needed).
+	 * On macOS: if MAP_JIT fails, use interpreter only
+	 *   (macOS code signing rejects anonymous exec pages
+	 *   without proper Developer ID signing).
 	 */
 	if (jit_available() && jit_init() == 0) {
 #ifdef __APPLE__
@@ -104,9 +110,10 @@ emu_init(const char *rootfs_path)
 			LOG_INFO("emu: JIT probe succeeded, JIT enabled");
 		} else {
 			/*
-			 * MAP_JIT unavailable but SIGTRAP handler is
-			 * installed.  Enable AOT: pre-patched binaries
-			 * run natively via file-backed exec mappings.
+			 * MAP_JIT unavailable.  Enable AOT: pre-patched
+			 * binaries use file-backed exec mappings from the
+			 * signed app bundle.  Non-text segments use calloc
+			 * (no anonymous exec pages needed).
 			 */
 			g_aot_enabled = 1;
 			LOG_INFO("emu: MAP_JIT unavailable, AOT enabled");
