@@ -687,25 +687,56 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EBADF;
 
 	switch (a1) {
-	case LINUX_TCGETS:
+	case LINUX_TCGETS: {
+		uint8_t	tios[36];
+
+		if (fde->type != FD_TTY)
+			return -LINUX_ENOTTY;
+		memset(tios, 0, sizeof(tios));
+		/* c_iflag: ICRNL(0x100) | IXON(0x400) */
+		tios[1] = 0x05;
+		/* c_oflag: OPOST(0x1) | ONLCR(0x4) */
+		tios[4] = 0x05;
+		/* c_cflag: B38400(0xF) | CS8(0x30) | CREAD(0x80) | HUPCL(0x400) */
+		tios[8] = 0xBF; tios[9] = 0x04;
+		/* c_lflag: ISIG|ICANON|ECHO|ECHOE|ECHOK|IEXTEN */
+		tios[12] = 0x7B; tios[14] = 0x80;
+		/* c_cc: VINTR=^C VQUIT=^\ VERASE=DEL VKILL=^U VEOF=^D VMIN=1 */
+		tios[17] = 3; tios[18] = 28; tios[19] = 127;
+		tios[20] = 21; tios[21] = 4; tios[23] = 1;
+		tios[25] = 17; tios[26] = 19; tios[27] = 26;
+		if (mem_copy_to(proc->mem, a2, tios, sizeof(tios)) != 0)
+			return -LINUX_EFAULT;
+		return 0;
+	}
 	case LINUX_TCSETS:
 	case LINUX_TCSETSW:
 	case LINUX_TCSETSF:
+		/* Accept terminal attribute changes. */
+		if (fde->type != FD_TTY)
+			return -LINUX_ENOTTY;
+		return 0;
 	case LINUX_TIOCGWINSZ:
 	case LINUX_TIOCSWINSZ:
-	case LINUX_TIOCGPGRP:
-	case LINUX_TIOCSPGRP:
-	case LINUX_TIOCSCTTY:
-	case LINUX_TIOCNOTTY:
 		/*
-		 * Return ENOTTY for all terminal ioctls.  Enabling
-		 * TCGETS causes busybox to enter interactive mode
-		 * which crashes in strlen (corrupted hash table entry).
-		 * Line-mode I/O with local echo in the iOS terminal
-		 * works reliably.  Ctrl+C/^Z/^\ are handled by
-		 * tty_check_input() during read.
+		 * ENOTTY: busybox uses TIOCGWINSZ for terminal
+		 * detection alongside TCGETS.  Returning success here
+		 * enables a code path that corrupts the heap after
+		 * fork.  Terminal size comes from COLUMNS/LINES env.
 		 */
 		return -LINUX_ENOTTY;
+	case LINUX_TIOCGPGRP:
+	case LINUX_TIOCSPGRP:
+		/*
+		 * Fail with ENOTTY: no controlling terminal, so no
+		 * foreground process group.  This disables job control
+		 * while keeping interactive mode (TCGETS succeeds).
+		 * Matches real Linux with "sh -i" on a pipe.
+		 */
+		return -LINUX_ENOTTY;
+	case LINUX_TIOCSCTTY:
+	case LINUX_TIOCNOTTY:
+		return 0;
 	case LINUX_FIONREAD: {
 		/* Return 0 bytes available. */
 		uint32_t	avail = 0;

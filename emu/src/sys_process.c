@@ -541,6 +541,9 @@ sys_process(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 			return proc->pgid;
 		return -LINUX_ESRCH;
 	case SYS_SETSID:
+		/* Fail if already a session leader. */
+		if (proc->sid == proc->pid)
+			return -LINUX_EPERM;
 		proc->sid = proc->pid;
 		proc->pgid = proc->pid;
 		return proc->pid;

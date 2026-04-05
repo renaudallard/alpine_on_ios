@@ -109,6 +109,8 @@ proc_create(emu_process_t *parent)
 		p->vfs = parent->vfs;
 		p->fds = fd_table_clone(parent->fds);
 	} else {
+		p->pgid = p->pid;
+		p->sid = p->pid;
 		snprintf(p->cwd, sizeof(p->cwd), "/");
 		p->fds = fd_table_create();
 	}

@@ -91,13 +91,14 @@ vfs_dev_open(void *ctx, const char *path, int flags, int mode)
 		return (fd);
 	}
 	if (strcmp(path, "/tty") == 0 || strcmp(path, "/console") == 0) {
-		/* Try host /dev/tty, fall back to /dev/null. */
-		fd = open("/dev/tty", flags);
-		if (fd < 0)
-			fd = open("/dev/null", flags);
-		if (fd < 0)
-			return (-errno);
-		return (fd);
+		/*
+		 * Return ENOENT so the shell falls back to using its
+		 * existing stdin/stderr fds (which are FD_TTY) as the
+		 * controlling terminal.  Opening host /dev/tty would
+		 * create an FD_FILE fd that doesn't support terminal
+		 * ioctls, breaking the shell's job control setup.
+		 */
+		return (-ENOENT);
 	}
 	if (strcmp(path, "/ptmx") == 0 || strcmp(path, "/pts/0") == 0) {
 		fd = open("/dev/tty", flags);
