@@ -41,9 +41,10 @@ struct TerminalView: View {
         VStack(spacing: 0) {
             /* Terminal character grid */
             GeometryReader { geo in
-                ZStack {
+                ZStack(alignment: .topLeading) {
+                    Color.black
+
                     TerminalGridView(buffer: termBuffer, fontSize: settings.fontSize)
-                        .background(Color.black)
 
                     /* Full-size transparent text field captures keyboard */
                     KeyboardInputView(
