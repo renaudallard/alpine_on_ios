@@ -28,45 +28,59 @@
 #include "log.h"
 
 /* Linux errno */
-#define LINUX_EBADF		9
-#define LINUX_ENOMEM		12
+#define LINUX_EACCES		13
 #define LINUX_EFAULT		14
 #define LINUX_EINVAL		22
 #define LINUX_EMFILE		24
+#define LINUX_EPIPE		32
 #define LINUX_ENOSYS		38
 #define LINUX_ENOTSOCK		88
 #define LINUX_ENOPROTOOPT	92
+#define LINUX_EPROTONOSUPPORT	93
+#define LINUX_EAFNOSUPPORT	97
+#define LINUX_EADDRINUSE	98
+#define LINUX_EADDRNOTAVAIL	99
+#define LINUX_ENETUNREACH	101
+#define LINUX_ECONNRESET	104
+#define LINUX_EISCONN		106
+#define LINUX_ENOTCONN		107
+#define LINUX_ETIMEDOUT		110
+#define LINUX_ECONNREFUSED	111
+#define LINUX_EHOSTUNREACH	113
+#define LINUX_EALREADY		114
+#define LINUX_EINPROGRESS	115
 
 /* Linux O_CLOEXEC for socket flags */
 #define LINUX_SOCK_CLOEXEC	0x80000
 #define LINUX_SOCK_NONBLOCK	0x800
 
 static int64_t
-neg_errno_net(int host_errno_val)
+neg_errno_net(int e)
 {
-	switch (host_errno_val) {
-#ifdef EBADF
-	case EBADF:		return -LINUX_EBADF;
-#endif
-#ifdef ENOMEM
-	case ENOMEM:		return -LINUX_ENOMEM;
-#endif
-#ifdef EFAULT
+	switch (e) {
+	case EACCES:		return -LINUX_EACCES;
+	case EBADF:		return -9;
+	case ENOMEM:		return -12;
 	case EFAULT:		return -LINUX_EFAULT;
-#endif
-#ifdef EINVAL
 	case EINVAL:		return -LINUX_EINVAL;
-#endif
-#ifdef EMFILE
 	case EMFILE:		return -LINUX_EMFILE;
-#endif
-#ifdef ENOTSOCK
+	case EPIPE:		return -LINUX_EPIPE;
 	case ENOTSOCK:		return -LINUX_ENOTSOCK;
-#endif
-#ifdef ENOPROTOOPT
 	case ENOPROTOOPT:	return -LINUX_ENOPROTOOPT;
-#endif
-	default:		return -LINUX_EINVAL;
+	case EADDRINUSE:	return -LINUX_EADDRINUSE;
+	case EADDRNOTAVAIL:	return -LINUX_EADDRNOTAVAIL;
+	case ENETUNREACH:	return -LINUX_ENETUNREACH;
+	case ECONNRESET:	return -LINUX_ECONNRESET;
+	case EISCONN:		return -LINUX_EISCONN;
+	case ENOTCONN:		return -LINUX_ENOTCONN;
+	case ETIMEDOUT:		return -LINUX_ETIMEDOUT;
+	case ECONNREFUSED:	return -LINUX_ECONNREFUSED;
+	case EHOSTUNREACH:	return -LINUX_EHOSTUNREACH;
+	case EALREADY:		return -LINUX_EALREADY;
+	case EINPROGRESS:	return -LINUX_EINPROGRESS;
+	case EAGAIN:		return -11;	/* LINUX_EAGAIN */
+	case EAFNOSUPPORT:	return -LINUX_EAFNOSUPPORT;
+	default:		return -5;	/* LINUX_EIO */
 	}
 }
 
