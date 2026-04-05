@@ -3283,6 +3283,25 @@ exec_simd(cpu_state_t *cpu, uint32_t insn)
 		/* FP <-> integer conversion */
 		if (bit(insn, 21) == 1 && bits(insn, 14, 10) == 0x00)
 			return exec_fp_int_conv(cpu, insn);
+
+		/* FJCVTZS: FP JavaScript Convert to Signed (ARMv8.3)
+		 * 0 00 11110 01 1 11 111 001000 Rn Rd
+		 * bits[20:10] = 11111 001000 */
+		if (bits(insn, 23, 22) == 1 && bits(insn, 20, 10) == 0x7E8) {
+			uint32_t rn = bits(insn, 9, 5);
+			uint32_t rd = bits(insn, 4, 0);
+			double d = cpu->v[rn].df[0];
+			int32_t result;
+
+			if (isnan(d) || isinf(d))
+				result = 0;
+			else
+				result = (int32_t)(int64_t)d;
+			cpu_set_wreg(cpu, rd, (uint32_t)result);
+			/* Clear NZCV (FJCVTZS sets flags) */
+			cpu->nzcv = 0;
+			return EMU_OK;
+		}
 	}
 
 	/* FP data processing 3-source */
