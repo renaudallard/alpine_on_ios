@@ -4,15 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       packages:
-        description: 'Space-separated package list (empty = incremental 500)'
+        description: 'Space-separated package list (empty = all Alpine)'
         required: false
         default: ''
-      batch_size:
-        description: 'Packages per run (incremental mode)'
-        required: false
-        default: '500'
   schedule:
-    # Daily at 4am UTC - process next batch until complete
+    # Daily: rebuild full repo, picks up new/updated packages
     - cron: '0 4 * * *'
 
 permissions:
@@ -26,7 +22,7 @@ concurrency:
 jobs:
   build-repo:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -55,12 +51,11 @@ jobs:
       - name: Build AOT repository
         run: |
           PKGS="${{ github.event.inputs.packages }}"
-          BATCH="${{ github.event.inputs.batch_size }}"
-          BATCH="${BATCH:-500}"
 
           if [ -n "$PKGS" ]; then
             ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $PKGS
           else
+            # Get ALL package names from Alpine
             echo "Fetching full Alpine package index..."
             for r in main community; do
               curl -sL "http://dl-cdn.alpinelinux.org/alpine/v3.21/$r/aarch64/APKINDEX.tar.gz" | \
@@ -71,16 +66,15 @@ jobs:
             TOTAL=$(wc -l < /tmp/all_pkgs.txt)
             comm -23 /tmp/all_pkgs.txt /tmp/done.txt > /tmp/remaining.txt
             REMAINING=$(wc -l < /tmp/remaining.txt)
-            echo "Total: $TOTAL, Done: $((TOTAL - REMAINING)), Remaining: $REMAINING"
+            echo "Total: $TOTAL, Done: $((TOTAL - REMAINING)), New: $REMAINING"
 
             if [ "$REMAINING" -eq 0 ]; then
-              echo "All packages processed!"
+              echo "Repository is up to date!"
               exit 0
             fi
 
-            BATCH_PKGS=$(head -n "$BATCH" /tmp/remaining.txt | tr '\n' ' ')
-            echo "Processing batch of $(echo $BATCH_PKGS | wc -w) packages..."
-            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $BATCH_PKGS
+            ALL_PKGS=$(cat /tmp/remaining.txt | tr '\n' ' ')
+            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $ALL_PKGS
           fi
 
       - name: Repository stats
