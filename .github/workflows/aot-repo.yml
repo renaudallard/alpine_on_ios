@@ -4,15 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       packages:
-        description: 'Space-separated package list (empty = base set)'
+        description: 'Space-separated package list (empty = incremental 500)'
         required: false
         default: ''
+      batch_size:
+        description: 'Packages per run (incremental mode)'
+        required: false
+        default: '500'
   schedule:
-    # Weekly rebuild to pick up Alpine security updates
-    - cron: '0 4 * * 1'
+    # Daily at 4am UTC - process next batch until complete
+    - cron: '0 4 * * *'
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: aot-repo
@@ -21,38 +26,81 @@ concurrency:
 jobs:
   build-repo:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
       - name: Build AOT patcher
         run: cc -O2 -o scripts/.aot_patch scripts/aot_patch.c
 
+      - name: Download previous repository
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: aot-repo
+          path: repo/
+          search_artifacts: true
+          if_no_artifact_found: warn
+        continue-on-error: true
+
+      - name: Build manifest of existing packages
+        run: |
+          mkdir -p repo/aarch64
+          # List already-patched packages (by filename stem)
+          ls repo/aarch64/*.apk 2>/dev/null | \
+            xargs -I{} basename {} .apk | \
+            sed 's/-[0-9].*//' | sort -u > /tmp/done.txt
+          echo "Already processed: $(wc -l < /tmp/done.txt) packages"
+
       - name: Build AOT repository
         run: |
           PKGS="${{ github.event.inputs.packages }}"
-          if [ -z "$PKGS" ]; then
-            # Full desktop: uses auto dependency resolution
-            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64
-          else
+          BATCH="${{ github.event.inputs.batch_size }}"
+          BATCH="${BATCH:-500}"
+
+          if [ -n "$PKGS" ]; then
+            # Explicit package list
             ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $PKGS
+          else
+            # Incremental: get all package names, subtract done, take next batch
+            echo "Fetching full Alpine package index..."
+            for repo in main community; do
+              curl -sL "http://dl-cdn.alpinelinux.org/alpine/v3.21/$repo/aarch64/APKINDEX.tar.gz" | \
+                tar -xzf - -O APKINDEX 2>/dev/null | \
+                awk '/^P:/ { print substr($0, 3) }'
+            done | sort -u > /tmp/all_pkgs.txt
+
+            TOTAL=$(wc -l < /tmp/all_pkgs.txt)
+            echo "Total Alpine packages: $TOTAL"
+
+            # Subtract already-done packages
+            comm -23 /tmp/all_pkgs.txt /tmp/done.txt > /tmp/remaining.txt
+            REMAINING=$(wc -l < /tmp/remaining.txt)
+            echo "Remaining: $REMAINING"
+
+            if [ "$REMAINING" -eq 0 ]; then
+              echo "All packages processed!"
+              # Rebuild APKINDEX for the complete repo
+              ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 \
+                $(head -20 /tmp/all_pkgs.txt | tr '\n' ' ')
+              exit 0
+            fi
+
+            # Take next batch
+            BATCH_PKGS=$(head -n "$BATCH" /tmp/remaining.txt | tr '\n' ' ')
+            echo "Processing batch of $(echo $BATCH_PKGS | wc -w) packages..."
+            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $BATCH_PKGS
           fi
+
+      - name: Repository stats
+        run: |
+          NAPK=$(ls repo/aarch64/*.apk 2>/dev/null | wc -l)
+          SIZE=$(du -sh repo/ 2>/dev/null | cut -f1)
+          echo "Repository: $NAPK packages, $SIZE"
 
       - name: Upload repository artifact
         uses: actions/upload-artifact@v4
         with:
           name: aot-repo
           path: repo/
-          retention-days: 30
-
-      - name: Create release archive
-        if: github.ref == 'refs/heads/main'
-        run: tar -czf aot-repo.tar.gz -C repo .
-
-      - name: Upload release archive
-        if: github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: aot-repo-archive
-          path: aot-repo.tar.gz
           retention-days: 90
+          overwrite: true
