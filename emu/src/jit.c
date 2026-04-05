@@ -127,9 +127,9 @@ jit_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		rn = imm & 0x1F;
 		UC_REGS(uc)[rn] = proc->cpu.tpidr_el0;
 	} else {
-		/* Unknown BRK */
-		LOG_ERR("jit: unexpected BRK #0x%x at 0x%llx", imm,
-		    (unsigned long long)pc);
+		/* Unknown BRK - don't use LOG_ERR (not signal-safe) */
+		static const char msg[] = "jit: unexpected BRK\n";
+		(void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
 		proc->cpu.running = 0;
 
 		for (i = 0; i < 31; i++)

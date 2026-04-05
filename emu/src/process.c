@@ -681,6 +681,13 @@ fd_table_clone(fd_table_t *src)
 
 		t->fds[i] = src->fds[i];
 
+		/*
+		 * Private state (timerfd, epoll, eventfd) is not
+		 * shared across fork.  Clear to avoid double-free.
+		 */
+		t->fds[i].private = NULL;
+		t->fds[i].close_fn = NULL;
+
 		/* Duplicate the host fd. */
 		if (src->fds[i].real_fd >= 0) {
 			newfd = dup(src->fds[i].real_fd);
