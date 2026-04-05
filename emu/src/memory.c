@@ -542,9 +542,19 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 	if (size == 0)
 		return (uint64_t)-1;
 
-	aligned_size = page_align_up(size);
-	addr = page_align_down(addr);
-	offset = offset & ~((uint64_t)PAGE_SIZE - 1);
+	{
+		long	 host_page;
+		uint64_t host_mask;
+
+		host_page = sysconf(_SC_PAGESIZE);
+		if (host_page <= 0)
+			host_page = PAGE_SIZE;
+		host_mask = ~((uint64_t)host_page - 1);
+
+		aligned_size = (size + (uint64_t)host_page - 1) & host_mask;
+		addr = addr & host_mask;
+		offset = offset & host_mask;
+	}
 
 	host_prot = 0;
 	if (prot & MEM_PROT_READ)
@@ -557,11 +567,30 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 	p = mmap((void *)addr, aligned_size, host_prot,
 	    MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
 	if (p == MAP_FAILED) {
-		LOG_ERR("mem_mmap_file: mmap failed addr=0x%lx size=0x%lx "
-		    "fd=%d off=0x%lx: %s",
-		    (unsigned long)addr, (unsigned long)aligned_size,
-		    fd, (unsigned long)offset, strerror(errno));
-		return (uint64_t)-1;
+		/*
+		 * File-backed mmap can fail if the offset is not
+		 * host-page-aligned (e.g. 4K ELF on 16K macOS).
+		 * Fall back to anonymous mmap + pread.
+		 */
+		p = mmap((void *)addr, aligned_size,
+		    PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+		if (p == MAP_FAILED) {
+			LOG_ERR("mem_mmap_file: fallback mmap failed "
+			    "addr=0x%lx size=0x%lx: %s",
+			    (unsigned long)addr,
+			    (unsigned long)aligned_size,
+			    strerror(errno));
+			return (uint64_t)-1;
+		}
+		if (pread(fd, p, size, (off_t)offset) < 0) {
+			LOG_ERR("mem_mmap_file: pread failed: %s",
+			    strerror(errno));
+			munmap(p, aligned_size);
+			return (uint64_t)-1;
+		}
+		if (host_prot & PROT_EXEC)
+			mprotect(p, aligned_size, host_prot);
 	}
 
 	pthread_mutex_lock(&ms->lock);
