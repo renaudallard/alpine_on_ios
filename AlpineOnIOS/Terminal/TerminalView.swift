@@ -25,6 +25,8 @@ struct TerminalView: View {
     @EnvironmentObject var settings: AppSettings
 
     @StateObject private var termBuffer = TerminalBuffer(cols: 80, rows: 24)
+    @State private var lastCols = 80
+    @State private var lastRows = 24
     /// TerminalParser is a class (reference type). @State is used here
     /// intentionally: the reference identity is stable across re-renders
     /// and the parser is initialized once in onAppear.
@@ -34,19 +36,27 @@ struct TerminalView: View {
     var body: some View {
         VStack(spacing: 0) {
             /* Terminal character grid */
-            ZStack {
-                TerminalGridView(buffer: termBuffer, fontSize: settings.fontSize)
-                    .background(Color.black)
+            GeometryReader { geo in
+                ZStack {
+                    TerminalGridView(buffer: termBuffer, fontSize: settings.fontSize)
+                        .background(Color.black)
 
-                /* Full-size transparent text field captures keyboard */
-                KeyboardInputView(
-                    onKeyPress: { handleKey($0) },
-                    ctrlPressed: $ctrlPressed
-                )
-            }
-            .onTapGesture {
-                NotificationCenter.default.post(
-                    name: .terminalFocusKeyboard, object: nil)
+                    /* Full-size transparent text field captures keyboard */
+                    KeyboardInputView(
+                        onKeyPress: { handleKey($0) },
+                        ctrlPressed: $ctrlPressed
+                    )
+                }
+                .onTapGesture {
+                    NotificationCenter.default.post(
+                        name: .terminalFocusKeyboard, object: nil)
+                }
+                .onChange(of: geo.size) { newSize in
+                    updateTerminalSize(newSize)
+                }
+                .onAppear {
+                    updateTerminalSize(geo.size)
+                }
             }
 
             /* Extra key row */
@@ -62,7 +72,6 @@ struct TerminalView: View {
             }
             parser = p
             startReading()
-            bridge.setWindowSize(rows: 24, cols: 80)
         }
         .onReceive(NotificationCenter.default.publisher(for: .terminalSpecialKey)) { notification in
             if let seq = notification.object as? String {
@@ -76,6 +85,19 @@ struct TerminalView: View {
             DispatchQueue.main.async {
                 parser?.feed(data)
             }
+        }
+    }
+
+    private func updateTerminalSize(_ size: CGSize) {
+        let charW = settings.fontSize * 0.6
+        let charH = settings.fontSize * 1.2
+        let cols = max(Int(size.width / charW), 20)
+        let rows = max(Int(size.height / charH), 5)
+        if cols != lastCols || rows != lastRows {
+            lastCols = cols
+            lastRows = rows
+            termBuffer.resize(newRows: rows, newCols: cols)
+            bridge.setWindowSize(rows: Int16(rows), cols: Int16(cols))
         }
     }
 
@@ -118,30 +140,50 @@ struct TerminalGridView: View {
     }
 
     var body: some View {
+        let sbCount = buffer.scrollback.count
+        let totalRows = sbCount + buffer.rows
+
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(0..<buffer.rows, id: \.self) { row in
+                    ForEach(0..<totalRows, id: \.self) { row in
                         HStack(spacing: 0) {
                             ForEach(0..<buffer.cols, id: \.self) { col in
-                                cellView(row: row, col: col)
+                                cellView(row: row, col: col,
+                                    sbCount: sbCount)
                             }
                         }
                         .id(row)
                     }
                 }
             }
-            .onChange(of: buffer.cursorRow) { newRow in
-                proxy.scrollTo(newRow, anchor: .bottom)
+            .onChange(of: buffer.cursorRow) { _ in
+                proxy.scrollTo(sbCount + buffer.cursorRow,
+                    anchor: .bottom)
+            }
+            .onChange(of: sbCount) { _ in
+                proxy.scrollTo(sbCount + buffer.cursorRow,
+                    anchor: .bottom)
             }
         }
     }
 
     @ViewBuilder
-    private func cellView(row: Int, col: Int) -> some View {
-        let cell = buffer.grid[row][col]
-        let isCursor = buffer.cursorVisible
-            && row == buffer.cursorRow
+    private func cellView(row: Int, col: Int, sbCount: Int) -> some View {
+        let cell: TerminalCell
+        let isGrid: Bool
+
+        if row < sbCount {
+            let sbRow = buffer.scrollback[row]
+            cell = col < sbRow.count ? sbRow[col] : TerminalCell()
+            isGrid = false
+        } else {
+            cell = buffer.grid[row - sbCount][col]
+            isGrid = true
+        }
+
+        let isCursor = buffer.cursorVisible && isGrid
+            && (row - sbCount) == buffer.cursorRow
             && col == buffer.cursorCol
 
         let fg = resolvedFG(cell: cell, isCursor: isCursor)
