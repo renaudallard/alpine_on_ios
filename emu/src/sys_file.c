@@ -2108,6 +2108,29 @@ timerfd_thread(void *arg)
 	return NULL;
 }
 
+static void
+timerfd_close(void *priv)
+{
+	struct timerfd_state	*tfs;
+
+	tfs = priv;
+	if (tfs == NULL)
+		return;
+
+	pthread_mutex_lock(&tfs->lock);
+	if (tfs->running) {
+		tfs->running = 0;
+		pthread_mutex_unlock(&tfs->lock);
+		pthread_join(tfs->thread, NULL);
+	} else {
+		pthread_mutex_unlock(&tfs->lock);
+	}
+
+	close(tfs->pipefd[1]);
+	pthread_mutex_destroy(&tfs->lock);
+	free(tfs);
+}
+
 static int64_t
 do_timerfd_create(emu_process_t *proc, uint64_t a0, uint64_t a1)
 {
@@ -2151,6 +2174,7 @@ do_timerfd_create(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	fde->flags = 0;
 	fde->cloexec = ((int)a1 & LINUX_O_CLOEXEC) ? 1 : 0;
 	fde->private = tfs;
+	fde->close_fn = timerfd_close;
 
 	return efd;
 }

@@ -25,6 +25,7 @@
 #define MEM_MAP_FIXED		0x10
 #define MEM_MAP_ANONYMOUS	0x20
 #define MEM_MAP_EXTERNAL	0x40	/* host buf not owned by us */
+#define MEM_MAP_CALLOC		0x100	/* host buf is calloc'd, not mmap'd */
 
 /* A contiguous region of guest memory */
 typedef struct mem_region {

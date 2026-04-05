@@ -714,10 +714,12 @@ fd_table_release(fd_table_t *tbl)
 	/* Last reference. Close fds while lock is held. */
 	for (i = 0; i < MAX_FDS; i++) {
 		if (tbl->fds[i].type != FD_NONE) {
-			if (tbl->fds[i].private != NULL)
-				free(tbl->fds[i].private);
 			if (tbl->fds[i].real_fd >= 0)
 				close(tbl->fds[i].real_fd);
+			if (tbl->fds[i].close_fn != NULL)
+				tbl->fds[i].close_fn(tbl->fds[i].private);
+			else if (tbl->fds[i].private != NULL)
+				free(tbl->fds[i].private);
 		}
 	}
 
@@ -755,7 +757,9 @@ fd_close(fd_table_t *tbl, int fd)
 	if (tbl->fds[fd].type != FD_NONE) {
 		if (tbl->fds[fd].real_fd >= 0)
 			close(tbl->fds[fd].real_fd);
-		if (tbl->fds[fd].private != NULL)
+		if (tbl->fds[fd].close_fn != NULL)
+			tbl->fds[fd].close_fn(tbl->fds[fd].private);
+		else if (tbl->fds[fd].private != NULL)
 			free(tbl->fds[fd].private);
 		memset(&tbl->fds[fd], 0, sizeof(fd_entry_t));
 	}
@@ -772,7 +776,9 @@ fd_close_cloexec(fd_table_t *tbl)
 		if (tbl->fds[i].type != FD_NONE && tbl->fds[i].cloexec) {
 			if (tbl->fds[i].real_fd >= 0)
 				close(tbl->fds[i].real_fd);
-			if (tbl->fds[i].private != NULL)
+			if (tbl->fds[i].close_fn != NULL)
+				tbl->fds[i].close_fn(tbl->fds[i].private);
+			else if (tbl->fds[i].private != NULL)
 				free(tbl->fds[i].private);
 			memset(&tbl->fds[i], 0, sizeof(fd_entry_t));
 		}

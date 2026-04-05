@@ -195,14 +195,18 @@ sig_deliver(emu_process_t *proc)
 	 * registers and the blocked signal mask.  rt_sigreturn restores
 	 * this frame.
 	 *
-	 * Frame layout (288 bytes, 16-byte aligned):
+	 * Frame layout (800 bytes, 16-byte aligned):
 	 *   +0:   x0-x30 (31 * 8 = 248)
 	 *   +248: sp     (8)
 	 *   +256: pc     (8)
 	 *   +264: nzcv   (4)
 	 *   +268: sig_blocked (8)
+	 *   +276: pad    (4)
+	 *   +280: v0-v31 (32 * 16 = 512)
+	 *   +792: fpcr   (4)
+	 *   +796: fpsr   (4)
 	 */
-#define SIGFRAME_SIZE	288
+#define SIGFRAME_SIZE	800
 
 	LOG_DBG("sig: pid %d delivering signal %d to handler 0x%lx",
 	    proc->pid, sig, (unsigned long)sa->handler);
@@ -224,6 +228,14 @@ sig_deliver(emu_process_t *proc)
 		mem_write32(proc->mem, frame_addr + 264, proc->cpu.nzcv);
 		mem_write64(proc->mem, frame_addr + 268,
 		    proc->sig_blocked);
+
+		/* Save v0-v31, fpcr, fpsr */
+		for (i = 0; i < 32; i++)
+			mem_copy_to(proc->mem,
+			    frame_addr + 280 + (uint64_t)i * 16,
+			    &proc->cpu.v[i], 16);
+		mem_write32(proc->mem, frame_addr + 792, proc->cpu.fpcr);
+		mem_write32(proc->mem, frame_addr + 796, proc->cpu.fpsr);
 
 		/* Set up for handler execution */
 		proc->cpu.sp = frame_addr;

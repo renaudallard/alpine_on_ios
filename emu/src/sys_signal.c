@@ -234,16 +234,20 @@ do_sigaltstack(emu_process_t *proc, uint64_t a0, uint64_t a1)
  *   sp+256: pc     (8 bytes)
  *   sp+264: nzcv   (4 bytes)
  *   sp+268: sig_blocked (8 bytes)
+ *   sp+276: pad    (4 bytes)
+ *   sp+280: v0-v31 (32 * 16 = 512 bytes)
+ *   sp+792: fpcr   (4 bytes)
+ *   sp+796: fpsr   (4 bytes)
  *
- * Total: 276 bytes, rounded up to 288 for alignment.
+ * Total: 800 bytes, 16-byte aligned.
  */
-#define SIGFRAME_SIZE	288
+#define SIGFRAME_SIZE	800
 
 static int64_t
 do_rt_sigreturn(emu_process_t *proc)
 {
 	uint64_t	frame_addr, val;
-	uint32_t	nzcv;
+	uint32_t	nzcv, tmp32;
 	int		i;
 
 	frame_addr = proc->cpu.sp;
@@ -275,6 +279,19 @@ do_rt_sigreturn(emu_process_t *proc)
 	if (mem_read64(proc->mem, frame_addr + 268, &val) != 0)
 		return -LINUX_EFAULT;
 	proc->sig_blocked = val;
+
+	/* Restore v0-v31, fpcr, fpsr */
+	for (i = 0; i < 32; i++) {
+		if (mem_copy_from(proc->mem, &proc->cpu.v[i],
+		    frame_addr + 280 + (uint64_t)i * 16, 16) != 0)
+			return -LINUX_EFAULT;
+	}
+	if (mem_read32(proc->mem, frame_addr + 792, &tmp32) != 0)
+		return -LINUX_EFAULT;
+	proc->cpu.fpcr = tmp32;
+	if (mem_read32(proc->mem, frame_addr + 796, &tmp32) != 0)
+		return -LINUX_EFAULT;
+	proc->cpu.fpsr = tmp32;
 
 	/*
 	 * Return value is already in x0 from the restored frame.

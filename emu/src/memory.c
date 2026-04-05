@@ -126,7 +126,11 @@ mem_space_destroy(mem_space_t *ms)
 	/* Last reference. Free regions while lock is held. */
 	for (r = ms->regions; r != NULL; r = next) {
 		next = r->next;
-		if (NATIVE_MODE(ms))
+		if (r->flags & MEM_MAP_EXTERNAL)
+			;	/* Not owned by us. */
+		else if (r->flags & MEM_MAP_CALLOC)
+			free(r->host);
+		else if (NATIVE_MODE(ms))
 			munmap(r->host, r->size);
 		else
 			free(r->host);
@@ -191,7 +195,7 @@ mem_space_clone(mem_space_t *src)
 		nr->base = r->base;
 		nr->size = r->size;
 		nr->prot = r->prot;
-		nr->flags = r->flags;
+		nr->flags = (r->flags & ~(MEM_MAP_EXTERNAL | MEM_MAP_CALLOC));
 
 		nr->host = calloc(1, r->size);
 		if (nr->host == NULL) {
@@ -220,7 +224,9 @@ region_free_host(mem_space_t *ms, mem_region_t *r)
 {
 	if (r->flags & MEM_MAP_EXTERNAL)
 		return;	/* Not owned by us. */
-	if (NATIVE_MODE(ms))
+	if (r->flags & MEM_MAP_CALLOC)
+		free(r->host);
+	else if (NATIVE_MODE(ms))
 		munmap(r->host, r->size);
 	else
 		free(r->host);
@@ -409,6 +415,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 				pthread_mutex_unlock(&ms->lock);
 				return (uint64_t)-1;
 			}
+			r->flags = MEM_MAP_CALLOC;
 			goto region_ready;
 		}
 
@@ -428,6 +435,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 				pthread_mutex_unlock(&ms->lock);
 				return (uint64_t)-1;
 			}
+			r->flags = MEM_MAP_CALLOC;
 		}
 	} else {
 		r->host = calloc(1, aligned_size);
@@ -567,10 +575,13 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 	mem_region_t	*r;
 	uint64_t	 aligned_size;
 	int		 host_prot;
+	int		 used_calloc;
 	void		*p;
 
 	if (size == 0)
 		return (uint64_t)-1;
+
+	used_calloc = 0;
 
 	{
 		long	 host_page;
@@ -614,6 +625,7 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 			free(p);
 			return (uint64_t)-1;
 		}
+		used_calloc = 1;
 	}
 
 	pthread_mutex_lock(&ms->lock);
@@ -622,7 +634,10 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 
 	r = calloc(1, sizeof(*r));
 	if (r == NULL) {
-		munmap(p, aligned_size);
+		if (used_calloc)
+			free(p);
+		else
+			munmap(p, aligned_size);
 		pthread_mutex_unlock(&ms->lock);
 		return (uint64_t)-1;
 	}
@@ -630,7 +645,7 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 	r->base = addr;
 	r->size = aligned_size;
 	r->prot = prot;
-	r->flags = MEM_MAP_PRIVATE;
+	r->flags = MEM_MAP_PRIVATE | (used_calloc ? MEM_MAP_CALLOC : 0);
 	r->host = p;
 
 	region_insert(ms, r);

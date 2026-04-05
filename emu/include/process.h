@@ -43,6 +43,7 @@ typedef struct fd_entry {
 	int		flags;		/* O_* flags */
 	int		cloexec;
 	void		*private;
+	void		(*close_fn)(void *);	/* cleanup for private */
 } fd_entry_t;
 
 /* File descriptor table (shared between threads in a process) */

@@ -629,7 +629,9 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 			uint32_t wlen = hmsg.msg_namelen;
 			if (wlen > (uint32_t)msg_namelen_val)
 				wlen = (uint32_t)msg_namelen_val;
-			mem_copy_to(proc->mem, msg_name, &ss, wlen);
+			if (wlen > 0 && mem_translate(proc->mem, msg_name,
+			    wlen, MEM_PROT_WRITE) != NULL)
+				mem_copy_to(proc->mem, msg_name, &ss, wlen);
 			mem_write32(proc->mem, a1 + 8, hmsg.msg_namelen);
 		}
 

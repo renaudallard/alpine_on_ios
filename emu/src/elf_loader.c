@@ -238,7 +238,8 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 		 * No MAP_JIT or write access needed.
 		 */
 		if (mem->aot_mode && (phdrs[i].p_flags & PF_X) &&
-		    !(phdrs[i].p_flags & PF_W)) {
+		    !(phdrs[i].p_flags & PF_W) &&
+		    phdrs[i].p_offset >= page_off) {
 			uint64_t	file_page_off;
 
 			file_page_off = phdrs[i].p_offset - page_off;
