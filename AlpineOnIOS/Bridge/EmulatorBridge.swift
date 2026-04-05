@@ -34,6 +34,8 @@ class EmulatorBridge: ObservableObject {
     private var readThread: Thread?
     private var readCallback: ((Data) -> Void)?
     private let readerLock = NSLock()
+    var initialRows: Int = 24
+    var initialCols: Int = 80
 
     // MARK: - Full startup sequence
 
@@ -114,8 +116,9 @@ class EmulatorBridge: ObservableObject {
             "USER=root",
             "SHELL=/bin/sh",
             "PS1=alpine:\\w\\$ ",
-            "COLUMNS=80",
-            "LINES=24",
+            "COLUMNS=\(initialCols)",
+            "LINES=\(initialRows)",
+            "HISTFILE=/dev/null",
         ]
 
         var fd: Int32 = -1
