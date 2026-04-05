@@ -83,6 +83,11 @@ jobs:
           SIZE=$(du -sh repo/ 2>/dev/null | cut -f1)
           echo "## AOT Repository: $NAPK packages, $SIZE" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Remove oversized packages
+        run: |
+          # GitHub rejects files > 100MB in git repos
+          find repo/aarch64 -name '*.apk' -size +95M -exec rm -v {} \;
+
       - name: Publish to aot-repo branch
         run: |
           cd repo
