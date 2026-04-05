@@ -103,6 +103,17 @@ struct TerminalView: View {
         }
 
         bridge.write(data: data)
+
+        /* Local echo: the shell runs in non-interactive mode
+         * (TCGETS returns ENOTTY) so it does not echo input.
+         * Echo printable characters and handle backspace here. */
+        for byte in data {
+            if byte == 0x08 || byte == 0x7F {
+                parser?.feed(Data([0x08, 0x20, 0x08]))
+            } else if byte >= 0x20 && byte < 0x7F {
+                parser?.feed(Data([byte]))
+            }
+        }
     }
 }
 

@@ -698,12 +698,12 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	case LINUX_TIOCSCTTY:
 	case LINUX_TIOCNOTTY:
 		/*
-		 * Return ENOTTY for all terminal ioctls.  Our fds are
-		 * socketpairs, not real terminals.  Enabling TCGETS
-		 * causes busybox to enter interactive mode which
-		 * crashes in strlen during init (string crosses a
-		 * memory page boundary).  Line-mode I/O with
-		 * COLUMNS/LINES environment works reliably.
+		 * Return ENOTTY for all terminal ioctls.  Enabling
+		 * TCGETS causes busybox to enter interactive mode
+		 * which crashes in strlen (corrupted hash table entry).
+		 * Line-mode I/O with local echo in the iOS terminal
+		 * works reliably.  Ctrl+C/^Z/^\ are handled by
+		 * tty_check_input() during read.
 		 */
 		return -LINUX_ENOTTY;
 	case LINUX_FIONREAD: {
