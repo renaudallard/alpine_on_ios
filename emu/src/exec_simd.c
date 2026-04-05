@@ -3295,6 +3295,13 @@ exec_simd(cpu_state_t *cpu, uint32_t insn)
 	 */
 	uint32_t op0 = bits(insn, 28, 24);
 
+	/*
+	 * AdvSIMD load/store: bits[28:24] = 0x0C/0x0D.
+	 * Must be checked before the data-processing op0 gate.
+	 */
+	if (!bit(insn, 31) && (op0 == 0x0C || op0 == 0x0D))
+		goto simd_ldst;
+
 	if (op0 != 0x0E && op0 != 0x0F) {
 		LOG_WARN("unimplemented SIMD/FP at 0x%llx: 0x%08x",
 		    (unsigned long long)cpu->pc, insn);
@@ -3389,6 +3396,7 @@ exec_simd(cpu_state_t *cpu, uint32_t insn)
 			return exec_shift_imm(cpu, insn);
 	}
 
+simd_ldst:
 	/* ---- Load/Store multiple structures ---- */
 	/* 0 Q 001100 L 0 Rm opcode size Rn Rt (no post-index) */
 	/* 0 Q 001100 L 1 Rm opcode size Rn Rt (post-index) */
