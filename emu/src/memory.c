@@ -38,6 +38,18 @@
 /* True when guest addr == host addr (JIT or AOT native mode). */
 #define NATIVE_MODE(ms)	((ms)->jit_mode || (ms)->aot_mode)
 
+/* Host page size (may differ from guest 4K on macOS 16K). */
+static uint64_t
+host_page_size(void)
+{
+	static uint64_t	cached;
+
+	if (cached == 0) {
+		long sz = sysconf(_SC_PAGESIZE);
+		cached = (sz > 0) ? (uint64_t)sz : PAGE_SIZE;
+	}
+	return cached;
+}
 
 static uint64_t
 page_align_down(uint64_t addr)
@@ -335,17 +347,36 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 	if (size == 0)
 		return (uint64_t)-1;
 
-	aligned_size = page_align_up(size);
+	/*
+	 * In native mode, host mmap requires host page alignment.
+	 * macOS Apple Silicon uses 16K pages while guest uses 4K.
+	 */
+	if (NATIVE_MODE(ms)) {
+		uint64_t hp = host_page_size();
+		aligned_size = (size + hp - 1) & ~(hp - 1);
+	} else {
+		aligned_size = page_align_up(size);
+	}
 
 	pthread_mutex_lock(&ms->lock);
 
 	if (flags & MEM_MAP_FIXED) {
-		addr = page_align_down(addr);
+		if (NATIVE_MODE(ms)) {
+			uint64_t hp = host_page_size();
+			addr = addr & ~(hp - 1);
+		} else {
+			addr = page_align_down(addr);
+		}
 		unmap_range(ms, addr, aligned_size);
 	} else {
 		if (addr == 0)
 			addr = ms->mmap_next;
-		addr = page_align_up(addr);
+		if (NATIVE_MODE(ms)) {
+			uint64_t hp = host_page_size();
+			addr = (addr + hp - 1) & ~(hp - 1);
+		} else {
+			addr = page_align_up(addr);
+		}
 
 		/*
 		 * Find a gap. Walk regions and look for space
