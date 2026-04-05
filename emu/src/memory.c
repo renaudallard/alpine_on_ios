@@ -600,11 +600,23 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 		/*
 		 * File-backed mmap can fail if the offset is not
 		 * host-page-aligned (e.g. 4K ELF on 16K macOS).
-		 * Fall back to anonymous mmap + pread.
+		 * Fall back to anonymous mmap + pread.  On macOS,
+		 * executable anonymous pages require MAP_JIT (plain
+		 * PROT_EXEC is rejected by code signing).
 		 */
-		p = mmap((void *)addr, aligned_size,
-		    PROT_READ | PROT_WRITE,
-		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+		{
+			int	fallback_flags;
+
+			fallback_flags = MAP_PRIVATE | MAP_ANONYMOUS |
+			    MAP_FIXED;
+#ifdef __APPLE__
+			if (host_prot & PROT_EXEC)
+				fallback_flags |= MAP_JIT;
+#endif
+			p = mmap((void *)addr, aligned_size,
+			    PROT_READ | PROT_WRITE,
+			    fallback_flags, -1, 0);
+		}
 		if (p == MAP_FAILED) {
 			LOG_ERR("mem_mmap_file: fallback mmap failed "
 			    "addr=0x%lx size=0x%lx: %s",
@@ -613,12 +625,24 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 			    strerror(errno));
 			return (uint64_t)-1;
 		}
+#ifdef __APPLE__
+		if (host_prot & PROT_EXEC)
+			JIT_WRITE_ENABLE();
+#endif
 		if (pread(fd, p, size, (off_t)offset) < 0) {
 			LOG_ERR("mem_mmap_file: pread failed: %s",
 			    strerror(errno));
+#ifdef __APPLE__
+			if (host_prot & PROT_EXEC)
+				JIT_WRITE_DISABLE();
+#endif
 			munmap(p, aligned_size);
 			return (uint64_t)-1;
 		}
+#ifdef __APPLE__
+		if (host_prot & PROT_EXEC)
+			JIT_WRITE_DISABLE();
+#endif
 		if (host_prot & PROT_EXEC)
 			mprotect(p, aligned_size, host_prot);
 	}
