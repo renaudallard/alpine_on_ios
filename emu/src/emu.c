@@ -109,28 +109,14 @@ emu_init(const char *rootfs_path)
 			g_jit_enabled = 1;
 			LOG_INFO("emu: JIT probe succeeded, JIT enabled");
 		} else {
-#if TARGET_OS_IPHONE
 			/*
-			 * iOS: enable AOT.  Pre-patched binaries use
-			 * file-backed exec mappings from the signed
-			 * app bundle.
+			 * MAP_JIT unavailable.  Enable AOT: pre-patched
+			 * binaries are ad-hoc codesigned at build time
+			 * and loaded via file-backed exec mappings.
+			 * Works on both iOS and macOS without a dev account.
 			 */
 			g_aot_enabled = 1;
 			LOG_INFO("emu: MAP_JIT unavailable, AOT enabled");
-#else
-			/*
-			 * macOS: ad-hoc signed apps can't execute from
-			 * MAP_JIT pages (code signing rejects them) and
-			 * can't mmap at fixed JIT addresses.  Fall back
-			 * to pure interpreter.
-			 */
-			struct sigaction sa_dfl;
-			memset(&sa_dfl, 0, sizeof(sa_dfl));
-			sa_dfl.sa_handler = SIG_DFL;
-			sigaction(SIGTRAP, &sa_dfl, NULL);
-			LOG_WARN("emu: MAP_JIT unavailable, "
-			    "using interpreter");
-#endif
 		}
 #else
 		g_jit_enabled = 1;

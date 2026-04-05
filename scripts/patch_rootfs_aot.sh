@@ -26,12 +26,16 @@ fi
 echo "Scanning $ROOTFS for ELF aarch64 binaries..."
 
 # Find all regular files and check for ELF magic.
-PATCHED=0
 find "$ROOTFS" -type f | while read -r f; do
 	# Quick check: first 4 bytes must be ELF magic.
 	HEAD=$(head -c 4 "$f" 2>/dev/null | od -A n -t x1 2>/dev/null | tr -d ' ')
 	if [ "$HEAD" = "7f454c46" ]; then
 		"$AOT_PATCH" "$f"
+		# On macOS, ad-hoc codesign each patched ELF so
+		# file-backed mmap(PROT_EXEC) is allowed.
+		if command -v codesign >/dev/null 2>&1; then
+			codesign --force --sign - "$f" 2>/dev/null || true
+		fi
 	fi
 done
 
