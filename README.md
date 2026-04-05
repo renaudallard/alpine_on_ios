@@ -208,6 +208,12 @@ alpine_on_ios/
 | apk signature errors | Use `--allow-untrusted` for the AOT repository |
 | Slow package install | AOT repo packages run natively; fallback repos use interpreter |
 
+## Support
+
+If you find this project useful, consider supporting its development:
+
+[![PayPal](https://img.shields.io/badge/PayPal-Donate-blue.svg?logo=paypal)](https://www.paypal.me/RenaudAllard)
+
 ## License
 
 ISC License. See source files for the full text.
