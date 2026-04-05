@@ -92,6 +92,12 @@ int emu_set_aot_enabled(int on);
 int emu_aot_enabled(void);
 
 /*
+ * Set a writable overlay directory. Files in the overlay take
+ * precedence over the rootfs (for /etc, /tmp, /home, etc.).
+ */
+void emu_set_overlay(const char *overlay_path);
+
+/*
  * Get the last error message (for diagnostics on iOS).
  */
 const char *emu_last_error(void);

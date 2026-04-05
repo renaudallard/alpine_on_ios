@@ -299,3 +299,10 @@ emu_aot_enabled(void)
 {
 	return (g_aot_enabled);
 }
+
+void
+emu_set_overlay(const char *overlay_path)
+{
+	if (g_vfs != NULL)
+		vfs_set_overlay(g_vfs, overlay_path);
+}

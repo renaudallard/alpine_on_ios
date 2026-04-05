@@ -26,6 +26,14 @@
 #include "vfs.h"
 #include "log.h"
 
+void
+vfs_set_overlay(vfs_t *vfs, const char *overlay_path)
+{
+	if (vfs == NULL || overlay_path == NULL)
+		return;
+	snprintf(vfs->overlay, sizeof(vfs->overlay), "%s", overlay_path);
+}
+
 vfs_t *
 vfs_create(const char *rootfs_path)
 {
@@ -141,10 +149,30 @@ vfs_resolve(vfs_t *vfs, const char *guest_path, char *host_path,
 	/* Normalize guest path (resolve . and ..) */
 	vfs_normalize_path("/", guest_path, pathbuf, sizeof(pathbuf));
 
+	/*
+	 * If an overlay is set, check if the file exists there first.
+	 * The overlay provides writable files (config, home, tmp)
+	 * while the rootfs (app bundle) has the read-only base.
+	 */
+	if (vfs->overlay[0] != '\0') {
+		char	ovpath[PATH_MAX];
+
+		if (snprintf(ovpath, sizeof(ovpath), "%s%s",
+		    vfs->overlay, pathbuf) < (int)sizeof(ovpath)) {
+			if (access(ovpath, F_OK) == 0) {
+				if (snprintf(resolved, sizeof(resolved),
+				    "%s", vfs->overlay) <
+				    (int)sizeof(resolved))
+					goto do_resolve;
+			}
+		}
+	}
+
 	/* Start with rootfs as base */
 	if (snprintf(resolved, sizeof(resolved), "%s", vfs->rootfs) >=
 	    (int)sizeof(resolved))
 		return (-1);
+do_resolve:
 
 	/* Split normalized path into components */
 	if (strlcpy(scratch, pathbuf, sizeof(scratch)) >= sizeof(scratch))

@@ -75,11 +75,13 @@ typedef struct vfs_mount {
 /* Virtual filesystem */
 typedef struct vfs {
 	char		rootfs[PATH_MAX];
+	char		overlay[PATH_MAX];	/* Writable overlay (checked first) */
 	vfs_mount_t	*mounts;
 } vfs_t;
 
 /* VFS lifecycle */
 vfs_t	*vfs_create(const char *rootfs_path);
+void	 vfs_set_overlay(vfs_t *vfs, const char *overlay_path);
 void	 vfs_destroy(vfs_t *vfs);
 
 /* Mount a virtual filesystem at a prefix */
