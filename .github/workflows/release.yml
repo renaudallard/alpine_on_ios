@@ -74,16 +74,21 @@ jobs:
             -configuration Release \
             CODE_SIGN_IDENTITY="-"
 
-      - name: Package macOS app
+      - name: Package macOS DMG
         run: |
           BUILD_DIR=$(xcodebuild -project AlpineOnIOS.xcodeproj \
             -scheme AlpineOnMac \
             -configuration Release \
             -showBuildSettings \
             | grep -m1 'BUILT_PRODUCTS_DIR' | awk '{print $3}')
-          ditto -c -k --keepParent \
-            "$BUILD_DIR/AlpineOnMac.app" \
-            "AlpineOnMac-${{ steps.version.outputs.tag }}.zip"
+          DMG="AlpineOnMac-${{ steps.version.outputs.tag }}.dmg"
+          STAGING=$(mktemp -d)
+          cp -R "$BUILD_DIR/AlpineOnMac.app" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create -volname "Alpine Terminal" \
+            -srcfolder "$STAGING" \
+            -ov -format UDZO "$DMG"
+          rm -rf "$STAGING"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -100,9 +105,9 @@ jobs:
             [Sideloadly](https://sideloadly.io/).
 
             ### macOS (Apple Silicon)
-            Download the `.zip`, extract, and run `AlpineOnMac.app`.
+            Download the `.dmg`, open it, and drag Alpine Terminal to Applications.
           files: |
             AlpineOnIOS-${{ steps.version.outputs.tag }}.ipa
-            AlpineOnMac-${{ steps.version.outputs.tag }}.zip
+            AlpineOnMac-${{ steps.version.outputs.tag }}.dmg
           draft: false
           prerelease: false
