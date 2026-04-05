@@ -118,17 +118,20 @@ struct AlpineOnIOSApp: App {
                 contents: content.data(using: .utf8), attributes: nil)
         }
 
-        /* Ensure apk repos use HTTP (HTTPS needs SSL which is slow
-         * in interpreter mode).  Only update if repos still use HTTPS. */
-        let reposFile = etcDir + "/apk/repositories"
-        if let data = fm.contents(atPath: reposFile),
-           let content = String(data: data, encoding: .utf8),
-           content.contains("https://") {
-            let httpRepos = content.replacingOccurrences(of: "https://",
-                with: "http://")
-            fm.createFile(atPath: reposFile,
-                contents: httpRepos.data(using: .utf8), attributes: nil)
-        }
+        /* Configure APK repositories:
+         * - AOT repo (pre-patched for native speed) as primary
+         * - Alpine HTTP mirrors as fallback */
+        let reposDir = etcDir + "/apk"
+        try? fm.createDirectory(atPath: reposDir,
+            withIntermediateDirectories: true, attributes: nil)
+        let reposFile = reposDir + "/repositories"
+        let repos = [
+            "https://raw.githubusercontent.com/renaudallard/alpine_on_ios/aot-repo/aarch64",
+            "http://dl-cdn.alpinelinux.org/alpine/v3.21/main",
+            "http://dl-cdn.alpinelinux.org/alpine/v3.21/community",
+        ].joined(separator: "\n") + "\n"
+        fm.createFile(atPath: reposFile,
+            contents: repos.data(using: .utf8), attributes: nil)
 
         /* Common applets to create as symlinks to busybox */
         let applets = [

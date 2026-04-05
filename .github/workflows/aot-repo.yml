@@ -16,7 +16,7 @@ on:
     - cron: '0 4 * * *'
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 concurrency:
@@ -33,21 +33,22 @@ jobs:
       - name: Build AOT patcher
         run: cc -O2 -o scripts/.aot_patch scripts/aot_patch.c
 
-      - name: Download previous repository
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          name: aot-repo
-          path: repo/
-          search_artifacts: true
-          if_no_artifact_found: warn
-        continue-on-error: true
+      - name: Restore previous repository from branch
+        run: |
+          mkdir -p repo/aarch64
+          if git fetch origin aot-repo 2>/dev/null; then
+            echo "Restoring from aot-repo branch..."
+            git checkout origin/aot-repo -- aarch64/ 2>/dev/null && \
+              mv aarch64/* repo/aarch64/ && rmdir aarch64 || true
+            echo "Existing packages: $(ls repo/aarch64/*.apk 2>/dev/null | wc -l)"
+          else
+            echo "No existing repository found"
+          fi
 
       - name: Build manifest of existing packages
         run: |
-          mkdir -p repo/aarch64
-          # List already-patched packages (by filename stem)
           ls repo/aarch64/*.apk 2>/dev/null | \
-            xargs -I{} basename {} .apk | \
+            xargs -I{} basename {} | \
             sed 's/-[0-9].*//' | sort -u > /tmp/done.txt
           echo "Already processed: $(wc -l < /tmp/done.txt) packages"
 
@@ -58,34 +59,25 @@ jobs:
           BATCH="${BATCH:-500}"
 
           if [ -n "$PKGS" ]; then
-            # Explicit package list
             ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $PKGS
           else
-            # Incremental: get all package names, subtract done, take next batch
             echo "Fetching full Alpine package index..."
-            for repo in main community; do
-              curl -sL "http://dl-cdn.alpinelinux.org/alpine/v3.21/$repo/aarch64/APKINDEX.tar.gz" | \
+            for r in main community; do
+              curl -sL "http://dl-cdn.alpinelinux.org/alpine/v3.21/$r/aarch64/APKINDEX.tar.gz" | \
                 tar -xzf - -O APKINDEX 2>/dev/null | \
                 awk '/^P:/ { print substr($0, 3) }'
             done | sort -u > /tmp/all_pkgs.txt
 
             TOTAL=$(wc -l < /tmp/all_pkgs.txt)
-            echo "Total Alpine packages: $TOTAL"
-
-            # Subtract already-done packages
             comm -23 /tmp/all_pkgs.txt /tmp/done.txt > /tmp/remaining.txt
             REMAINING=$(wc -l < /tmp/remaining.txt)
-            echo "Remaining: $REMAINING"
+            echo "Total: $TOTAL, Done: $((TOTAL - REMAINING)), Remaining: $REMAINING"
 
             if [ "$REMAINING" -eq 0 ]; then
               echo "All packages processed!"
-              # Rebuild APKINDEX for the complete repo
-              ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 \
-                $(head -20 /tmp/all_pkgs.txt | tr '\n' ' ')
               exit 0
             fi
 
-            # Take next batch
             BATCH_PKGS=$(head -n "$BATCH" /tmp/remaining.txt | tr '\n' ' ')
             echo "Processing batch of $(echo $BATCH_PKGS | wc -w) packages..."
             ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $BATCH_PKGS
@@ -95,12 +87,14 @@ jobs:
         run: |
           NAPK=$(ls repo/aarch64/*.apk 2>/dev/null | wc -l)
           SIZE=$(du -sh repo/ 2>/dev/null | cut -f1)
-          echo "Repository: $NAPK packages, $SIZE"
+          echo "## AOT Repository: $NAPK packages, $SIZE" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload repository artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: aot-repo
-          path: repo/
-          retention-days: 90
-          overwrite: true
+      - name: Publish to aot-repo branch
+        run: |
+          cd repo
+          git init
+          git checkout -b aot-repo
+          git add -A
+          git -c user.name="github-actions" -c user.email="actions@github.com" \
+            commit -m "AOT repo update $(date -u +%Y-%m-%d): $(ls aarch64/*.apk | wc -l) packages"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" aot-repo
