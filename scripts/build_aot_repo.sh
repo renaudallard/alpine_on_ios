@@ -1,14 +1,10 @@
 #!/bin/sh
 #
 # Build an AOT-patched Alpine APK repository.
-# Downloads packages, patches ELF binaries (SVC->BRK),
-# repackages, and rebuilds the APKINDEX.
+# Downloads packages with full dependency resolution, patches
+# ELF binaries (SVC->BRK), repackages, and rebuilds the index.
 #
 # Usage: build_aot_repo.sh <alpine_version> <arch> <output_dir> [packages...]
-#   e.g.: build_aot_repo.sh v3.21 aarch64 repo/ busybox musl apk-tools
-#
-# If no packages specified, patches the base set needed for a
-# working shell + package manager.
 #
 
 set -e
@@ -27,11 +23,25 @@ OUTDIR="$(mkdir -p "$OUTDIR" && cd "$OUTDIR" && pwd)"
 
 trap 'rm -rf "$WORKDIR"' EXIT
 
-# Default package set: shell + networking + package manager
+# Default: full desktop set
 if [ $# -eq 0 ]; then
 	set -- alpine-baselayout alpine-keys apk-tools busybox \
 	    musl libcrypto3 libssl3 zlib ca-certificates \
-	    scanelf musl-utils libc-utils ssl_client
+	    scanelf musl-utils libc-utils ssl_client \
+	    libgcc ncurses-terminfo-base ncurses-libs readline \
+	    curl wget \
+	    xorg-server xf86-video-fbdev xterm xinit xauth \
+	    mesa mesa-gl mesa-egl mesa-gbm mesa-dri-gallium \
+	    dbus dbus-libs eudev \
+	    gtk+3.0 pango harfbuzz fontconfig freetype \
+	    font-noto font-noto-emoji font-liberation \
+	    firefox-esr thunderbird \
+	    mate-desktop-environment mate-terminal mate-panel \
+	    caja marco pluma eom atril engrampa \
+	    libreoffice \
+	    adwaita-icon-theme hicolor-icon-theme \
+	    gvfs udisks2 polkit \
+	    networkmanager bash coreutils
 fi
 
 # Build the patcher tool.
@@ -40,58 +50,151 @@ if [ ! -x "$AOT_PATCH" ]; then
 	cc -O2 -o "$AOT_PATCH" "$SCRIPT_DIR/aot_patch.c"
 fi
 
-# Download APKINDEX for each repo to find package URLs.
+# Step 1: Resolve all dependencies using Alpine's package database.
+echo "Resolving dependencies for $# packages..."
+RESOLVED="$WORKDIR/resolved.txt"
+
+# Download all APKINDEX files.
 for repo in $REPOS; do
 	url="$MIRROR/$ALPINE_VER/$repo/$ARCH/APKINDEX.tar.gz"
-	echo "Fetching index: $url"
+	echo "  Fetching index: $repo"
 	curl -sL "$url" -o "$WORKDIR/APKINDEX_${repo}.tar.gz"
 	mkdir -p "$WORKDIR/idx_${repo}"
 	tar -xzf "$WORKDIR/APKINDEX_${repo}.tar.gz" -C "$WORKDIR/idx_${repo}" 2>/dev/null || true
 done
 
-# Parse APKINDEX to find package filenames.
-find_pkg() {
-	local pkg="$1"
-	for repo in $REPOS; do
-		local idx="$WORKDIR/idx_${repo}/APKINDEX"
-		[ -f "$idx" ] || continue
-		# APKINDEX format: P:name\nV:version\n\n
-		local ver
-		ver=$(awk -v pkg="$pkg" '
-			/^P:/ { name = substr($0, 3) }
-			/^V:/ { ver = substr($0, 3) }
-			/^$/ { if (name == pkg) { print ver; exit } }
-		' "$idx")
-		if [ -n "$ver" ]; then
-			echo "$repo/${pkg}-${ver}.apk"
-			return
-		fi
-	done
+# Parse all packages into a dependency database.
+cat "$WORKDIR"/idx_*/APKINDEX > "$WORKDIR/allindex"
+
+# Recursive dependency resolver using awk.
+REQUESTED="$*" awk '
+BEGIN {
+	# Read requested packages from env
+	split(ENVIRON["REQUESTED"], req, " ")
+	for (i in req) queue[req[i]] = 1
 }
 
-# Download and patch each package.
-PATCHED_PKGS=""
-for pkg in "$@"; do
-	pkgfile=$(find_pkg "$pkg")
-	if [ -z "$pkgfile" ]; then
-		echo "WARNING: package '$pkg' not found in index"
+# Parse APKINDEX
+/^P:/ { name = substr($0, 3) }
+/^V:/ { ver = substr($0, 3) }
+/^D:/ { deps = substr($0, 3) }
+/^p:/ { provides = substr($0, 3) }
+/^$/ {
+	if (name != "") {
+		versions[name] = ver
+		alldeps[name] = deps
+
+		# Register provides (including so: entries)
+		n = split(provides, prov, " ")
+		for (i = 1; i <= n; i++) {
+			sub(/[>=<].*/, "", prov[i])
+			if (prov[i] != "" && !(prov[i] in provider))
+				provider[prov[i]] = name
+		}
+	}
+	name = ""; ver = ""; deps = ""; provides = ""
+}
+
+END {
+	# BFS dependency resolution
+	iterations = 0
+	while (1) {
+		changed = 0
+		for (pkg in queue) {
+			if (pkg in resolved) continue
+			resolved[pkg] = 1
+			changed = 1
+
+			# Resolve the package name
+			actual = pkg
+			if (!(actual in versions) && (actual in provider))
+				actual = provider[actual]
+
+			n = split(alldeps[actual], d, " ")
+			for (i = 1; i <= n; i++) {
+				dep = d[i]
+				# Strip version constraints
+				sub(/[>=<].*/, "", dep)
+				# Resolve so: dependencies via providers
+				if (dep ~ /^so:/) {
+					if (dep in provider)
+						dep = provider[dep]
+					else
+						continue
+				}
+				if (dep ~ /^!/) continue
+				if (dep == "") continue
+				if (!(dep in resolved))
+					queue[dep] = 1
+			}
+		}
+		if (!changed) break
+		if (++iterations > 100) break
+	}
+
+	# Output resolved package list
+	for (pkg in resolved) {
+		actual = pkg
+		if (!(actual in versions) && (actual in provider))
+			actual = provider[actual]
+		if (actual in versions)
+			print actual
+	}
+}
+' "$WORKDIR/allindex" | sort -u > "$RESOLVED"
+
+NPKGS=$(wc -l < "$RESOLVED" | tr -d ' ')
+echo "Resolved $NPKGS packages (from $# requested)"
+
+# Step 2: Download all resolved packages.
+echo "Downloading packages..."
+DLDIR="$WORKDIR/downloads"
+mkdir -p "$DLDIR"
+
+# Build name->repo+version mapping.
+for repo in $REPOS; do
+	idx="$WORKDIR/idx_${repo}/APKINDEX"
+	[ -f "$idx" ] || continue
+	awk -v repo="$repo" '
+		/^P:/ { name = substr($0, 3) }
+		/^V:/ { ver = substr($0, 3) }
+		/^$/ { if (name != "") print name, repo, ver; name=""; ver="" }
+	' "$idx"
+done > "$WORKDIR/pkgmap"
+
+downloaded=0
+while read -r pkg; do
+	info=$(grep "^$pkg " "$WORKDIR/pkgmap" | head -1)
+	if [ -z "$info" ]; then
 		continue
 	fi
-
-	repo=$(echo "$pkgfile" | cut -d/ -f1)
-	fname=$(echo "$pkgfile" | cut -d/ -f2)
+	repo=$(echo "$info" | awk '{print $2}')
+	ver=$(echo "$info" | awk '{print $3}')
+	fname="${pkg}-${ver}.apk"
 	url="$MIRROR/$ALPINE_VER/$repo/$ARCH/$fname"
 
-	echo "Downloading: $fname"
-	curl -sL "$url" -o "$WORKDIR/$fname"
+	if [ ! -f "$DLDIR/$fname" ]; then
+		curl -sL "$url" -o "$DLDIR/$fname"
+		downloaded=$((downloaded + 1))
+		printf "\r  Downloaded %d/%d" "$downloaded" "$NPKGS"
+	fi
+done < "$RESOLVED"
+echo ""
 
-	# Extract, patch, repackage.
-	pkgdir="$WORKDIR/pkg_$pkg"
+# Step 3: Patch and repackage.
+echo "Patching ELF binaries..."
+patched_count=0
+total_patches=0
+
+for apkfile in "$DLDIR"/*.apk; do
+	[ -f "$apkfile" ] || continue
+	fname=$(basename "$apkfile")
+	pkgdir="$WORKDIR/pkg_$$"
+	rm -rf "$pkgdir"
 	mkdir -p "$pkgdir"
-	tar -xzf "$WORKDIR/$fname" -C "$pkgdir" 2>/dev/null || true
+	tar -xzf "$apkfile" -C "$pkgdir" 2>/dev/null || continue
 
-	# Patch all ELF files.
-	patched=0
+	# Patch ELF files.
 	find "$pkgdir" -type f | while read -r f; do
 		head=$(head -c 4 "$f" 2>/dev/null | od -A n -t x1 2>/dev/null | tr -d ' ')
 		if [ "$head" = "7f454c46" ]; then
@@ -99,30 +202,26 @@ for pkg in "$@"; do
 		fi
 	done
 
-	# Repackage (without signature - use --allow-untrusted on client).
-	# Remove old signatures.
+	# Remove signatures, repackage.
 	rm -f "$pkgdir"/.SIGN.*
-
-	# Create new .apk (tar.gz with all content).
 	(cd "$pkgdir" && tar -czf "$OUTDIR/$fname" .)
+	rm -rf "$pkgdir"
 
-	PATCHED_PKGS="$PATCHED_PKGS $OUTDIR/$fname"
-	echo "  Patched: $fname"
+	patched_count=$((patched_count + 1))
+	printf "\r  Patched %d/%d" "$patched_count" "$NPKGS"
 done
+echo ""
 
-# Generate APKINDEX for the patched packages.
+# Step 4: Generate APKINDEX.
 echo "Generating APKINDEX..."
 (
-	for apkfile in $PATCHED_PKGS; do
+	for apkfile in "$OUTDIR"/*.apk; do
 		[ -f "$apkfile" ] || continue
-		fname=$(basename "$apkfile")
-		size=$(wc -c < "$apkfile" | tr -d ' ')
-		# Extract .PKGINFO for metadata.
 		pkginfo=$(tar -xzf "$apkfile" -O .PKGINFO 2>/dev/null || true)
 		if [ -n "$pkginfo" ]; then
-			echo "$pkginfo" | grep -E '^(pkgname|pkgver|arch|size|pkgdesc|url|depend|provides|install_if)' || true
+			echo "$pkginfo" | grep -E '^(pkgname|pkgver|arch|size|pkgdesc|url|depend|provides|install_if|replaces|triggers)' || true
+			size=$(wc -c < "$apkfile" | tr -d ' ')
 			echo "S:$size"
-			printf "I:%s\n" "$(echo "$pkginfo" | grep '^pkgname' | cut -d= -f2 | tr -d ' ')"
 			echo ""
 		fi
 	done
@@ -130,10 +229,8 @@ echo "Generating APKINDEX..."
 
 tar -czf "$OUTDIR/APKINDEX.tar.gz" -C "$WORKDIR" APKINDEX
 
+final_count=$(ls "$OUTDIR"/*.apk 2>/dev/null | wc -l | tr -d ' ')
+total_size=$(du -sh "$OUTDIR" | cut -f1)
 echo ""
-echo "AOT repository built in $OUTDIR/"
-echo "Packages: $(echo $PATCHED_PKGS | wc -w | tr -d ' ')"
-echo ""
-echo "To use on device, add to /etc/apk/repositories:"
-echo "  /path/to/repo"
-echo "And run: apk update --allow-untrusted"
+echo "AOT repository built: $final_count packages, $total_size"
+echo "Output: $OUTDIR/"

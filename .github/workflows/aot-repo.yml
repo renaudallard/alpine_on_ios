@@ -21,6 +21,7 @@ concurrency:
 jobs:
   build-repo:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -31,15 +32,8 @@ jobs:
         run: |
           PKGS="${{ github.event.inputs.packages }}"
           if [ -z "$PKGS" ]; then
-            # Base set + common tools
-            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 \
-              alpine-baselayout alpine-keys apk-tools busybox \
-              musl libcrypto3 libssl3 zlib ca-certificates \
-              scanelf musl-utils libc-utils ssl_client \
-              libgcc s6 s6-dns s6-linux-utils s6-networking \
-              utmps libbsd libmd libffi \
-              ncurses-terminfo-base ncurses-libs readline \
-              curl wget
+            # Full desktop: uses auto dependency resolution
+            ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64
           else
             ./scripts/build_aot_repo.sh v3.21 aarch64 repo/aarch64 $PKGS
           fi
