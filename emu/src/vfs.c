@@ -131,6 +131,35 @@ int
 vfs_resolve(vfs_t *vfs, const char *guest_path, char *host_path,
     size_t host_path_size)
 {
+	return vfs_resolve_rw(vfs, guest_path, host_path, host_path_size,
+	    VFS_RESOLVE_READ);
+}
+
+/*
+ * Create parent directories in the overlay for a path.
+ */
+static void
+overlay_mkdirs(const char *path)
+{
+	char	 buf[PATH_MAX];
+	char	*p;
+
+	if (strlcpy(buf, path, sizeof(buf)) >= sizeof(buf))
+		return;
+
+	for (p = buf + 1; *p != '\0'; p++) {
+		if (*p == '/') {
+			*p = '\0';
+			mkdir(buf, 0755);
+			*p = '/';
+		}
+	}
+}
+
+int
+vfs_resolve_rw(vfs_t *vfs, const char *guest_path, char *host_path,
+    size_t host_path_size, int flags)
+{
 	const char	*sub;
 	char		 resolved[PATH_MAX];
 	char		 scratch[PATH_MAX];
@@ -149,16 +178,23 @@ vfs_resolve(vfs_t *vfs, const char *guest_path, char *host_path,
 	/* Normalize guest path (resolve . and ..) */
 	vfs_normalize_path("/", guest_path, pathbuf, sizeof(pathbuf));
 
-	/*
-	 * If an overlay is set, check if the file exists there first.
-	 * The overlay provides writable files (config, home, tmp)
-	 * while the rootfs (app bundle) has the read-only base.
-	 */
 	if (vfs->overlay[0] != '\0') {
 		char	ovpath[PATH_MAX];
 
 		if (snprintf(ovpath, sizeof(ovpath), "%s%s",
 		    vfs->overlay, pathbuf) < (int)sizeof(ovpath)) {
+			/*
+			 * For writes: always use the overlay.
+			 * Create parent directories on demand.
+			 */
+			if (flags == VFS_RESOLVE_WRITE) {
+				overlay_mkdirs(ovpath);
+				if (snprintf(resolved, sizeof(resolved),
+				    "%s", vfs->overlay) <
+				    (int)sizeof(resolved))
+					goto do_resolve;
+			}
+			/* For reads: use overlay if file exists there. */
 			if (access(ovpath, F_OK) == 0) {
 				if (snprintf(resolved, sizeof(resolved),
 				    "%s", vfs->overlay) <

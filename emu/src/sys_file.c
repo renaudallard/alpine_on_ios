@@ -289,6 +289,32 @@ resolve_path(emu_process_t *proc, int dirfd, uint64_t path_addr,
 	return vfs_resolve(proc->vfs, abs_path, host_path, host_path_size);
 }
 
+/* Resolve a guest path for writing (uses writable overlay). */
+static int
+resolve_path_write(emu_process_t *proc, int dirfd, uint64_t path_addr,
+    char *host_path, size_t host_path_size)
+{
+	char	guest_path[PATH_MAX];
+	char	abs_path[PATH_MAX];
+
+	(void)dirfd;
+
+	if (mem_read_str(proc->mem, path_addr, guest_path,
+	    sizeof(guest_path)) != 0)
+		return -LINUX_EFAULT;
+
+	if (guest_path[0] != '/') {
+		vfs_normalize_path(proc->cwd, guest_path,
+		    abs_path, sizeof(abs_path));
+	} else {
+		vfs_normalize_path("/", guest_path, abs_path,
+		    sizeof(abs_path));
+	}
+
+	return vfs_resolve_rw(proc->vfs, abs_path, host_path,
+	    host_path_size, VFS_RESOLVE_WRITE);
+}
+
 /* Fill emu_stat from host stat. */
 static void
 stat_to_emu(struct stat *hst, struct emu_stat *est)
@@ -401,9 +427,15 @@ do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		return efd;
 	}
 
-	if (resolve_path(proc, dirfd, a1, host_path,
-	    sizeof(host_path)) != 0)
-		return -LINUX_ENOENT;
+	if (linux_flags & (LINUX_O_CREAT | LINUX_O_WRONLY | LINUX_O_RDWR)) {
+		if (resolve_path_write(proc, dirfd, a1, host_path,
+		    sizeof(host_path)) != 0)
+			return -LINUX_ENOENT;
+	} else {
+		if (resolve_path(proc, dirfd, a1, host_path,
+		    sizeof(host_path)) != 0)
+			return -LINUX_ENOENT;
+	}
 
 	host_flags = translate_open_flags(linux_flags);
 
@@ -1350,7 +1382,7 @@ do_mkdirat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 
 	dirfd = (int)(int32_t)a0;
 
-	if (resolve_path(proc, dirfd, a1, host_path,
+	if (resolve_path_write(proc, dirfd, a1, host_path,
 	    sizeof(host_path)) != 0)
 		return -LINUX_ENOENT;
 
@@ -1368,7 +1400,7 @@ do_unlinkat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	dirfd = (int)(int32_t)a0;
 	flags = (int)a2;
 
-	if (resolve_path(proc, dirfd, a1, host_path,
+	if (resolve_path_write(proc, dirfd, a1, host_path,
 	    sizeof(host_path)) != 0)
 		return -LINUX_ENOENT;
 
@@ -1393,7 +1425,7 @@ do_symlinkat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 
 	if (mem_read_str(proc->mem, a0, target, sizeof(target)) != 0)
 		return -LINUX_EFAULT;
-	if (resolve_path(proc, dirfd, a2, host_path,
+	if (resolve_path_write(proc, dirfd, a2, host_path,
 	    sizeof(host_path)) != 0)
 		return -LINUX_ENOENT;
 
@@ -1415,7 +1447,7 @@ do_renameat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	if (resolve_path(proc, olddirfd, a1, old_host,
 	    sizeof(old_host)) != 0)
 		return -LINUX_ENOENT;
-	if (resolve_path(proc, newdirfd, a3, new_host,
+	if (resolve_path_write(proc, newdirfd, a3, new_host,
 	    sizeof(new_host)) != 0)
 		return -LINUX_ENOENT;
 
@@ -1432,7 +1464,7 @@ do_fchmodat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 
 	dirfd = (int)(int32_t)a0;
 
-	if (resolve_path(proc, dirfd, a1, host_path,
+	if (resolve_path_write(proc, dirfd, a1, host_path,
 	    sizeof(host_path)) != 0)
 		return -LINUX_ENOENT;
 
@@ -1471,7 +1503,7 @@ do_fchownat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 
 	dirfd = (int)(int32_t)a0;
 
-	if (resolve_path(proc, dirfd, a1, host_path,
+	if (resolve_path_write(proc, dirfd, a1, host_path,
 	    sizeof(host_path)) != 0)
 		return -LINUX_ENOENT;
 
@@ -1513,7 +1545,7 @@ do_truncate(emu_process_t *proc, uint64_t a0, uint64_t a1)
 {
 	char	host_path[PATH_MAX];
 
-	if (resolve_path(proc, LINUX_AT_FDCWD, a0, host_path,
+	if (resolve_path_write(proc, LINUX_AT_FDCWD, a0, host_path,
 	    sizeof(host_path)) != 0)
 		return -LINUX_ENOENT;
 
@@ -1731,7 +1763,7 @@ do_linkat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	if (resolve_path(proc, olddirfd, a1, old_host,
 	    sizeof(old_host)) != 0)
 		return -LINUX_ENOENT;
-	if (resolve_path(proc, newdirfd, a3, new_host,
+	if (resolve_path_write(proc, newdirfd, a3, new_host,
 	    sizeof(new_host)) != 0)
 		return -LINUX_ENOENT;
 

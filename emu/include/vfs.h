@@ -87,9 +87,14 @@ void	 vfs_destroy(vfs_t *vfs);
 /* Mount a virtual filesystem at a prefix */
 int	 vfs_mount(vfs_t *vfs, const char *prefix, vfs_ops_t *ops, void *ctx);
 
-/* Resolve a guest path to a host path (for real FS) or find the mount */
+/* Resolve a guest path to a host path (for real FS) or find the mount.
+ * VFS_RESOLVE_WRITE directs the path to the writable overlay. */
+#define VFS_RESOLVE_READ	0
+#define VFS_RESOLVE_WRITE	1
 int	 vfs_resolve(vfs_t *vfs, const char *guest_path,
 	    char *host_path, size_t host_path_size);
+int	 vfs_resolve_rw(vfs_t *vfs, const char *guest_path,
+	    char *host_path, size_t host_path_size, int flags);
 vfs_mount_t *vfs_find_mount(vfs_t *vfs, const char *path,
 	    const char **subpath);
 
