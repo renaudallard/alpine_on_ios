@@ -17,6 +17,7 @@
 #define _DEFAULT_SOURCE
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -88,7 +89,7 @@ static int64_t
 do_socket(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 {
 	int		domain, type, protocol;
-	int		hfd, efd, is_cloexec;
+	int		hfd, efd, is_cloexec, is_nonblock;
 	fd_entry_t	*fde;
 
 	domain = (int)a0;
@@ -96,11 +97,15 @@ do_socket(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	protocol = (int)a2;
 
 	is_cloexec = (type & LINUX_SOCK_CLOEXEC) != 0;
+	is_nonblock = (type & LINUX_SOCK_NONBLOCK) != 0;
 	type &= ~(LINUX_SOCK_CLOEXEC | LINUX_SOCK_NONBLOCK);
 
 	hfd = socket(domain, type, protocol);
 	if (hfd < 0)
 		return neg_errno_net(errno);
+
+	if (is_nonblock)
+		fcntl(hfd, F_SETFL, fcntl(hfd, F_GETFL) | O_NONBLOCK);
 
 	efd = fd_alloc(proc->fds, 0);
 	if (efd < 0) {
@@ -111,7 +116,7 @@ do_socket(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	fde = &proc->fds->fds[efd];
 	fde->type = FD_SOCKET;
 	fde->real_fd = hfd;
-	fde->flags = 0;
+	fde->flags = is_nonblock ? LINUX_SOCK_NONBLOCK : 0;
 	fde->cloexec = is_cloexec;
 
 	return efd;
@@ -211,7 +216,7 @@ do_listen(emu_process_t *proc, uint64_t a0, uint64_t a1)
 
 static int64_t
 do_accept(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
-    int is_cloexec)
+    int is_cloexec, int is_nonblock)
 {
 	int		fd, hfd, efd;
 	fd_entry_t	*fde, *nfde;
@@ -227,6 +232,9 @@ do_accept(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	hfd = accept(fde->real_fd, (struct sockaddr *)&ss, &sslen);
 	if (hfd < 0)
 		return neg_errno_net(errno);
+
+	if (is_nonblock)
+		fcntl(hfd, F_SETFL, fcntl(hfd, F_GETFL) | O_NONBLOCK);
 
 	efd = fd_alloc(proc->fds, 0);
 	if (efd < 0) {
@@ -597,12 +605,13 @@ sys_net(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 	case SYS_LISTEN:
 		return do_listen(proc, a0, a1);
 	case SYS_ACCEPT:
-		return do_accept(proc, a0, a1, a2, 0);
+		return do_accept(proc, a0, a1, a2, 0, 0);
 	case SYS_ACCEPT4: {
-		int	cloexec;
+		int	cloexec, nonblock;
 
 		cloexec = ((int)a3 & LINUX_SOCK_CLOEXEC) != 0;
-		return do_accept(proc, a0, a1, a2, cloexec);
+		nonblock = ((int)a3 & LINUX_SOCK_NONBLOCK) != 0;
+		return do_accept(proc, a0, a1, a2, cloexec, nonblock);
 	}
 	case SYS_CONNECT:
 		return do_connect(proc, a0, a1, a2);
