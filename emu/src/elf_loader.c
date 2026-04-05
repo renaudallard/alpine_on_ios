@@ -232,6 +232,29 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 		prot = elf_pflags_to_prot(phdrs[i].p_flags);
 
+		/*
+		 * AOT mode: executable segments are mapped directly
+		 * from the pre-patched file (file-backed PROT_EXEC).
+		 * No MAP_JIT or write access needed.
+		 */
+		if (mem->aot_mode && (phdrs[i].p_flags & PF_X) &&
+		    !(phdrs[i].p_flags & PF_W)) {
+			uint64_t	file_page_off;
+
+			file_page_off = phdrs[i].p_offset - page_off;
+			if (mem_mmap_file(mem, map_addr, map_size,
+			    prot, fd, file_page_off) == (uint64_t)-1) {
+				emu_set_error("elf: AOT mmap failed seg %d",
+				    i);
+				goto fail;
+			}
+			LOG_DBG("elf_load: seg %d AOT file-backed "
+			    "mapaddr=0x%lx size=0x%lx",
+			    i, (unsigned long)map_addr,
+			    (unsigned long)map_size);
+			continue;
+		}
+
 		/* Map with write permission so we can fill data. */
 		if (mem_mmap(mem, map_addr, map_size,
 		    prot | MEM_PROT_WRITE,

@@ -38,6 +38,7 @@
 static vfs_t		*g_vfs;
 static int		 g_initialized;
 static int		 g_jit_enabled;
+static int		 g_aot_enabled;
 static pthread_mutex_t	 g_lock = PTHREAD_MUTEX_INITIALIZER;
 static char		 g_last_error[512];
 
@@ -86,9 +87,11 @@ emu_init(const char *rootfs_path)
 		return (-1);
 	}
 
-	/* Enable JIT on aarch64 if MAP_JIT is available.
-	 * Probe with a small mmap to verify JIT works before enabling,
-	 * since sideloaded apps may not have the JIT entitlement. */
+	/*
+	 * Enable native execution.  Try JIT (MAP_JIT) first.
+	 * If MAP_JIT is unavailable, keep the SIGTRAP handler
+	 * for AOT mode (file-backed executable mappings).
+	 */
 	if (jit_available() && jit_init() == 0) {
 #ifdef __APPLE__
 		void *probe = mmap((void *)0x500000000ULL, 4096,
@@ -100,14 +103,13 @@ emu_init(const char *rootfs_path)
 			g_jit_enabled = 1;
 			LOG_INFO("emu: JIT probe succeeded, JIT enabled");
 		} else {
-			/* JIT not available: remove SIGTRAP handler to
-			 * avoid crashing on stray traps in interpreter mode */
-			struct sigaction sa_dfl;
-			memset(&sa_dfl, 0, sizeof(sa_dfl));
-			sa_dfl.sa_handler = SIG_DFL;
-			sigaction(SIGTRAP, &sa_dfl, NULL);
-			LOG_WARN("emu: JIT probe failed (%s), "
-			    "using interpreter", strerror(errno));
+			/*
+			 * MAP_JIT unavailable but SIGTRAP handler is
+			 * installed.  Enable AOT: pre-patched binaries
+			 * run natively via file-backed exec mappings.
+			 */
+			g_aot_enabled = 1;
+			LOG_INFO("emu: MAP_JIT unavailable, AOT enabled");
 		}
 #else
 		g_jit_enabled = 1;
@@ -278,4 +280,22 @@ int
 emu_jit_enabled(void)
 {
 	return (g_jit_enabled);
+}
+
+int
+emu_set_aot_enabled(int on)
+{
+	int	prev;
+
+	pthread_mutex_lock(&g_lock);
+	prev = g_aot_enabled;
+	g_aot_enabled = on;
+	pthread_mutex_unlock(&g_lock);
+	return (prev);
+}
+
+int
+emu_aot_enabled(void)
+{
+	return (g_aot_enabled);
 }

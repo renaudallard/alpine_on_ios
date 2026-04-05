@@ -361,11 +361,17 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	if (newmem == NULL)
 		return (-ENOMEM);
 
-	/* Determine if JIT mode should be used. */
+	/* Determine execution mode. */
 	use_jit = (proc->mem != NULL && proc->mem->jit_mode) ||
 	    (jit_available() && emu_jit_enabled());
 	if (use_jit) {
 		newmem->jit_mode = 1;
+		newmem->mmap_next = MMAP_START_JIT;
+		bin_base = JIT_BINARY_BASE;
+		interp_base = JIT_INTERP_BASE;
+		stack_top = JIT_STACK_TOP;
+	} else if (emu_aot_enabled()) {
+		newmem->aot_mode = 1;
 		newmem->mmap_next = MMAP_START_JIT;
 		bin_base = JIT_BINARY_BASE;
 		interp_base = JIT_INTERP_BASE;
@@ -542,9 +548,12 @@ proc_run(void *arg)
 	    (unsigned long)proc->cpu.pc, (unsigned long)proc->cpu.sp);
 
 #ifdef __aarch64__
-	/* Use JIT native execution when available. */
-	if (proc->mem != NULL && proc->mem->jit_mode && jit_available()) {
-		LOG_INFO("proc: pid %d using JIT execution", proc->pid);
+	/* Use native execution (JIT or AOT) when available. */
+	if (proc->mem != NULL &&
+	    (proc->mem->jit_mode || proc->mem->aot_mode) &&
+	    jit_available()) {
+		LOG_INFO("proc: pid %d using %s execution", proc->pid,
+		    proc->mem->aot_mode ? "AOT" : "JIT");
 		jit_run(proc);
 		proc_run_exit(proc, proc->cpu.exit_code);
 		return (NULL);

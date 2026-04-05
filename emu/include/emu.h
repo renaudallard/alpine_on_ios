@@ -85,6 +85,13 @@ int emu_set_jit_enabled(int on);
 int emu_jit_enabled(void);
 
 /*
+ * Enable AOT mode. Pre-patched binaries in the rootfs are loaded
+ * with file-backed executable mappings (no MAP_JIT needed).
+ */
+int emu_set_aot_enabled(int on);
+int emu_aot_enabled(void);
+
+/*
  * Get the last error message (for diagnostics on iOS).
  */
 const char *emu_last_error(void);

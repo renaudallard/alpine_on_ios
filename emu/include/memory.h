@@ -44,6 +44,7 @@ typedef struct mem_space {
 	uint64_t	mmap_next;	/* Next mmap hint addr */
 	pthread_mutex_t	lock;
 	int		jit_mode;	/* 1 = JIT (mmap at guest addr) */
+	int		aot_mode;	/* 1 = AOT (file-backed exec) */
 	int		refcount;	/* Shared memory reference count */
 } mem_space_t;
 
@@ -58,6 +59,8 @@ uint64_t	mem_mmap(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot, int flags, int fd, uint64_t offset);
 uint64_t	mem_mmap_host(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot, uint8_t *host_buf);
+uint64_t	mem_mmap_file(mem_space_t *, uint64_t addr, uint64_t size,
+		    int prot, int fd, uint64_t offset);
 int		mem_munmap(mem_space_t *, uint64_t addr, uint64_t size);
 int		mem_mprotect(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot);

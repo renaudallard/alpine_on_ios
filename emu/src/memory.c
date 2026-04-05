@@ -35,6 +35,9 @@
 #define PAGE_MASK	(~((uint64_t)PAGE_SIZE - 1))
 #define MMAP_START	0x7F0000000000ULL
 
+/* True when guest addr == host addr (JIT or AOT native mode). */
+#define NATIVE_MODE(ms)	((ms)->jit_mode || (ms)->aot_mode)
+
 
 static uint64_t
 page_align_down(uint64_t addr)
@@ -111,7 +114,7 @@ mem_space_destroy(mem_space_t *ms)
 	/* Last reference. Free regions while lock is held. */
 	for (r = ms->regions; r != NULL; r = next) {
 		next = r->next;
-		if (ms->jit_mode)
+		if (NATIVE_MODE(ms))
 			munmap(r->host, r->size);
 		else
 			free(r->host);
@@ -205,7 +208,7 @@ region_free_host(mem_space_t *ms, mem_region_t *r)
 {
 	if (r->flags & MEM_MAP_EXTERNAL)
 		return;	/* Not owned by us. */
-	if (ms->jit_mode)
+	if (NATIVE_MODE(ms))
 		munmap(r->host, r->size);
 	else
 		free(r->host);
@@ -251,7 +254,7 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 			tail->prot = r->prot;
 			tail->flags = r->flags;
 
-			if (ms->jit_mode) {
+			if (NATIVE_MODE(ms)) {
 				int	mflags, mprot;
 
 				mflags = MAP_PRIVATE | MAP_ANONYMOUS |
@@ -303,7 +306,7 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 			uint64_t	trim;
 
 			trim = end - r->base;
-			if (!ms->jit_mode) {
+			if (!NATIVE_MODE(ms)) {
 				uint8_t	*newhost;
 
 				newhost = calloc(1, r->size - trim);
@@ -376,7 +379,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		return (uint64_t)-1;
 	}
 
-	if (ms->jit_mode) {
+	if (NATIVE_MODE(ms)) {
 		int	mflags, mprot;
 
 		mflags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
@@ -420,7 +423,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		if (to_read > aligned_size)
 			to_read = aligned_size;
 
-		if (ms->jit_mode) {
+		if (NATIVE_MODE(ms)) {
 #ifdef __APPLE__
 			if (prot & MEM_PROT_EXEC)
 				JIT_WRITE_ENABLE();
@@ -437,11 +440,13 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 			LOG_WARN("mmap: pread failed for fd %d", fd);
 	}
 
-	/* JIT mode: set final protection and patch executable code. */
-	if (ms->jit_mode && (prot & MEM_PROT_EXEC)) {
+	/* JIT mode: set final protection and patch executable code.
+	 * AOT mode skips patching (already done at build time). */
+	if (NATIVE_MODE(ms) && (prot & MEM_PROT_EXEC)) {
 		int	fp;
 
-		jit_patch_code(r->host, aligned_size);
+		if (!ms->aot_mode)
+			jit_patch_code(r->host, aligned_size);
 		fp = PROT_READ | PROT_EXEC;
 		if (prot & MEM_PROT_WRITE)
 			fp |= PROT_WRITE;
@@ -520,6 +525,68 @@ mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
 	return addr;
 }
 
+/*
+ * Map a file region into the guest address space at a fixed address.
+ * Used by AOT mode to create file-backed executable mappings that
+ * iOS allows without MAP_JIT (the file is in the signed app bundle).
+ */
+uint64_t
+mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
+    int prot, int fd, uint64_t offset)
+{
+	mem_region_t	*r;
+	uint64_t	 aligned_size;
+	int		 host_prot;
+	void		*p;
+
+	if (size == 0)
+		return (uint64_t)-1;
+
+	aligned_size = page_align_up(size);
+	addr = page_align_down(addr);
+	offset = offset & ~((uint64_t)PAGE_SIZE - 1);
+
+	host_prot = 0;
+	if (prot & MEM_PROT_READ)
+		host_prot |= PROT_READ;
+	if (prot & MEM_PROT_WRITE)
+		host_prot |= PROT_WRITE;
+	if (prot & MEM_PROT_EXEC)
+		host_prot |= PROT_EXEC;
+
+	p = mmap((void *)addr, aligned_size, host_prot,
+	    MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
+	if (p == MAP_FAILED) {
+		LOG_ERR("mem_mmap_file: mmap failed addr=0x%lx size=0x%lx "
+		    "fd=%d off=0x%lx: %s",
+		    (unsigned long)addr, (unsigned long)aligned_size,
+		    fd, (unsigned long)offset, strerror(errno));
+		return (uint64_t)-1;
+	}
+
+	pthread_mutex_lock(&ms->lock);
+
+	unmap_range(ms, addr, aligned_size);
+
+	r = calloc(1, sizeof(*r));
+	if (r == NULL) {
+		munmap(p, aligned_size);
+		pthread_mutex_unlock(&ms->lock);
+		return (uint64_t)-1;
+	}
+
+	r->base = addr;
+	r->size = aligned_size;
+	r->prot = prot;
+	r->flags = MEM_MAP_PRIVATE;
+	r->host = p;
+
+	region_insert(ms, r);
+	pthread_mutex_unlock(&ms->lock);
+
+	return addr;
+}
+
 int
 mem_munmap(mem_space_t *ms, uint64_t addr, uint64_t size)
 {
@@ -586,7 +653,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 				nr->prot = prot;
 				nr->flags = r->flags;
 
-				if (!ms->jit_mode) {
+				if (!NATIVE_MODE(ms)) {
 					nr->host = calloc(1, nr->size);
 					if (nr->host == NULL) {
 						free(nr);
@@ -604,7 +671,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 					/* Also need a tail region */
 					mem_region_t *tr = calloc(1, sizeof(*tr));
 					if (tr == NULL) {
-						if (!ms->jit_mode)
+						if (!NATIVE_MODE(ms))
 							free(nr->host);
 						free(nr);
 						break;
@@ -614,7 +681,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 					tr->prot = r->prot;
 					tr->flags = r->flags;
 
-					if (!ms->jit_mode) {
+					if (!NATIVE_MODE(ms)) {
 						tr->host = calloc(1, tr->size);
 						if (tr->host == NULL) {
 							free(nr->host);
@@ -636,7 +703,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 					nr->next = r->next;
 				}
 
-				if (!ms->jit_mode) {
+				if (!NATIVE_MODE(ms)) {
 					/* Shrink original's host buffer. */
 					uint64_t newsize;
 					uint8_t *newhost;
@@ -663,7 +730,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 				nr->prot = r->prot;
 				nr->flags = r->flags;
 
-				if (!ms->jit_mode) {
+				if (!NATIVE_MODE(ms)) {
 					nr->host = calloc(1, nr->size);
 					if (nr->host == NULL) {
 						free(nr);
@@ -698,14 +765,15 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 			continue;	/* JIT mprotect handled per-region below */
 		}
 
-		if (ms->jit_mode) {
+		if (NATIVE_MODE(ms)) {
 			int	hp = 0;
 			if (prot & MEM_PROT_READ)
 				hp |= PROT_READ;
 			if (prot & MEM_PROT_WRITE)
 				hp |= PROT_WRITE;
 			if (prot & MEM_PROT_EXEC) {
-				if (!(old_prot & MEM_PROT_EXEC))
+				if (!(old_prot & MEM_PROT_EXEC) &&
+				    !ms->aot_mode)
 					jit_patch_code(r->host, r->size);
 				hp |= PROT_EXEC;
 			}
@@ -754,7 +822,7 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 					break;
 			}
 
-			if (r != NULL && !ms->jit_mode) {
+			if (r != NULL && !NATIVE_MODE(ms)) {
 				uint8_t	*newhost;
 
 				newhost = realloc(r->host, r->size + grow);
@@ -765,7 +833,7 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 				memset(newhost + r->size, 0, grow);
 				r->host = newhost;
 				r->size += grow;
-			} else if (r != NULL && ms->jit_mode) {
+			} else if (r != NULL && NATIVE_MODE(ms)) {
 				/* Extend by mapping adjacent pages. */
 				uint64_t	ext_base;
 				void		*p;
@@ -787,7 +855,7 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 					return ms->brk_current;
 				}
 				new_size = new_brk - ms->brk_base;
-				if (ms->jit_mode) {
+				if (NATIVE_MODE(ms)) {
 					r->host = mmap(
 					    (void *)ms->brk_base, new_size,
 					    PROT_READ | PROT_WRITE,
@@ -835,7 +903,7 @@ mem_translate(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 	 * JIT mode: guest addr = host addr.  Still check region
 	 * bounds for safety, but the host pointer is the addr itself.
 	 */
-	if (ms->jit_mode) {
+	if (NATIVE_MODE(ms)) {
 		pthread_mutex_lock(&ms->lock);
 		for (r = ms->regions; r != NULL; r = r->next) {
 			if (addr >= r->base &&
