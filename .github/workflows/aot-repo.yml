@@ -13,8 +13,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: aot-repo
@@ -53,42 +51,14 @@ jobs:
           path: repo/
           retention-days: 30
 
-      - name: Setup Pages
+      - name: Create release archive
         if: github.ref == 'refs/heads/main'
-        uses: actions/configure-pages@v4
+        run: tar -czf aot-repo.tar.gz -C repo .
 
-      - name: Create Pages content
+      - name: Upload release archive
         if: github.ref == 'refs/heads/main'
-        run: |
-          mkdir -p _site/alpine/v3.21/aot/aarch64
-          cp repo/aarch64/* _site/alpine/v3.21/aot/aarch64/
-          cat > _site/index.html << 'EOF'
-          <html><body>
-          <h1>Alpine on iOS - AOT Repository</h1>
-          <p>Pre-patched Alpine packages for native execution on iOS.</p>
-          <pre>
-          # Add to /etc/apk/repositories:
-          https://renaudallard.github.io/alpine_on_ios/alpine/v3.21/aot
-
-          # Then: apk update --allow-untrusted
-          </pre>
-          </body></html>
-          EOF
-
-      - name: Upload to GitHub Pages
-        if: github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          path: _site
-
-  deploy-pages:
-    if: github.ref == 'refs/heads/main'
-    needs: build-repo
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          name: aot-repo-archive
+          path: aot-repo.tar.gz
+          retention-days: 90
