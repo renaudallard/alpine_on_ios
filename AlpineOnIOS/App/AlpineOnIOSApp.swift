@@ -118,6 +118,18 @@ struct AlpineOnIOSApp: App {
                 contents: content.data(using: .utf8), attributes: nil)
         }
 
+        /* Ensure apk repos use HTTP (HTTPS needs SSL which is slow
+         * in interpreter mode).  Only update if repos still use HTTPS. */
+        let reposFile = etcDir + "/apk/repositories"
+        if let data = fm.contents(atPath: reposFile),
+           let content = String(data: data, encoding: .utf8),
+           content.contains("https://") {
+            let httpRepos = content.replacingOccurrences(of: "https://",
+                with: "http://")
+            fm.createFile(atPath: reposFile,
+                contents: httpRepos.data(using: .utf8), attributes: nil)
+        }
+
         /* Common applets to create as symlinks to busybox */
         let applets = [
             "/bin": ["sh", "ash", "ls", "cat", "cp", "mv", "rm", "mkdir",
