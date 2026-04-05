@@ -347,36 +347,17 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 	if (size == 0)
 		return (uint64_t)-1;
 
-	/*
-	 * In native mode, host mmap requires host page alignment.
-	 * macOS Apple Silicon uses 16K pages while guest uses 4K.
-	 */
-	if (NATIVE_MODE(ms)) {
-		uint64_t hp = host_page_size();
-		aligned_size = (size + hp - 1) & ~(hp - 1);
-	} else {
-		aligned_size = page_align_up(size);
-	}
+	aligned_size = page_align_up(size);
 
 	pthread_mutex_lock(&ms->lock);
 
 	if (flags & MEM_MAP_FIXED) {
-		if (NATIVE_MODE(ms)) {
-			uint64_t hp = host_page_size();
-			addr = addr & ~(hp - 1);
-		} else {
-			addr = page_align_down(addr);
-		}
+		addr = page_align_down(addr);
 		unmap_range(ms, addr, aligned_size);
 	} else {
 		if (addr == 0)
 			addr = ms->mmap_next;
-		if (NATIVE_MODE(ms)) {
-			uint64_t hp = host_page_size();
-			addr = (addr + hp - 1) & ~(hp - 1);
-		} else {
-			addr = page_align_up(addr);
-		}
+		addr = page_align_up(addr);
 
 		/*
 		 * Find a gap. Walk regions and look for space
@@ -412,6 +393,24 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 
 	if (NATIVE_MODE(ms)) {
 		int	mflags, mprot;
+		uint64_t hp = host_page_size();
+
+		/*
+		 * If the guest address isn't host-page-aligned
+		 * (e.g. 4K ELF segment on 16K macOS), fall back
+		 * to calloc.  mem_translate uses r->host + offset
+		 * so this works transparently.
+		 */
+		if ((addr & (hp - 1)) != 0 ||
+		    (aligned_size & (hp - 1)) != 0) {
+			r->host = calloc(1, aligned_size);
+			if (r->host == NULL) {
+				free(r);
+				pthread_mutex_unlock(&ms->lock);
+				return (uint64_t)-1;
+			}
+			goto region_ready;
+		}
 
 		mflags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
 		mprot = PROT_READ | PROT_WRITE;
@@ -422,14 +421,13 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		r->host = mmap((void *)addr, aligned_size,
 		    mprot, mflags, -1, 0);
 		if (r->host == MAP_FAILED) {
-			LOG_ERR("mem_mmap: mmap failed addr=0x%lx "
-			    "size=0x%lx prot=0x%x flags=0x%x: %s",
-			    (unsigned long)addr,
-			    (unsigned long)aligned_size,
-			    mprot, mflags, strerror(errno));
-			free(r);
-			pthread_mutex_unlock(&ms->lock);
-			return (uint64_t)-1;
+			/* Fallback to calloc on mmap failure. */
+			r->host = calloc(1, aligned_size);
+			if (r->host == NULL) {
+				free(r);
+				pthread_mutex_unlock(&ms->lock);
+				return (uint64_t)-1;
+			}
 		}
 	} else {
 		r->host = calloc(1, aligned_size);
@@ -440,6 +438,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		}
 	}
 
+region_ready:
 	r->base = addr;
 	r->size = aligned_size;
 	r->prot = prot;
@@ -960,26 +959,13 @@ mem_translate(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 	mem_region_t	*r;
 
 	/*
-	 * JIT mode: guest addr = host addr.  Still check region
-	 * bounds for safety, but the host pointer is the addr itself.
+	 * Unified path for all modes. For native-mode regions,
+	 * r->host == mmap'd address (== r->base), so the formula
+	 * r->host + (addr - r->base) returns the same pointer.
+	 * For interpreter regions, r->host is a calloc'd buffer.
+	 * This allows mixing native and interpreter regions in
+	 * AOT mode (needed when host page size > guest page size).
 	 */
-	if (NATIVE_MODE(ms)) {
-		pthread_mutex_lock(&ms->lock);
-		for (r = ms->regions; r != NULL; r = r->next) {
-			if (addr >= r->base &&
-			    addr + size <= r->base + r->size) {
-				if ((r->prot & prot) != prot) {
-					pthread_mutex_unlock(&ms->lock);
-					return NULL;
-				}
-				pthread_mutex_unlock(&ms->lock);
-				return (void *)addr;
-			}
-		}
-		pthread_mutex_unlock(&ms->lock);
-		return NULL;
-	}
-
 	pthread_mutex_lock(&ms->lock);
 	for (r = ms->regions; r != NULL; r = r->next) {
 		if (addr >= r->base && addr + size <= r->base + r->size) {
