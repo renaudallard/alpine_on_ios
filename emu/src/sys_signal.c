@@ -314,6 +314,14 @@ sys_signal(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 		return do_tgkill(proc, a0, a1, a2);
 	case SYS_SIGALTSTACK:
 		return do_sigaltstack(proc, a0, a1);
+	case SYS_SIGNALFD4:
+		/*
+		 * signalfd4(fd, mask, size, flags).
+		 * Return ENOSYS: programs fall back to sigaction/ppoll.
+		 * Full implementation would require a readable fd that
+		 * delivers signal info structs on read().
+		 */
+		return -LINUX_ENOSYS;
 	default:
 		LOG_WARN("sys_signal: unhandled nr=%d", nr);
 		return -LINUX_ENOSYS;

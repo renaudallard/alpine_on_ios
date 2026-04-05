@@ -161,8 +161,10 @@ typedef struct emu_process emu_process_t;
 #define SYS_WAIT4		260
 #define SYS_PRLIMIT64		261
 #define SYS_RENAMEAT2		276
+#define SYS_COPY_FILE_RANGE	285
 #define SYS_GETRANDOM		278
 #define SYS_MEMFD_CREATE	279
+#define SYS_SIGNALFD4		74
 #define SYS_STATX		291
 #define SYS_RSEQ		293
 #define SYS_CLONE3		435

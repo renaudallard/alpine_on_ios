@@ -2431,6 +2431,66 @@ sys_file(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 		return do_ppoll(proc, a0, a1, a2, a3);
 	case SYS_PSELECT6:
 		return do_pselect6(proc, a0, a1, a2, a3, a4);
+	case SYS_COPY_FILE_RANGE: {
+		/* copy_file_range(fd_in, off_in, fd_out, off_out, len, flags) */
+		fd_entry_t	*in_fde, *out_fde;
+		int		 in_fd, out_fd;
+		char		 cbuf[4096];
+		ssize_t		 total, n, w;
+		uint64_t	 off_in, off_out, remain;
+		int		 has_off_in, has_off_out;
+
+		in_fd = (int)a0;
+		out_fd = (int)(int32_t)a2;
+		in_fde = fd_get(proc->fds, in_fd);
+		out_fde = fd_get(proc->fds, out_fd);
+		if (in_fde == NULL || out_fde == NULL)
+			return -LINUX_EBADF;
+
+		has_off_in = (a1 != 0);
+		has_off_out = (a3 != 0);
+		off_in = off_out = 0;
+		if (has_off_in &&
+		    mem_read64(proc->mem, a1, &off_in) != 0)
+			return -LINUX_EFAULT;
+		if (has_off_out &&
+		    mem_read64(proc->mem, a3, &off_out) != 0)
+			return -LINUX_EFAULT;
+
+		remain = a4;
+		total = 0;
+		while (remain > 0) {
+			size_t chunk = remain > sizeof(cbuf) ?
+			    sizeof(cbuf) : (size_t)remain;
+			if (has_off_in) {
+				n = pread(in_fde->real_fd, cbuf, chunk,
+				    (off_t)off_in);
+			} else {
+				n = read(in_fde->real_fd, cbuf, chunk);
+			}
+			if (n <= 0)
+				break;
+			if (has_off_out) {
+				w = pwrite(out_fde->real_fd, cbuf,
+				    (size_t)n, (off_t)off_out);
+			} else {
+				w = write(out_fde->real_fd, cbuf,
+				    (size_t)n);
+			}
+			if (w <= 0)
+				break;
+			off_in += (uint64_t)w;
+			off_out += (uint64_t)w;
+			total += w;
+			remain -= (uint64_t)w;
+		}
+		if (has_off_in)
+			mem_write64(proc->mem, a1, off_in);
+		if (has_off_out)
+			mem_write64(proc->mem, a3, off_out);
+		return total > 0 ? total : (total == 0 && a4 > 0 ?
+		    neg_errno(errno) : 0);
+	}
 	default:
 		LOG_WARN("sys_file: unhandled nr=%d", nr);
 		return -LINUX_ENOSYS;

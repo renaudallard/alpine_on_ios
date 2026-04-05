@@ -96,6 +96,7 @@ sys_handle(emu_process_t *proc)
 	case SYS_TIMERFD_SETTIME:
 	case SYS_PPOLL:
 	case SYS_PSELECT6:
+	case SYS_COPY_FILE_RANGE:
 		ret = sys_file(proc, (int)nr, a0, a1, a2, a3, a4, a5);
 		break;
 
@@ -170,6 +171,7 @@ sys_handle(emu_process_t *proc)
 	case SYS_TKILL:
 	case SYS_TGKILL:
 	case SYS_SIGALTSTACK:
+	case SYS_SIGNALFD4:
 		ret = sys_signal(proc, (int)nr, a0, a1, a2, a3, a4, a5);
 		break;
 
