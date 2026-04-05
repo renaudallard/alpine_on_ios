@@ -826,9 +826,19 @@ do_fcntl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return 0;
 	case LINUX_F_GETFL:
 		return fde->flags;
-	case LINUX_F_SETFL:
+	case LINUX_F_SETFL: {
+		int	host_fl;
+
+		/* Propagate flags to the real host fd. */
+		host_fl = 0;
+		if ((int)a2 & LINUX_O_NONBLOCK)
+			host_fl |= O_NONBLOCK;
+		if ((int)a2 & LINUX_O_APPEND)
+			host_fl |= O_APPEND;
+		fcntl(fde->real_fd, F_SETFL, host_fl);
 		fde->flags = (int)a2;
 		return 0;
+	}
 	case LINUX_F_DUPFD:
 	case LINUX_F_DUPFD_CLOEXEC: {
 		int		newfd;
