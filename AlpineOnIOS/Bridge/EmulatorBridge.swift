@@ -109,7 +109,7 @@ class EmulatorBridge: ObservableObject {
         let argv = ["sh"]
         let envp = [
             "HOME=/root",
-            "TERM=dumb",
+            "TERM=xterm-256color",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "USER=root",
             "SHELL=/bin/sh",

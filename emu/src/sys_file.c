@@ -30,6 +30,7 @@
 #include "syscall.h"
 #include "process.h"
 #include "memory.h"
+#include "signal_emu.h"
 #include "vfs.h"
 #include "framebuffer.h"
 #include "vfs_input.h"
@@ -443,6 +444,31 @@ do_close(emu_process_t *proc, uint64_t a0)
 	return 0;
 }
 
+/*
+ * Check for control characters in TTY input.
+ * In non-interactive mode the kernel doesn't process ^C etc.,
+ * so we handle them here by sending the appropriate signal.
+ */
+static void
+tty_check_input(emu_process_t *proc, const uint8_t *buf, ssize_t n)
+{
+	ssize_t	i;
+
+	for (i = 0; i < n; i++) {
+		switch (buf[i]) {
+		case 0x03:	/* ^C → SIGINT */
+			sig_send(proc, EMU_SIGINT);
+			break;
+		case 0x1C:	/* ^\ → SIGQUIT */
+			sig_send(proc, EMU_SIGQUIT);
+			break;
+		case 0x1A:	/* ^Z → SIGTSTP */
+			sig_send(proc, EMU_SIGTSTP);
+			break;
+		}
+	}
+}
+
 static int64_t
 do_read(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 {
@@ -466,6 +492,10 @@ do_read(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	n = read(fde->real_fd, buf, (size_t)a2);
 	if (n < 0)
 		return neg_errno(errno);
+
+	if (n > 0 && fde->type == FD_TTY)
+		tty_check_input(proc, buf, n);
+
 	return n;
 }
 
@@ -657,22 +687,23 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EBADF;
 
 	switch (a1) {
-	case LINUX_TIOCGWINSZ:
-	case LINUX_TIOCSWINSZ:
 	case LINUX_TCGETS:
 	case LINUX_TCSETS:
 	case LINUX_TCSETSW:
 	case LINUX_TCSETSF:
+	case LINUX_TIOCGWINSZ:
+	case LINUX_TIOCSWINSZ:
 	case LINUX_TIOCGPGRP:
 	case LINUX_TIOCSPGRP:
 	case LINUX_TIOCSCTTY:
 	case LINUX_TIOCNOTTY:
 		/*
-		 * Return ENOTTY for terminal control ioctls.  Our fds
-		 * are socketpairs, not real terminals.  Returning ENOTTY
-		 * prevents the shell from entering job control mode.
-		 * TIOCGWINSZ is handled above since it is safe and
-		 * needed by programs to format output.
+		 * Return ENOTTY for all terminal ioctls.  Our fds are
+		 * socketpairs, not real terminals.  Enabling TCGETS
+		 * causes busybox to enter interactive mode which
+		 * crashes in strlen during init (string crosses a
+		 * memory page boundary).  Line-mode I/O with
+		 * COLUMNS/LINES environment works reliably.
 		 */
 		return -LINUX_ENOTTY;
 	case LINUX_FIONREAD: {

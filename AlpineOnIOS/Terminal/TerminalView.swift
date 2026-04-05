@@ -103,15 +103,6 @@ struct TerminalView: View {
         }
 
         bridge.write(data: data)
-
-        /* Local echo (shell doesn't echo without TTY) */
-        for byte in data {
-            if byte == 0x08 {
-                parser?.feed(Data([0x08, 0x20, 0x08]))
-            } else if byte >= 0x20 && byte < 0x7F {
-                parser?.feed(Data([byte]))
-            }
-        }
     }
 }
 
