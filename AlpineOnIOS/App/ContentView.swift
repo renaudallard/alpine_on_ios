@@ -39,9 +39,11 @@ struct ContentView: View {
                     }
                 }
                 .navigationTitle("Alpine Terminal")
+                #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
+                #endif
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                    ToolbarItem(placement: .automatic) {
                         Button {
                             showSettings = true
                         } label: {
@@ -54,7 +56,9 @@ struct ContentView: View {
                         .environmentObject(settings)
                 }
             }
+            #if os(iOS)
             .navigationViewStyle(.stack)
+            #endif
             .tabItem {
                 Label("Terminal", systemImage: "terminal")
             }

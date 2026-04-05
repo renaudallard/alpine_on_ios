@@ -84,7 +84,11 @@ struct AlpineOnIOSApp: App {
         guard !fm.fileExists(atPath: dest) else { return }
 
         /* Copy from bundle (no symlinks, just real files) */
+        #if os(iOS)
         let src = Bundle.main.bundlePath + "/alpine"
+        #elseif os(macOS)
+        let src = Bundle.main.resourcePath! + "/alpine"
+        #endif
         guard fm.fileExists(atPath: src) else { return }
 
         do {
@@ -97,7 +101,6 @@ struct AlpineOnIOSApp: App {
     /// Create busybox applet symlinks and essential config in the rootfs.
     private func createBusyboxSymlinks(rootfs: String) {
         let fm = FileManager.default
-        let busybox = rootfs + "/bin/busybox"
 
         /* Standard busybox applet list */
         let dirs = ["/bin", "/sbin", "/usr/bin", "/usr/sbin"]

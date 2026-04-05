@@ -15,7 +15,11 @@
  */
 
 import SwiftUI
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 // MARK: - Terminal View
 
@@ -104,9 +108,11 @@ struct TerminalView: View {
     private func handleKey(_ key: String) {
         guard !key.isEmpty else { return }
 
+        #if os(iOS)
         if settings.hapticFeedback {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
+        #endif
 
         var data: Data
         if ctrlPressed, key.count == 1 {
@@ -234,7 +240,9 @@ struct TerminalGridView: View {
     }
 }
 
-// MARK: - Hidden Keyboard Input (UIViewRepresentable)
+// MARK: - Hidden Keyboard Input
+
+#if os(iOS)
 
 /// A hidden UITextField to capture keyboard input on iOS.
 struct KeyboardInputView: UIViewRepresentable {
@@ -379,7 +387,7 @@ class HiddenTextField: UITextField {
     }
 }
 
-// MARK: - Accessory Key Bar
+// MARK: - Accessory Key Bar (iOS)
 
 /// Row of extra keys above the iOS keyboard.
 struct AccessoryKeyBar: View {
@@ -468,6 +476,137 @@ struct AccessoryKeyBar: View {
         .background(Color(.systemGray6))
     }
 }
+
+#elseif os(macOS)
+
+/// A hidden NSTextField to capture keyboard input on macOS.
+struct KeyboardInputView: NSViewRepresentable {
+    var onKeyPress: (String) -> Void
+    @Binding var ctrlPressed: Bool
+
+    func makeNSView(context: Context) -> HiddenNSTextField {
+        let tf = HiddenNSTextField()
+        tf.delegate = context.coordinator
+        tf.isBordered = false
+        tf.drawsBackground = false
+        tf.isEditable = true
+        tf.isSelectable = true
+        tf.focusRingType = .none
+        tf.textColor = .clear
+        tf.font = .systemFont(ofSize: 1)
+        tf.stringValue = " "
+
+        context.coordinator.textField = tf
+
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.focusKeyboard),
+            name: .terminalFocusKeyboard,
+            object: nil)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            tf.window?.makeFirstResponder(tf)
+        }
+
+        return tf
+    }
+
+    func updateNSView(_ nsView: HiddenNSTextField, context: Context) {
+        context.coordinator.textField = nsView
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onKeyPress: onKeyPress)
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        var onKeyPress: (String) -> Void
+        var textField: HiddenNSTextField?
+
+        init(onKeyPress: @escaping (String) -> Void) {
+            self.onKeyPress = onKeyPress
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        @objc func focusKeyboard(_ notification: Notification) {
+            if let tf = textField {
+                tf.window?.makeFirstResponder(tf)
+            }
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let tf = obj.object as? NSTextField else { return }
+            let text = tf.stringValue
+            /* The field always has " " as base; new chars appended after */
+            if text.count > 1 {
+                let newChars = String(text.dropFirst())
+                onKeyPress(newChars)
+            }
+            tf.stringValue = " "
+        }
+    }
+}
+
+/// NSTextField subclass that intercepts special keys.
+class HiddenNSTextField: NSTextField {
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        /* Handle special keys before the text system sees them */
+        switch event.keyCode {
+        case 126: /* up arrow */
+            NotificationCenter.default.post(
+                name: .terminalSpecialKey, object: "\u{1B}[A")
+            return
+        case 125: /* down arrow */
+            NotificationCenter.default.post(
+                name: .terminalSpecialKey, object: "\u{1B}[B")
+            return
+        case 124: /* right arrow */
+            NotificationCenter.default.post(
+                name: .terminalSpecialKey, object: "\u{1B}[C")
+            return
+        case 123: /* left arrow */
+            NotificationCenter.default.post(
+                name: .terminalSpecialKey, object: "\u{1B}[D")
+            return
+        case 53: /* escape */
+            NotificationCenter.default.post(
+                name: .terminalSpecialKey, object: "\u{1B}")
+            return
+        case 48: /* tab */
+            NotificationCenter.default.post(
+                name: .terminalSpecialKey, object: "\t")
+            return
+        case 51: /* backspace */
+            NotificationCenter.default.post(
+                name: .terminalSpecialKey, object: "\u{08}")
+            return
+        case 36: /* return */
+            NotificationCenter.default.post(
+                name: .terminalSpecialKey, object: "\n")
+            return
+        default:
+            break
+        }
+        super.keyDown(with: event)
+    }
+}
+
+/// No accessory key bar on macOS; the physical keyboard suffices.
+struct AccessoryKeyBar: View {
+    @Binding var ctrlPressed: Bool
+    var onKey: (String) -> Void
+
+    var body: some View {
+        EmptyView()
+    }
+}
+
+#endif
 
 // MARK: - Notification Names
 
