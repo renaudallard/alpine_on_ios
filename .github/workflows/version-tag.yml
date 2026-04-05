@@ -46,3 +46,11 @@ jobs:
           git tag -a "v${{ steps.version.outputs.version }}" \
             -m "Release v${{ steps.version.outputs.version }}"
           git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Trigger release workflow
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          gh workflow run release.yml \
+            -f tag="v${{ steps.version.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
