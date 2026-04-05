@@ -799,11 +799,112 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return 0;
 	}
 	default:
-		LOG_DBG("ioctl: unhandled cmd 0x%llx", (unsigned long long)a1);
-		return -LINUX_ENOTTY;
+		break;
 	}
-	/* Fall through from fb ioctls on non-fb fds. */
-	LOG_DBG("ioctl: unhandled cmd 0x%llx", (unsigned long long)a1);
+
+	/*
+	 * Evdev input ioctls: type 'E' (0x45).
+	 * The size is encoded in bits [29:16], nr in bits [7:0].
+	 */
+	if (fde->type == FD_INPUT && ((a1 >> 8) & 0xff) == 'E') {
+		uint32_t	enr, esz;
+		framebuffer_t	*fb;
+
+		enr = (uint32_t)(a1 & 0xff);
+		esz = (uint32_t)((a1 >> 16) & 0x3fff);
+		fb = fb_get();
+
+		switch (enr) {
+		case 0x01: {
+			/* EVIOCGVERSION → 0x010001 */
+			uint32_t ver = 0x010001;
+			if (mem_copy_to(proc->mem, a2, &ver, 4) != 0)
+				return -LINUX_EFAULT;
+			return 0;
+		}
+		case 0x02: {
+			/* EVIOCGID → struct input_id */
+			uint16_t id[4] = { 0x06, 0, 0, 0 }; /* BUS_VIRTUAL */
+			if (mem_copy_to(proc->mem, a2, id, 8) != 0)
+				return -LINUX_EFAULT;
+			return 0;
+		}
+		case 0x06: {
+			/* EVIOCGNAME → "emutouch" */
+			const char *name = "emutouch";
+			size_t nlen = strlen(name) + 1;
+			if (nlen > esz)
+				nlen = esz;
+			if (mem_copy_to(proc->mem, a2, name, nlen) != 0)
+				return -LINUX_EFAULT;
+			return (int64_t)nlen;
+		}
+		case 0x09: {
+			/* EVIOCGPROP → zero (no properties) */
+			uint8_t buf[8];
+			size_t sz = esz < sizeof(buf) ? esz : sizeof(buf);
+			memset(buf, 0, sizeof(buf));
+			if (mem_copy_to(proc->mem, a2, buf, sz) != 0)
+				return -LINUX_EFAULT;
+			return (int64_t)sz;
+		}
+		case 0x20: {
+			/* EVIOCGBIT(0) → EV_SYN|EV_KEY|EV_ABS */
+			uint8_t buf[8];
+			size_t sz = esz < sizeof(buf) ? esz : sizeof(buf);
+			memset(buf, 0, sizeof(buf));
+			buf[0] = (1 << 0) | (1 << 1) | (1 << 3);
+			if (mem_copy_to(proc->mem, a2, buf, sz) != 0)
+				return -LINUX_EFAULT;
+			return (int64_t)sz;
+		}
+		case 0x21: {
+			/* EVIOCGBIT(EV_KEY) → BTN_LEFT (0x110) */
+			uint8_t buf[64];
+			size_t sz = esz < sizeof(buf) ? esz : sizeof(buf);
+			memset(buf, 0, sizeof(buf));
+			/* bit 0x110 = byte 0x22, bit 0 */
+			if (sz > 0x22)
+				buf[0x22] = 1;
+			if (mem_copy_to(proc->mem, a2, buf, sz) != 0)
+				return -LINUX_EFAULT;
+			return (int64_t)sz;
+		}
+		case 0x23: {
+			/* EVIOCGBIT(EV_ABS) → ABS_X(0), ABS_Y(1) */
+			uint8_t buf[8];
+			size_t sz = esz < sizeof(buf) ? esz : sizeof(buf);
+			memset(buf, 0, sizeof(buf));
+			buf[0] = 0x03; /* bits 0 and 1 */
+			if (mem_copy_to(proc->mem, a2, buf, sz) != 0)
+				return -LINUX_EFAULT;
+			return (int64_t)sz;
+		}
+		case 0x40:
+		case 0x41: {
+			/* EVIOCGABS(ABS_X) or EVIOCGABS(ABS_Y) */
+			struct { int32_t val, min, max, fuzz, flat, res; } ai;
+			memset(&ai, 0, sizeof(ai));
+			ai.max = (enr == 0x40) ?
+			    (int32_t)(fb->active ? fb->width - 1 : 1279) :
+			    (int32_t)(fb->active ? fb->height - 1 : 719);
+			if (mem_copy_to(proc->mem, a2, &ai, sizeof(ai)) != 0)
+				return -LINUX_EFAULT;
+			return 0;
+		}
+		default:
+			/* Unknown evdev ioctl: return 0 (success, zeroed). */
+			if (esz > 0 && esz <= 256) {
+				uint8_t buf[256];
+				memset(buf, 0, esz);
+				mem_copy_to(proc->mem, a2, buf, esz);
+			}
+			return 0;
+		}
+	}
+
+	LOG_DBG("ioctl: unhandled cmd 0x%llx fd=%d type=%d",
+	    (unsigned long long)a1, fd, fde->type);
 	return -LINUX_ENOTTY;
 }
 
