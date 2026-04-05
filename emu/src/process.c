@@ -370,7 +370,13 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		bin_base = JIT_BINARY_BASE;
 		interp_base = JIT_INTERP_BASE;
 		stack_top = JIT_STACK_TOP;
-	} else if (emu_aot_enabled()) {
+	} else if (emu_aot_enabled() && proc->ppid == 0) {
+		/*
+		 * AOT only for the initial process (ppid==0, not
+		 * forked).  Forked children can't use MAP_FIXED at
+		 * the same addresses as the parent since both are
+		 * threads in the same host process.
+		 */
 		newmem->aot_mode = 1;
 		newmem->mmap_next = MMAP_START_JIT;
 		bin_base = JIT_BINARY_BASE;
@@ -579,10 +585,48 @@ proc_run(void *arg)
 			    proc->pid, (unsigned long)proc->cpu.pc);
 			proc_run_exit(proc, 128 + EMU_SIGILL);
 			return (NULL);
-		case EMU_BREAK:
-			LOG_DBG("proc: pid %d breakpoint at pc=0x%lx",
-			    proc->pid, (unsigned long)proc->cpu.pc);
+		case EMU_BREAK: {
+			/*
+			 * Handle AOT BRK traps in interpreter mode
+			 * (forked child before execve).  Decode the
+			 * BRK immediate the same way the JIT SIGTRAP
+			 * handler does.
+			 */
+			uint32_t	brk_insn, brk_imm;
+
+			if (mem_read32(proc->mem, proc->cpu.pc,
+			    &brk_insn) != 0) {
+				proc->cpu.pc += 4;
+				break;
+			}
+			brk_imm = (brk_insn >> 5) & 0xFFFF;
+
+			if (brk_imm == 0x0001) {
+				/* SVC #0: syscall */
+				proc->cpu.pc += 4;
+				sys_handle(proc);
+			} else if ((brk_imm & 0xFF00) == 0x0100) {
+				/* MSR TPIDR_EL0, Xn */
+				int rn = brk_imm & 0x1F;
+				proc->cpu.tpidr_el0 =
+				    cpu_xreg(&proc->cpu, rn);
+				proc->cpu.pc += 4;
+			} else if ((brk_imm & 0xFF00) == 0x0200) {
+				/* MRS Xn, TPIDR_EL0 */
+				int rn = brk_imm & 0x1F;
+				cpu_set_xreg(&proc->cpu, rn,
+				    proc->cpu.tpidr_el0);
+				proc->cpu.pc += 4;
+			} else {
+				LOG_DBG("proc: pid %d breakpoint at "
+				    "pc=0x%lx imm=0x%x",
+				    proc->pid,
+				    (unsigned long)proc->cpu.pc,
+				    brk_imm);
+				proc->cpu.pc += 4;
+			}
 			break;
+		}
 		case EMU_EXIT:
 			proc_run_exit(proc, proc->cpu.exit_code);
 			return (NULL);
