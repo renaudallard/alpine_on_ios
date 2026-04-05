@@ -56,9 +56,7 @@ struct ContentView: View {
                         .environmentObject(settings)
                 }
             }
-            #if os(iOS)
             .navigationViewStyle(.stack)
-            #endif
             .tabItem {
                 Label("Terminal", systemImage: "terminal")
             }
