@@ -43,7 +43,7 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build
+      - name: Build iOS app
         run: |
           xcodebuild build \
             -project AlpineOnIOS.xcodeproj \
@@ -66,6 +66,25 @@ jobs:
           zip -ry "AlpineOnIOS-${{ steps.version.outputs.tag }}.ipa" Payload/
           rm -rf Payload
 
+      - name: Build macOS app
+        run: |
+          xcodebuild build \
+            -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnMac \
+            -configuration Release \
+            CODE_SIGN_IDENTITY="-"
+
+      - name: Package macOS app
+        run: |
+          BUILD_DIR=$(xcodebuild -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnMac \
+            -configuration Release \
+            -showBuildSettings \
+            | grep -m1 'BUILT_PRODUCTS_DIR' | awk '{print $3}')
+          ditto -c -k --keepParent \
+            "$BUILD_DIR/AlpineOnMac.app" \
+            "AlpineOnMac-${{ steps.version.outputs.tag }}.zip"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -73,13 +92,17 @@ jobs:
           body: |
             ## Alpine on iOS ${{ steps.version.outputs.tag }}
 
-            AArch64 Linux emulator running Alpine Linux on iOS.
+            AArch64 Linux emulator running Alpine Linux on iOS and macOS.
 
-            ### Installation
+            ### iOS
+            Download the `.ipa` and sideload with
+            [AltStore](https://altstore.io/) or
+            [Sideloadly](https://sideloadly.io/).
 
-            Download the .ipa file below and sideload it using
-            [AltStore](https://altstore.io/),
-            [Sideloadly](https://sideloadly.io/), or similar tools.
-          files: "AlpineOnIOS-${{ steps.version.outputs.tag }}.ipa"
+            ### macOS (Apple Silicon)
+            Download the `.zip`, extract, and run `AlpineOnMac.app`.
+          files: |
+            AlpineOnIOS-${{ steps.version.outputs.tag }}.ipa
+            AlpineOnMac-${{ steps.version.outputs.tag }}.zip
           draft: false
           prerelease: false
