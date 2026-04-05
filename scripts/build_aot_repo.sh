@@ -23,6 +23,7 @@ REPOS="main community"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AOT_PATCH="$SCRIPT_DIR/.aot_patch"
 WORKDIR="$(mktemp -d)"
+OUTDIR="$(mkdir -p "$OUTDIR" && cd "$OUTDIR" && pwd)"
 
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -38,8 +39,6 @@ if [ ! -x "$AOT_PATCH" ]; then
 	echo "Building aot_patch tool..."
 	cc -O2 -o "$AOT_PATCH" "$SCRIPT_DIR/aot_patch.c"
 fi
-
-mkdir -p "$OUTDIR"
 
 # Download APKINDEX for each repo to find package URLs.
 for repo in $REPOS; do
@@ -104,9 +103,8 @@ for pkg in "$@"; do
 	# Remove old signatures.
 	rm -f "$pkgdir"/.SIGN.*
 
-	# Create new .apk (tar.gz with control + data).
-	(cd "$pkgdir" && tar -czf "$OUTDIR/$fname" .PKGINFO .* * 2>/dev/null || \
-	 cd "$pkgdir" && tar -czf "$OUTDIR/$fname" .)
+	# Create new .apk (tar.gz with all content).
+	(cd "$pkgdir" && tar -czf "$OUTDIR/$fname" .)
 
 	PATCHED_PKGS="$PATCHED_PKGS $OUTDIR/$fname"
 	echo "  Patched: $fname"
