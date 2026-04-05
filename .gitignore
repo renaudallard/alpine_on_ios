@@ -21,3 +21,4 @@ xcuserdata/
 tmp/
 *.swp
 *~
+scripts/.aot_patch
