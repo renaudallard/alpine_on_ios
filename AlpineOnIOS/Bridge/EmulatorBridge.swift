@@ -118,7 +118,6 @@ class EmulatorBridge: ObservableObject {
             "PS1=alpine:\\w\\$ ",
             "COLUMNS=\(initialCols)",
             "LINES=\(initialRows)",
-            "HISTFILE=/dev/null",
         ]
 
         var fd: Int32 = -1
