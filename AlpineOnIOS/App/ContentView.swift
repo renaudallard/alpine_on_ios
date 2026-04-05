@@ -23,40 +23,7 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            NavigationView {
-                ZStack {
-                    Color.black.edgesIgnoringSafeArea(.all)
-
-                    switch bridge.state {
-                    case .idle, .extracting, .initializing, .spawning:
-                        statusView
-                    case .running:
-                        TerminalView()
-                            .environmentObject(bridge)
-                            .environmentObject(settings)
-                    case .error(let msg):
-                        errorView(msg)
-                    }
-                }
-                .navigationTitle("Alpine Terminal")
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .toolbar {
-                    ToolbarItem(placement: .automatic) {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
-                        }
-                    }
-                }
-                .sheet(isPresented: $showSettings) {
-                    SettingsView()
-                        .environmentObject(settings)
-                }
-            }
-            .navigationViewStyle(.stack)
+            terminalTab
             .tabItem {
                 Label("Terminal", systemImage: "terminal")
             }
@@ -65,6 +32,36 @@ struct ContentView: View {
                 .tabItem {
                     Label("Display", systemImage: "display")
                 }
+        }
+    }
+
+    private var terminalTab: some View {
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+
+            switch bridge.state {
+            case .idle, .extracting, .initializing, .spawning:
+                statusView
+            case .running:
+                TerminalView()
+                    .environmentObject(bridge)
+                    .environmentObject(settings)
+            case .error(let msg):
+                errorView(msg)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .environmentObject(settings)
         }
     }
 
