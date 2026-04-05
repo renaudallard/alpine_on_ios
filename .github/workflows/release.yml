@@ -97,6 +97,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           name: "Alpine on iOS ${{ steps.version.outputs.tag }}"
           body: |
             ## Alpine on iOS ${{ steps.version.outputs.tag }}
