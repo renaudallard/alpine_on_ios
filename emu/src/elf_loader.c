@@ -288,14 +288,25 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				}
 
 				/*
-				 * The dylib's VM layout has __TEXT at vmaddr 0.
-				 * The actual load address = img_addr.
-				 * ELF vaddrs were offset by text_vaddr_page in
-				 * the converter, so:
-				 *   base = img_addr - text_vaddr_page
-				 * Then: base + elf_vaddr == host addr.
+				 * The converter (elf2macho) offsets all vaddrs
+				 * by text_vaddr_page (16K-aligned vaddr of the
+				 * first executable segment).  Find it.
 				 */
-				base = img_addr;
+				{
+					uint64_t tvp = 0;
+					long hpg = sysconf(_SC_PAGESIZE);
+					int k;
+					if (hpg <= 0) hpg = PAGE_SIZE;
+					for (k = 0; k < ehdr.e_phnum; k++) {
+						if (phdrs[k].p_type == PT_LOAD &&
+						    (phdrs[k].p_flags & PF_X)) {
+							tvp = phdrs[k].p_vaddr &
+							    ~((uint64_t)hpg - 1);
+							break;
+						}
+					}
+					base = img_addr - tvp;
+				}
 			}
 
 			LOG_INFO("elf_load: AOT dylib %s at 0x%llx",
