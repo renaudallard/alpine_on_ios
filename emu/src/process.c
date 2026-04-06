@@ -583,6 +583,7 @@ proc_run(void *arg)
 			break;
 		case EMU_SYSCALL:
 			sys_handle(proc);
+			cpu_tlb_flush(&proc->cpu);
 			break;
 		case EMU_SEGFAULT:
 			LOG_ERR("proc: pid %d SIGSEGV at pc=0x%lx",
@@ -614,6 +615,7 @@ proc_run(void *arg)
 				/* SVC #0: syscall */
 				proc->cpu.pc += 4;
 				sys_handle(proc);
+				cpu_tlb_flush(&proc->cpu);
 			} else if ((brk_imm & 0xFF00) == 0x0100) {
 				/* MSR TPIDR_EL0, Xn */
 				int rn = brk_imm & 0x1F;

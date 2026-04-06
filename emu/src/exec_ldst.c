@@ -37,18 +37,18 @@ do_load(cpu_state_t *cpu, uint64_t addr, int size, int opc, int rt, int is_vec)
 		memset(&cpu->v[rt], 0, sizeof(vreg_t));
 
 		if (size == 0 && opc == 1) {
-			return mem_read8(cpu->mem, addr, &cpu->v[rt].b[0]);
+			return cpu_mem_read8(cpu, addr, &cpu->v[rt].b[0]);
 		} else if (size == 1 && opc == 1) {
-			return mem_read16(cpu->mem, addr, &cpu->v[rt].h[0]);
+			return cpu_mem_read16(cpu, addr, &cpu->v[rt].h[0]);
 		} else if (size == 2 && opc == 1) {
-			return mem_read32(cpu->mem, addr, &cpu->v[rt].s[0]);
+			return cpu_mem_read32(cpu, addr, &cpu->v[rt].s[0]);
 		} else if (size == 3 && opc == 1) {
-			return mem_read64(cpu->mem, addr, &cpu->v[rt].d[0]);
+			return cpu_mem_read64(cpu, addr, &cpu->v[rt].d[0]);
 		} else if (size == 0 && opc == 3) {
 			/* 128-bit load */
-			if (mem_read64(cpu->mem, addr, &cpu->v[rt].d[0]) != 0)
+			if (cpu_mem_read64(cpu, addr, &cpu->v[rt].d[0]) != 0)
 				return -1;
-			return mem_read64(cpu->mem, addr + 8,
+			return cpu_mem_read64(cpu, addr + 8,
 			    &cpu->v[rt].d[1]);
 		}
 		LOG_WARN("unimplemented SIMD load size=%d opc=%d at 0x%llx",
@@ -60,63 +60,63 @@ do_load(cpu_state_t *cpu, uint64_t addr, int size, int opc, int rt, int is_vec)
 	switch ((size << 2) | opc) {
 	case 0x01: {	/* LDRB (8-bit zero-extend) */
 		uint8_t val;
-		if (mem_read8(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read8(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_xreg(cpu, rt, (uint64_t)val);
 		return 0;
 	}
 	case 0x02: {	/* LDRSB (64-bit sign-extend) */
 		uint8_t val;
-		if (mem_read8(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read8(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_xreg(cpu, rt, (uint64_t)sign_extend(val, 8));
 		return 0;
 	}
 	case 0x03: {	/* LDRSB (32-bit sign-extend) */
 		uint8_t val;
-		if (mem_read8(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read8(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_wreg(cpu, rt, (uint32_t)sign_extend(val, 8));
 		return 0;
 	}
 	case 0x05: {	/* LDRH (16-bit zero-extend) */
 		uint16_t val;
-		if (mem_read16(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read16(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_xreg(cpu, rt, (uint64_t)val);
 		return 0;
 	}
 	case 0x06: {	/* LDRSH (64-bit sign-extend) */
 		uint16_t val;
-		if (mem_read16(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read16(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_xreg(cpu, rt, (uint64_t)sign_extend(val, 16));
 		return 0;
 	}
 	case 0x07: {	/* LDRSH (32-bit sign-extend) */
 		uint16_t val;
-		if (mem_read16(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read16(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_wreg(cpu, rt, (uint32_t)sign_extend(val, 16));
 		return 0;
 	}
 	case 0x09: {	/* LDR (32-bit) */
 		uint32_t val;
-		if (mem_read32(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read32(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_wreg(cpu, rt, val);
 		return 0;
 	}
 	case 0x0A: {	/* LDRSW (64-bit sign-extend from 32) */
 		uint32_t val;
-		if (mem_read32(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read32(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_xreg(cpu, rt, (uint64_t)sign_extend(val, 32));
 		return 0;
 	}
 	case 0x0D: {	/* LDR (64-bit) */
 		uint64_t val;
-		if (mem_read64(cpu->mem, addr, &val) != 0)
+		if (cpu_mem_read64(cpu, addr, &val) != 0)
 			return -1;
 		cpu_set_xreg(cpu, rt, val);
 		return 0;
@@ -134,19 +134,19 @@ do_store(cpu_state_t *cpu, uint64_t addr, int size, int opc, int rt,
 {
 	if (is_vec) {
 		if (size == 0 && opc == 0) {
-			return mem_write8(cpu->mem, addr, cpu->v[rt].b[0]);
+			return cpu_mem_write8(cpu, addr, cpu->v[rt].b[0]);
 		} else if (size == 1 && opc == 0) {
-			return mem_write16(cpu->mem, addr, cpu->v[rt].h[0]);
+			return cpu_mem_write16(cpu, addr, cpu->v[rt].h[0]);
 		} else if (size == 2 && opc == 0) {
-			return mem_write32(cpu->mem, addr, cpu->v[rt].s[0]);
+			return cpu_mem_write32(cpu, addr, cpu->v[rt].s[0]);
 		} else if (size == 3 && opc == 0) {
-			return mem_write64(cpu->mem, addr, cpu->v[rt].d[0]);
+			return cpu_mem_write64(cpu, addr, cpu->v[rt].d[0]);
 		} else if (size == 0 && opc == 2) {
 			/* 128-bit store */
-			if (mem_write64(cpu->mem, addr,
+			if (cpu_mem_write64(cpu, addr,
 			    cpu->v[rt].d[0]) != 0)
 				return -1;
-			return mem_write64(cpu->mem, addr + 8,
+			return cpu_mem_write64(cpu, addr + 8,
 			    cpu->v[rt].d[1]);
 		}
 		LOG_WARN("unimplemented SIMD store size=%d opc=%d at 0x%llx",
@@ -157,15 +157,15 @@ do_store(cpu_state_t *cpu, uint64_t addr, int size, int opc, int rt,
 	/* GPR stores - opc must be 0 for stores */
 	switch (size) {
 	case 0:	/* STRB */
-		return mem_write8(cpu->mem, addr,
+		return cpu_mem_write8(cpu, addr,
 		    (uint8_t)cpu_xreg(cpu, rt));
 	case 1:	/* STRH */
-		return mem_write16(cpu->mem, addr,
+		return cpu_mem_write16(cpu, addr,
 		    (uint16_t)cpu_xreg(cpu, rt));
 	case 2:	/* STR (32-bit) */
-		return mem_write32(cpu->mem, addr, cpu_wreg(cpu, rt));
+		return cpu_mem_write32(cpu, addr, cpu_wreg(cpu, rt));
 	case 3:	/* STR (64-bit) */
-		return mem_write64(cpu->mem, addr, cpu_xreg(cpu, rt));
+		return cpu_mem_write64(cpu, addr, cpu_xreg(cpu, rt));
 	default:
 		return -1;
 	}
@@ -360,32 +360,32 @@ exec_ldst_pair(cpu_state_t *cpu, uint32_t insn)
 			memset(&cpu->v[rt2], 0, sizeof(vreg_t));
 			switch (opc) {
 			case 0:	/* 32-bit */
-				if (mem_read32(cpu->mem, addr,
+				if (cpu_mem_read32(cpu, addr,
 				    &cpu->v[rt].s[0]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_read32(cpu->mem, addr + 4,
+				if (cpu_mem_read32(cpu, addr + 4,
 				    &cpu->v[rt2].s[0]) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 1:	/* 64-bit */
-				if (mem_read64(cpu->mem, addr,
+				if (cpu_mem_read64(cpu, addr,
 				    &cpu->v[rt].d[0]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_read64(cpu->mem, addr + 8,
+				if (cpu_mem_read64(cpu, addr + 8,
 				    &cpu->v[rt2].d[0]) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 2:	/* 128-bit */
-				if (mem_read64(cpu->mem, addr,
+				if (cpu_mem_read64(cpu, addr,
 				    &cpu->v[rt].d[0]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_read64(cpu->mem, addr + 8,
+				if (cpu_mem_read64(cpu, addr + 8,
 				    &cpu->v[rt].d[1]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_read64(cpu->mem, addr + 16,
+				if (cpu_mem_read64(cpu, addr + 16,
 				    &cpu->v[rt2].d[0]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_read64(cpu->mem, addr + 24,
+				if (cpu_mem_read64(cpu, addr + 24,
 				    &cpu->v[rt2].d[1]) != 0)
 					return EMU_SEGFAULT;
 				break;
@@ -396,32 +396,32 @@ exec_ldst_pair(cpu_state_t *cpu, uint32_t insn)
 			/* Store pair */
 			switch (opc) {
 			case 0:
-				if (mem_write32(cpu->mem, addr,
+				if (cpu_mem_write32(cpu, addr,
 				    cpu->v[rt].s[0]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_write32(cpu->mem, addr + 4,
+				if (cpu_mem_write32(cpu, addr + 4,
 				    cpu->v[rt2].s[0]) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 1:
-				if (mem_write64(cpu->mem, addr,
+				if (cpu_mem_write64(cpu, addr,
 				    cpu->v[rt].d[0]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_write64(cpu->mem, addr + 8,
+				if (cpu_mem_write64(cpu, addr + 8,
 				    cpu->v[rt2].d[0]) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 2:
-				if (mem_write64(cpu->mem, addr,
+				if (cpu_mem_write64(cpu, addr,
 				    cpu->v[rt].d[0]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_write64(cpu->mem, addr + 8,
+				if (cpu_mem_write64(cpu, addr + 8,
 				    cpu->v[rt].d[1]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_write64(cpu->mem, addr + 16,
+				if (cpu_mem_write64(cpu, addr + 16,
 				    cpu->v[rt2].d[0]) != 0)
 					return EMU_SEGFAULT;
-				if (mem_write64(cpu->mem, addr + 24,
+				if (cpu_mem_write64(cpu, addr + 24,
 				    cpu->v[rt2].d[1]) != 0)
 					return EMU_SEGFAULT;
 				break;
@@ -436,18 +436,18 @@ exec_ldst_pair(cpu_state_t *cpu, uint32_t insn)
 			if (opc == 0) {
 				/* 32-bit STP/LDP */
 				uint32_t v1, v2;
-				if (mem_read32(cpu->mem, addr, &v1) != 0)
+				if (cpu_mem_read32(cpu, addr, &v1) != 0)
 					return EMU_SEGFAULT;
-				if (mem_read32(cpu->mem, addr + 4, &v2) != 0)
+				if (cpu_mem_read32(cpu, addr + 4, &v2) != 0)
 					return EMU_SEGFAULT;
 				cpu_set_wreg(cpu, rt, v1);
 				cpu_set_wreg(cpu, rt2, v2);
 			} else if (opc == 1) {
 				/* LDPSW: 32-bit sign-extended to 64 */
 				uint32_t v1, v2;
-				if (mem_read32(cpu->mem, addr, &v1) != 0)
+				if (cpu_mem_read32(cpu, addr, &v1) != 0)
 					return EMU_SEGFAULT;
-				if (mem_read32(cpu->mem, addr + 4, &v2) != 0)
+				if (cpu_mem_read32(cpu, addr + 4, &v2) != 0)
 					return EMU_SEGFAULT;
 				cpu_set_xreg(cpu, rt,
 				    (uint64_t)sign_extend(v1, 32));
@@ -456,9 +456,9 @@ exec_ldst_pair(cpu_state_t *cpu, uint32_t insn)
 			} else if (opc == 2) {
 				/* 64-bit */
 				uint64_t v1, v2;
-				if (mem_read64(cpu->mem, addr, &v1) != 0)
+				if (cpu_mem_read64(cpu, addr, &v1) != 0)
 					return EMU_SEGFAULT;
-				if (mem_read64(cpu->mem, addr + 8, &v2) != 0)
+				if (cpu_mem_read64(cpu, addr + 8, &v2) != 0)
 					return EMU_SEGFAULT;
 				cpu_set_xreg(cpu, rt, v1);
 				cpu_set_xreg(cpu, rt2, v2);
@@ -469,18 +469,18 @@ exec_ldst_pair(cpu_state_t *cpu, uint32_t insn)
 			/* Store pair */
 			if (opc == 0) {
 				/* 32-bit */
-				if (mem_write32(cpu->mem, addr,
+				if (cpu_mem_write32(cpu, addr,
 				    cpu_wreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
-				if (mem_write32(cpu->mem, addr + 4,
+				if (cpu_mem_write32(cpu, addr + 4,
 				    cpu_wreg(cpu, rt2)) != 0)
 					return EMU_SEGFAULT;
 			} else if (opc == 2) {
 				/* 64-bit */
-				if (mem_write64(cpu->mem, addr,
+				if (cpu_mem_write64(cpu, addr,
 				    cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
-				if (mem_write64(cpu->mem, addr + 8,
+				if (cpu_mem_write64(cpu, addr + 8,
 				    cpu_xreg(cpu, rt2)) != 0)
 					return EMU_SEGFAULT;
 			} else {
@@ -521,20 +521,20 @@ exec_ldst_literal(cpu_state_t *cpu, uint32_t insn)
 		memset(&cpu->v[rt], 0, sizeof(vreg_t));
 		switch (opc) {
 		case 0:	/* LDR S */
-			if (mem_read32(cpu->mem, addr,
+			if (cpu_mem_read32(cpu, addr,
 			    &cpu->v[rt].s[0]) != 0)
 				return EMU_SEGFAULT;
 			break;
 		case 1:	/* LDR D */
-			if (mem_read64(cpu->mem, addr,
+			if (cpu_mem_read64(cpu, addr,
 			    &cpu->v[rt].d[0]) != 0)
 				return EMU_SEGFAULT;
 			break;
 		case 2:	/* LDR Q */
-			if (mem_read64(cpu->mem, addr,
+			if (cpu_mem_read64(cpu, addr,
 			    &cpu->v[rt].d[0]) != 0)
 				return EMU_SEGFAULT;
-			if (mem_read64(cpu->mem, addr + 8,
+			if (cpu_mem_read64(cpu, addr + 8,
 			    &cpu->v[rt].d[1]) != 0)
 				return EMU_SEGFAULT;
 			break;
@@ -545,21 +545,21 @@ exec_ldst_literal(cpu_state_t *cpu, uint32_t insn)
 		switch (opc) {
 		case 0: {	/* LDR W */
 			uint32_t val;
-			if (mem_read32(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read32(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_wreg(cpu, rt, val);
 			break;
 		}
 		case 1: {	/* LDR X */
 			uint64_t val;
-			if (mem_read64(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read64(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, val);
 			break;
 		}
 		case 2: {	/* LDRSW */
 			uint32_t val;
-			if (mem_read32(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read32(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt,
 			    (uint64_t)sign_extend(val, 32));
@@ -609,22 +609,22 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 
 			switch (size) {
 			case 0:
-				if (mem_write8(cpu->mem, addr,
+				if (cpu_mem_write8(cpu, addr,
 				    (uint8_t)cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 1:
-				if (mem_write16(cpu->mem, addr,
+				if (cpu_mem_write16(cpu, addr,
 				    (uint16_t)cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 2:
-				if (mem_write32(cpu->mem, addr,
+				if (cpu_mem_write32(cpu, addr,
 				    cpu_wreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 3:
-				if (mem_write64(cpu->mem, addr,
+				if (cpu_mem_write64(cpu, addr,
 				    cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
@@ -642,7 +642,7 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		switch (size) {
 		case 0: {
 			uint8_t val;
-			if (mem_read8(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read8(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, (uint64_t)val);
 			cpu->excl_val = val;
@@ -650,7 +650,7 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		}
 		case 1: {
 			uint16_t val;
-			if (mem_read16(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read16(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, (uint64_t)val);
 			cpu->excl_val = val;
@@ -658,7 +658,7 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		}
 		case 2: {
 			uint32_t val;
-			if (mem_read32(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read32(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_wreg(cpu, rt, val);
 			cpu->excl_val = val;
@@ -666,7 +666,7 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		}
 		case 3: {
 			uint64_t val;
-			if (mem_read64(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read64(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, val);
 			cpu->excl_val = val;
@@ -683,22 +683,22 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 			/* STLR */
 			switch (size) {
 			case 0:
-				if (mem_write8(cpu->mem, addr,
+				if (cpu_mem_write8(cpu, addr,
 				    (uint8_t)cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 1:
-				if (mem_write16(cpu->mem, addr,
+				if (cpu_mem_write16(cpu, addr,
 				    (uint16_t)cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 2:
-				if (mem_write32(cpu->mem, addr,
+				if (cpu_mem_write32(cpu, addr,
 				    cpu_wreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 3:
-				if (mem_write64(cpu->mem, addr,
+				if (cpu_mem_write64(cpu, addr,
 				    cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
@@ -710,28 +710,28 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		switch (size) {
 		case 0: {
 			uint8_t val;
-			if (mem_read8(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read8(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, (uint64_t)val);
 			break;
 		}
 		case 1: {
 			uint16_t val;
-			if (mem_read16(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read16(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, (uint64_t)val);
 			break;
 		}
 		case 2: {
 			uint32_t val;
-			if (mem_read32(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read32(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_wreg(cpu, rt, val);
 			break;
 		}
 		case 3: {
 			uint64_t val;
-			if (mem_read64(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read64(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, val);
 			break;
@@ -754,22 +754,22 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 
 			switch (size) {
 			case 0:
-				if (mem_write8(cpu->mem, addr,
+				if (cpu_mem_write8(cpu, addr,
 				    (uint8_t)cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 1:
-				if (mem_write16(cpu->mem, addr,
+				if (cpu_mem_write16(cpu, addr,
 				    (uint16_t)cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 2:
-				if (mem_write32(cpu->mem, addr,
+				if (cpu_mem_write32(cpu, addr,
 				    cpu_wreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
 			case 3:
-				if (mem_write64(cpu->mem, addr,
+				if (cpu_mem_write64(cpu, addr,
 				    cpu_xreg(cpu, rt)) != 0)
 					return EMU_SEGFAULT;
 				break;
@@ -787,7 +787,7 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		switch (size) {
 		case 0: {
 			uint8_t val;
-			if (mem_read8(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read8(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, (uint64_t)val);
 			cpu->excl_val = val;
@@ -795,7 +795,7 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		}
 		case 1: {
 			uint16_t val;
-			if (mem_read16(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read16(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, (uint64_t)val);
 			cpu->excl_val = val;
@@ -803,7 +803,7 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		}
 		case 2: {
 			uint32_t val;
-			if (mem_read32(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read32(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_wreg(cpu, rt, val);
 			cpu->excl_val = val;
@@ -811,7 +811,7 @@ exec_ldst_exclusive(cpu_state_t *cpu, uint32_t insn)
 		}
 		case 3: {
 			uint64_t val;
-			if (mem_read64(cpu->mem, addr, &val) != 0)
+			if (cpu_mem_read64(cpu, addr, &val) != 0)
 				return EMU_SEGFAULT;
 			cpu_set_xreg(cpu, rt, val);
 			cpu->excl_val = val;

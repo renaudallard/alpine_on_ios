@@ -43,7 +43,7 @@ typedef struct mem_space {
 	uint64_t	brk_base;	/* Heap start */
 	uint64_t	brk_current;	/* Current brk */
 	uint64_t	mmap_next;	/* Next mmap hint addr */
-	pthread_mutex_t	lock;
+	pthread_rwlock_t lock;		/* Readers for translate, writers for map/unmap */
 	int		aot_mode;	/* 1 = AOT (file-backed exec) */
 	int		refcount;	/* Shared memory reference count */
 } mem_space_t;

@@ -956,28 +956,28 @@ exec_simd_ldst_multi(cpu_state_t *cpu, uint32_t insn)
 
 			if (L) {
 				memset(&cpu->v[reg], 0, sizeof(vreg_t));
-				host = mem_translate(cpu->mem, a,
+				host = cpu_mem_ptr(cpu, a,
 				    (uint64_t)bytes, MEM_PROT_READ);
 				if (host != NULL) {
 					memcpy(&cpu->v[reg], host,
 					    (size_t)bytes);
 				} else {
 					for (int i = 0; i < bytes; i++) {
-						if (mem_read8(cpu->mem,
+						if (cpu_mem_read8(cpu,
 						    a + (uint64_t)i,
 						    &cpu->v[reg].b[i]) != 0)
 							return EMU_SEGFAULT;
 					}
 				}
 			} else {
-				host = mem_translate(cpu->mem, a,
+				host = cpu_mem_ptr(cpu, a,
 				    (uint64_t)bytes, MEM_PROT_WRITE);
 				if (host != NULL) {
 					memcpy(host, &cpu->v[reg],
 					    (size_t)bytes);
 				} else {
 					for (int i = 0; i < bytes; i++) {
-						if (mem_write8(cpu->mem,
+						if (cpu_mem_write8(cpu,
 						    a + (uint64_t)i,
 						    cpu->v[reg].b[i]) != 0)
 							return EMU_SEGFAULT;
@@ -1006,7 +1006,7 @@ exec_simd_ldst_multi(cpu_state_t *cpu, uint32_t insn)
 					uint64_t tmp = 0;
 					for (int b2 = 0; b2 < esize; b2++) {
 						uint8_t byte;
-						if (mem_read8(cpu->mem,
+						if (cpu_mem_read8(cpu,
 						    a + (uint64_t)b2,
 						    &byte) != 0)
 							return EMU_SEGFAULT;
@@ -1018,7 +1018,7 @@ exec_simd_ldst_multi(cpu_state_t *cpu, uint32_t insn)
 					uint64_t tmp = velem_u(&cpu->v[reg],
 					    size, e);
 					for (int b2 = 0; b2 < esize; b2++) {
-						if (mem_write8(cpu->mem,
+						if (cpu_mem_write8(cpu,
 						    a + (uint64_t)b2,
 						    (uint8_t)(tmp >>
 						    (b2 * 8))) != 0)
@@ -1064,7 +1064,7 @@ exec_simd_ld1r(cpu_state_t *cpu, uint32_t insn)
 	int esize = 1 << size;
 	for (int b2 = 0; b2 < esize; b2++) {
 		uint8_t byte;
-		if (mem_read8(cpu->mem, addr + (uint64_t)b2, &byte) != 0)
+		if (cpu_mem_read8(cpu, addr + (uint64_t)b2, &byte) != 0)
 			return EMU_SEGFAULT;
 		val |= (uint64_t)byte << (b2 * 8);
 	}
@@ -3450,11 +3450,11 @@ simd_ldst:
 			int idx = (Q2 << 3) | (S << 2) | sz;
 			if (L) {
 				uint8_t val;
-				if (mem_read8(cpu->mem, addr, &val) != 0)
+				if (cpu_mem_read8(cpu, addr, &val) != 0)
 					return EMU_SEGFAULT;
 				cpu->v[rt2].b[idx] = val;
 			} else {
-				if (mem_write8(cpu->mem, addr,
+				if (cpu_mem_write8(cpu, addr,
 				    cpu->v[rt2].b[idx]) != 0)
 					return EMU_SEGFAULT;
 			}
@@ -3470,11 +3470,11 @@ simd_ldst:
 			int idx = (Q2 << 2) | (S << 1) | (sz >> 1);
 			if (L) {
 				uint16_t val;
-				if (mem_read16(cpu->mem, addr, &val) != 0)
+				if (cpu_mem_read16(cpu, addr, &val) != 0)
 					return EMU_SEGFAULT;
 				cpu->v[rt2].h[idx] = val;
 			} else {
-				if (mem_write16(cpu->mem, addr,
+				if (cpu_mem_write16(cpu, addr,
 				    cpu->v[rt2].h[idx]) != 0)
 					return EMU_SEGFAULT;
 			}
@@ -3491,12 +3491,12 @@ simd_ldst:
 				int idx = (Q2 << 1) | S;
 				if (L) {
 					uint32_t val;
-					if (mem_read32(cpu->mem, addr,
+					if (cpu_mem_read32(cpu, addr,
 					    &val) != 0)
 						return EMU_SEGFAULT;
 					cpu->v[rt2].s[idx] = val;
 				} else {
-					if (mem_write32(cpu->mem, addr,
+					if (cpu_mem_write32(cpu, addr,
 					    cpu->v[rt2].s[idx]) != 0)
 						return EMU_SEGFAULT;
 				}
@@ -3512,12 +3512,12 @@ simd_ldst:
 				int idx = Q2;
 				if (L) {
 					uint64_t val;
-					if (mem_read64(cpu->mem, addr,
+					if (cpu_mem_read64(cpu, addr,
 					    &val) != 0)
 						return EMU_SEGFAULT;
 					cpu->v[rt2].d[idx] = val;
 				} else {
-					if (mem_write64(cpu->mem, addr,
+					if (cpu_mem_write64(cpu, addr,
 					    cpu->v[rt2].d[idx]) != 0)
 						return EMU_SEGFAULT;
 				}

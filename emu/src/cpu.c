@@ -26,6 +26,7 @@ void
 cpu_init(cpu_state_t *cpu)
 {
 	memset(cpu, 0, sizeof(*cpu));
+	cpu_tlb_flush(cpu);
 }
 
 int
@@ -36,7 +37,7 @@ cpu_step(cpu_state_t *cpu)
 	int		group;
 	int		rc;
 
-	if (mem_read32(cpu->mem, cpu->pc, &insn) != 0) {
+	if (cpu_mem_read32(cpu, cpu->pc, &insn) != 0) {
 		LOG_ERR("instruction fetch fault at 0x%llx",
 		    (unsigned long long)cpu->pc);
 		return EMU_SEGFAULT;

@@ -101,7 +101,7 @@ mem_space_create(void)
 
 	ms->mmap_next = MMAP_START;
 	ms->refcount = 1;
-	pthread_mutex_init(&ms->lock, NULL);
+	pthread_rwlock_init(&ms->lock, NULL);
 	return ms;
 }
 
@@ -114,10 +114,10 @@ mem_space_destroy(mem_space_t *ms)
 	if (ms == NULL)
 		return;
 
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_wrlock(&ms->lock);
 	rc = --ms->refcount;
 	if (rc > 0) {
-		pthread_mutex_unlock(&ms->lock);
+		pthread_rwlock_unlock(&ms->lock);
 		return;
 	}
 
@@ -136,8 +136,8 @@ mem_space_destroy(mem_space_t *ms)
 	}
 	ms->regions = NULL;
 
-	pthread_mutex_unlock(&ms->lock);
-	pthread_mutex_destroy(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
+	pthread_rwlock_destroy(&ms->lock);
 	free(ms);
 }
 
@@ -147,9 +147,9 @@ mem_space_ref(mem_space_t *ms)
 	if (ms == NULL)
 		return;
 
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_wrlock(&ms->lock);
 	ms->refcount++;
-	pthread_mutex_unlock(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
 }
 
 mem_space_t *
@@ -165,12 +165,12 @@ mem_space_clone(mem_space_t *src)
 	if (dst == NULL)
 		return NULL;
 
-	pthread_mutex_lock(&src->lock);
+	pthread_rwlock_rdlock(&src->lock);
 
 	dst->brk_base = src->brk_base;
 	dst->brk_current = src->brk_current;
 	dst->refcount = 1;
-	pthread_mutex_init(&dst->lock, NULL);
+	pthread_rwlock_init(&dst->lock, NULL);
 
 	/*
 	 * Clone always produces an interpreter-mode copy.
@@ -207,11 +207,11 @@ mem_space_clone(mem_space_t *src)
 		pp = &nr->next;
 	}
 
-	pthread_mutex_unlock(&src->lock);
+	pthread_rwlock_unlock(&src->lock);
 	return dst;
 
 fail:
-	pthread_mutex_unlock(&src->lock);
+	pthread_rwlock_unlock(&src->lock);
 	mem_space_destroy(dst);
 	return NULL;
 }
@@ -341,7 +341,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 
 	aligned_size = page_align_up(size);
 
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_wrlock(&ms->lock);
 
 	if (flags & MEM_MAP_FIXED) {
 		addr = page_align_down(addr);
@@ -379,7 +379,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 
 	r = calloc(1, sizeof(*r));
 	if (r == NULL) {
-		pthread_mutex_unlock(&ms->lock);
+		pthread_rwlock_unlock(&ms->lock);
 		return (uint64_t)-1;
 	}
 
@@ -398,7 +398,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 			r->host = calloc(1, aligned_size);
 			if (r->host == NULL) {
 				free(r);
-				pthread_mutex_unlock(&ms->lock);
+				pthread_rwlock_unlock(&ms->lock);
 				return (uint64_t)-1;
 			}
 			r->flags = MEM_MAP_CALLOC;
@@ -414,7 +414,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 			r->host = calloc(1, aligned_size);
 			if (r->host == NULL) {
 				free(r);
-				pthread_mutex_unlock(&ms->lock);
+				pthread_rwlock_unlock(&ms->lock);
 				return (uint64_t)-1;
 			}
 			r->flags = MEM_MAP_CALLOC;
@@ -423,7 +423,7 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		r->host = calloc(1, aligned_size);
 		if (r->host == NULL) {
 			free(r);
-			pthread_mutex_unlock(&ms->lock);
+			pthread_rwlock_unlock(&ms->lock);
 			return (uint64_t)-1;
 		}
 	}
@@ -459,7 +459,7 @@ region_ready:
 	}
 
 	region_insert(ms, r);
-	pthread_mutex_unlock(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
 
 	LOG_TRACE("mmap: addr=0x%llx size=0x%llx prot=%d flags=0x%x",
 	    (unsigned long long)addr, (unsigned long long)aligned_size,
@@ -484,7 +484,7 @@ mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
 
 	aligned_size = page_align_up(size);
 
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_wrlock(&ms->lock);
 
 	if (addr == 0)
 		addr = ms->mmap_next;
@@ -514,7 +514,7 @@ mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
 
 	r = calloc(1, sizeof(*r));
 	if (r == NULL) {
-		pthread_mutex_unlock(&ms->lock);
+		pthread_rwlock_unlock(&ms->lock);
 		return (uint64_t)-1;
 	}
 
@@ -525,7 +525,7 @@ mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
 	r->host = host_buf;
 
 	region_insert(ms, r);
-	pthread_mutex_unlock(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
 
 	return addr;
 }
@@ -595,7 +595,7 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 		used_calloc = 1;
 	}
 
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_wrlock(&ms->lock);
 
 	unmap_range(ms, addr, aligned_size);
 
@@ -605,7 +605,7 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 			free(p);
 		else
 			munmap(p, aligned_size);
-		pthread_mutex_unlock(&ms->lock);
+		pthread_rwlock_unlock(&ms->lock);
 		return (uint64_t)-1;
 	}
 
@@ -616,7 +616,7 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 	r->host = p;
 
 	region_insert(ms, r);
-	pthread_mutex_unlock(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
 
 	return addr;
 }
@@ -629,9 +629,9 @@ mem_munmap(mem_space_t *ms, uint64_t addr, uint64_t size)
 	addr = page_align_down(addr);
 	aligned_size = page_align_up(size);
 
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_wrlock(&ms->lock);
 	unmap_range(ms, addr, aligned_size);
-	pthread_mutex_unlock(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
 
 	return 0;
 }
@@ -646,7 +646,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 	size = page_align_up(size);
 	end = addr + size;
 
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_wrlock(&ms->lock);
 	for (r = ms->regions; r != NULL; r = next) {
 		uint64_t	rend, overlap_start, overlap_end;
 
@@ -806,7 +806,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 			mprotect(r->host, r->size, hp);
 		}
 	}
-	pthread_mutex_unlock(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
 
 	return 0;
 }
@@ -816,15 +816,15 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 {
 	uint64_t	old_brk, new_brk, new_size;
 
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_wrlock(&ms->lock);
 
 	if (addr == 0) {
-		pthread_mutex_unlock(&ms->lock);
+		pthread_rwlock_unlock(&ms->lock);
 		return ms->brk_current;
 	}
 
 	if (addr < ms->brk_base) {
-		pthread_mutex_unlock(&ms->lock);
+		pthread_rwlock_unlock(&ms->lock);
 		return ms->brk_current;
 	}
 
@@ -853,7 +853,7 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 
 				newhost = realloc(r->host, r->size + grow);
 				if (newhost == NULL) {
-					pthread_mutex_unlock(&ms->lock);
+					pthread_rwlock_unlock(&ms->lock);
 					return ms->brk_current;
 				}
 				memset(newhost + r->size, 0, grow);
@@ -870,14 +870,14 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 				    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
 				    -1, 0);
 				if (p == MAP_FAILED) {
-					pthread_mutex_unlock(&ms->lock);
+					pthread_rwlock_unlock(&ms->lock);
 					return ms->brk_current;
 				}
 				r->size += grow;
 			} else {
 				r = calloc(1, sizeof(*r));
 				if (r == NULL) {
-					pthread_mutex_unlock(&ms->lock);
+					pthread_rwlock_unlock(&ms->lock);
 					return ms->brk_current;
 				}
 				new_size = new_brk - ms->brk_base;
@@ -889,7 +889,7 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 					    MAP_FIXED, -1, 0);
 					if (r->host == MAP_FAILED) {
 						free(r);
-						pthread_mutex_unlock(
+						pthread_rwlock_unlock(
 						    &ms->lock);
 						return ms->brk_current;
 					}
@@ -897,7 +897,7 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 					r->host = calloc(1, new_size);
 					if (r->host == NULL) {
 						free(r);
-						pthread_mutex_unlock(
+						pthread_rwlock_unlock(
 						    &ms->lock);
 						return ms->brk_current;
 					}
@@ -915,7 +915,7 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 	}
 
 	ms->brk_current = addr;
-	pthread_mutex_unlock(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
 
 	return addr;
 }
@@ -933,18 +933,18 @@ mem_translate(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 	 * This allows mixing native and interpreter regions in
 	 * AOT mode (needed when host page size > guest page size).
 	 */
-	pthread_mutex_lock(&ms->lock);
+	pthread_rwlock_rdlock(&ms->lock);
 	for (r = ms->regions; r != NULL; r = r->next) {
 		if (addr >= r->base && addr + size <= r->base + r->size) {
 			if ((r->prot & prot) != prot) {
-				pthread_mutex_unlock(&ms->lock);
+				pthread_rwlock_unlock(&ms->lock);
 				return NULL;
 			}
-			pthread_mutex_unlock(&ms->lock);
+			pthread_rwlock_unlock(&ms->lock);
 			return r->host + (addr - r->base);
 		}
 	}
-	pthread_mutex_unlock(&ms->lock);
+	pthread_rwlock_unlock(&ms->lock);
 	return NULL;
 }
 
