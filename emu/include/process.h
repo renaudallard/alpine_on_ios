@@ -98,6 +98,7 @@ void		 proc_table_init(void);
 emu_process_t	*proc_create(emu_process_t *parent);
 emu_process_t	*proc_find(int pid);
 void		 proc_exit(emu_process_t *proc, int status);
+void		 proc_exit_group(emu_process_t *proc);
 int		 proc_wait(emu_process_t *parent, int pid, int *status,
 		    int options);
 int		 proc_fork(emu_process_t *parent);

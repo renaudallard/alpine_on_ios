@@ -496,7 +496,10 @@ sys_process(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 
 	switch (nr) {
 	case SYS_EXIT:
+		return do_exit(proc, a0);
 	case SYS_EXIT_GROUP:
+		/* Stop all threads in this group, then exit. */
+		proc_exit_group(proc);
 		return do_exit(proc, a0);
 
 	case SYS_GETPID:

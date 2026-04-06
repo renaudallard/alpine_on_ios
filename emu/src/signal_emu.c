@@ -182,9 +182,10 @@ sig_deliver(emu_process_t *proc)
 			return;
 		}
 
-		/* Default: terminate. */
+		/* Default: terminate.  Encode as signal death for wait4:
+		 * low 7 bits = signal number (WIFSIGNALED). */
 		LOG_DBG("sig: pid %d killed by signal %d", proc->pid, sig);
-		proc_exit(proc, 128 + sig);
+		proc_exit(proc, sig & 0x7f);
 		return;
 	}
 

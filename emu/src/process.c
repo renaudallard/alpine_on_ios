@@ -224,6 +224,22 @@ proc_exit(emu_process_t *proc, int status)
 	    proc->pid, status);
 }
 
+void
+proc_exit_group(emu_process_t *proc)
+{
+	emu_process_t	*p;
+	int		 tgid;
+
+	tgid = proc->tgid;
+
+	pthread_mutex_lock(&proc_lock);
+	for (p = proc_list; p != NULL; p = p->next) {
+		if (p->tgid == tgid && p != proc)
+			p->cpu.running = 0;
+	}
+	pthread_mutex_unlock(&proc_lock);
+}
+
 int
 proc_wait(emu_process_t *parent, int pid, int *status, int options)
 {
@@ -583,7 +599,7 @@ proc_run(void *arg)
 		case EMU_UNIMPL:
 			LOG_ERR("proc: pid %d unimplemented insn at pc=0x%lx",
 			    proc->pid, (unsigned long)proc->cpu.pc);
-			proc_run_exit(proc, 128 + EMU_SIGILL);
+			proc_run_exit(proc, EMU_SIGILL & 0x7f);
 			return (NULL);
 		case EMU_BREAK: {
 			/*
