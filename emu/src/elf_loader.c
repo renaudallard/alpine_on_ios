@@ -16,22 +16,22 @@
 
 #define _DEFAULT_SOURCE
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <stdlib.h>
+#include <limits.h>
 
-#ifndef MAP_JIT
-#define MAP_JIT 0
-#endif
 #include <string.h>
 #include <unistd.h>
 
 #include "elf_loader.h"
 #include "emu.h"
 #include "memory.h"
-#include "native.h"
 #include "log.h"
+
+#define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((uint64_t)(a) - 1))
 
 /* ELF64 types defined inline to avoid host elf.h dependency. */
 
@@ -214,47 +214,134 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 	if (is_dyn) {
 		if (mem->aot_mode) {
 			/*
-			 * AOT: reserve the full span aligned to host
-			 * page size.  On iOS (16K pages), ELF segments
-			 * may be 4K-aligned; the reservation must cover
-			 * the host-page-aligned range.
+			 * AOT: dlopen the companion Mach-O dylib.
+			 * The build script converts each ELF to a dylib
+			 * that preserves code+data segment layout.
+			 * dlopen() loads it with executable code pages
+			 * (signed by the app bundle).
 			 */
-			uint64_t span, aligned_vmin;
-			long host_page;
-			uint64_t hmask;
-			void *reservation;
+			char dylib_path[PATH_MAX];
+			void *dl;
+			Dl_info dli;
+			uint64_t slide;
+			uint64_t text_vaddr_page;
 
-			host_page = sysconf(_SC_PAGESIZE);
-			if (host_page <= 0)
-				host_page = PAGE_SIZE;
-			hmask = ~((uint64_t)host_page - 1);
+			snprintf(dylib_path, sizeof(dylib_path),
+			    "%s.dylib", host_path);
 
-			aligned_vmin = vmin & hmask;
-			span = ((vmax - aligned_vmin) +
-			    (uint64_t)host_page - 1) & hmask;
-
-			/*
-			 * Try MAP_JIT first (iOS: only way to get
-			 * executable pages).  Fallback to plain
-			 * anonymous (Linux).
-			 */
-			reservation = mmap(NULL, span,
-			    PROT_READ | PROT_WRITE | PROT_EXEC,
-			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT,
-			    -1, 0);
-			if (reservation == MAP_FAILED)
-				reservation = mmap(NULL, span,
-				    PROT_READ | PROT_WRITE,
-				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-			if (reservation == MAP_FAILED) {
-				emu_set_error("elf: reservation mmap failed");
+			dl = dlopen(dylib_path, RTLD_NOW | RTLD_LOCAL);
+			if (dl == NULL) {
+				emu_set_error("elf: dlopen %s: %s",
+				    dylib_path, dlerror());
 				goto fail;
 			}
-			base = (uint64_t)reservation - aligned_vmin;
-			LOG_INFO("elf_load: AOT reservation %p span=0x%lx "
-			    "base=0x%lx",
-			    reservation, (unsigned long)span,
-			    (unsigned long)base);
+
+			/*
+			 * Find where dyld loaded it.  The dylib's
+			 * __TEXT vmaddr is 0, so the slide IS the
+			 * load address.  Use dladdr on the handle
+			 * to find the base.
+			 */
+			text_vaddr_page = vmin & ~(uint64_t)(PAGE_SIZE - 1);
+
+			/* Get the Mach-O header address from dyld. */
+			{
+				extern void *_dyld_get_image_header_by_name(
+				    const char *);
+				/*
+				 * Walk loaded images to find our dylib.
+				 * The header address minus __TEXT.vmaddr (0)
+				 * gives us the ASLR slide.
+				 */
+				uint32_t img_count;
+				const char *img_name;
+				uint64_t img_addr = 0;
+
+#ifdef __APPLE__
+				extern uint32_t _dyld_image_count(void);
+				extern const char *_dyld_get_image_name(uint32_t);
+				extern const void *_dyld_get_image_header(uint32_t);
+
+				img_count = _dyld_image_count();
+				for (uint32_t j = img_count; j > 0; j--) {
+					img_name = _dyld_get_image_name(j - 1);
+					if (img_name != NULL &&
+					    strstr(img_name, ".dylib") != NULL) {
+						const char *bn1, *bn2;
+						bn1 = strrchr(dylib_path, '/');
+						bn2 = strrchr(img_name, '/');
+						if (bn1 && bn2 &&
+						    strcmp(bn1, bn2) == 0) {
+							img_addr = (uint64_t)
+							    _dyld_get_image_header(
+							    j - 1);
+							break;
+						}
+					}
+				}
+#endif
+				if (img_addr == 0) {
+					emu_set_error("elf: cannot find dylib "
+					    "in loaded images");
+					dlclose(dl);
+					goto fail;
+				}
+
+				/*
+				 * The dylib's VM layout has __TEXT at vmaddr 0.
+				 * The actual load address = img_addr.
+				 * ELF vaddrs were offset by text_vaddr_page in
+				 * the converter, so:
+				 *   base = img_addr - text_vaddr_page
+				 * Then: base + elf_vaddr == host addr.
+				 */
+				base = img_addr;
+			}
+
+			LOG_INFO("elf_load: AOT dylib %s at 0x%llx",
+			    dylib_path, (unsigned long long)base);
+
+			/* Register each segment with mem_space. */
+			for (i = 0; i < ehdr.e_phnum; i++) {
+				uint64_t	saddr, ssize;
+				int		sprot;
+
+				if (phdrs[i].p_type != PT_LOAD)
+					continue;
+
+				saddr = base + phdrs[i].p_vaddr;
+				ssize = ALIGN_UP(phdrs[i].p_memsz, PAGE_SIZE);
+				sprot = elf_pflags_to_prot(phdrs[i].p_flags);
+
+				mem_mmap_host(mem, saddr, ssize, sprot,
+				    (uint8_t *)saddr);
+			}
+
+			info->entry = base + ehdr.e_entry;
+			info->base = base;
+			{
+				long bpg = sysconf(_SC_PAGESIZE);
+				if (bpg <= 0) bpg = PAGE_SIZE;
+				info->brk = (base + vmax + (uint64_t)bpg - 1) &
+				    ~((uint64_t)bpg - 1);
+			}
+
+			/* Check for interpreter. */
+			for (i = 0; i < ehdr.e_phnum; i++) {
+				if (phdrs[i].p_type == PT_INTERP &&
+				    phdrs[i].p_filesz > 0 &&
+				    phdrs[i].p_filesz < sizeof(info->interp)) {
+					lseek(fd, phdrs[i].p_offset, SEEK_SET);
+					n = read(fd, info->interp,
+					    phdrs[i].p_filesz);
+					if (n > 0)
+						info->interp[n] = '\0';
+				}
+			}
+
+			free(phdrs);
+			close(fd);
+			return 0;
 		} else {
 			base = base_hint;
 			if (base == 0)
@@ -289,62 +376,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 		prot = elf_pflags_to_prot(phdrs[i].p_flags);
 
-		if (mem->aot_mode) {
-			/*
-			 * AOT: write directly into the MAP_JIT reservation.
-			 * Toggle W^X to write content.  For data segments,
-			 * mprotect to PROT_RW so they stay writable during
-			 * native execution (W^X only affects exec pages).
-			 */
-			long hpg = sysconf(_SC_PAGESIZE);
-			uint64_t hmask, aaddr, asize;
-			int is_exec;
-
-			if (hpg <= 0) hpg = PAGE_SIZE;
-			hmask = ~((uint64_t)hpg - 1);
-			is_exec = (phdrs[i].p_flags & PF_X) &&
-			    !(phdrs[i].p_flags & PF_W);
-
-			aaddr = map_addr & hmask;
-			asize = ((map_addr + map_size) - aaddr +
-			    (uint64_t)hpg - 1) & hmask;
-
-			/* Write segment content into the JIT region. */
-			NATIVE_WRITE_ENABLE();
-			/* Zero bss. */
-			if (phdrs[i].p_memsz > phdrs[i].p_filesz)
-				memset((void *)(addr + phdrs[i].p_filesz), 0,
-				    phdrs[i].p_memsz - phdrs[i].p_filesz);
-			if (phdrs[i].p_filesz > 0) {
-				if (pread(fd, (void *)addr,
-				    phdrs[i].p_filesz,
-				    phdrs[i].p_offset) < 0) {
-					NATIVE_WRITE_DISABLE();
-					emu_set_error("elf: pread seg %d", i);
-					goto fail;
-				}
-			}
-			NATIVE_WRITE_DISABLE();
-
-			/* Data segments: remove exec so W^X toggle
-			 * doesn't affect them (always writable). */
-			if (!is_exec) {
-				mprotect((void *)aaddr, asize,
-				    PROT_READ | PROT_WRITE);
-			}
-
-			/* Register so mem_translate finds it. */
-			if (mem_mmap_host(mem, aaddr, asize, prot,
-			    (uint8_t *)aaddr) == (uint64_t)-1) {
-				emu_set_error("elf: register seg %d", i);
-				goto fail;
-			}
-			LOG_DBG("elf_load: seg %d AOT %s "
-			    "addr=0x%lx size=0x%lx",
-			    i, is_exec ? "exec" : "data",
-			    (unsigned long)aaddr, (unsigned long)asize);
-			continue;
-		}
+		/* AOT mode is handled above via dlopen; not reached here. */
 
 		/* Non-AOT: map with write permission so we can fill data. */
 		if (mem_mmap(mem, map_addr, map_size,
