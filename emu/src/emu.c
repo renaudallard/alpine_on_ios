@@ -43,6 +43,7 @@ static int		 g_initialized;
 static int		 g_jit_enabled;
 static int		 g_aot_enabled;
 static pthread_mutex_t	 g_lock = PTHREAD_MUTEX_INITIALIZER;
+extern uint64_t		 g_native_base;
 static char		 g_last_error[512];
 
 static void
@@ -91,49 +92,66 @@ emu_init(const char *rootfs_path)
 	}
 
 	/*
-	 * Enable native execution.  Try JIT (MAP_JIT) first.
-	 * On iOS: if MAP_JIT fails (sideloaded), enable AOT
-	 *   (pre-patched file-backed exec, no MAP_JIT needed).
-	 * On macOS: if MAP_JIT fails, use interpreter only
-	 *   (macOS code signing rejects anonymous exec pages
-	 *   without proper Developer ID signing).
+	 * Probe for a free 4GB address range for native execution.
+	 * Must avoid GPU carveouts and other reserved regions.
+	 * Try several candidates above the typical app region.
 	 */
-	if (jit_available() && jit_init() == 0) {
+	{
+		static const uint64_t candidates[] = {
+			0x500000000ULL,		/* 20 GB - default */
+			0x800000000ULL,		/* 32 GB - above small GPU */
+			0xC00000000ULL,		/* 48 GB - above large GPU */
+			0x1000000000ULL,	/* 64 GB - safe for all */
+			0x2000000000ULL,	/* 128 GB */
+			0
+		};
+		g_native_base = 0;
+		for (int ci = 0; candidates[ci] != 0; ci++) {
+			void *p = mmap((void *)candidates[ci], 4096,
+			    PROT_READ | PROT_WRITE,
+			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+			    -1, 0);
+			if (p != MAP_FAILED) {
+				munmap(p, 4096);
+				g_native_base = candidates[ci];
+				LOG_INFO("emu: native base 0x%llx",
+				    (unsigned long long)g_native_base);
+				break;
+			}
+		}
+	}
+
+	/*
+	 * Enable native execution.  Try JIT (MAP_JIT) first.
+	 * If MAP_JIT fails, enable AOT (pre-patched binaries
+	 * with file-backed exec from the signed app bundle).
+	 */
+	if (g_native_base != 0 && jit_available() && jit_init() == 0) {
 #ifdef __APPLE__
-		void *probe = mmap((void *)0x500000000ULL, 4096,
+		void *probe = mmap((void *)g_native_base, 4096,
 		    PROT_READ | PROT_WRITE,
 		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_JIT,
 		    -1, 0);
 		if (probe != MAP_FAILED) {
 			munmap(probe, 4096);
 			g_jit_enabled = 1;
-			LOG_INFO("emu: JIT probe succeeded, JIT enabled");
+			LOG_INFO("emu: JIT enabled at 0x%llx",
+			    (unsigned long long)g_native_base);
 		} else {
-#if TARGET_OS_IPHONE
 			/*
-			 * iOS: enable AOT.  Pre-patched binaries use
-			 * file-backed exec mappings from the signed
-			 * app bundle.
+			 * MAP_JIT unavailable.  Enable AOT: pre-patched
+			 * binaries use file-backed exec from the signed
+			 * bundle.  Works on both iOS and macOS.
 			 */
 			g_aot_enabled = 1;
-			LOG_INFO("emu: MAP_JIT unavailable, AOT enabled");
-#else
-			/*
-			 * macOS: JIT addresses (0x500000000+) may
-			 * collide with GPU carveout.  Ad-hoc codesigned
-			 * ELF exec is also unreliable.  Use interpreter.
-			 */
-			struct sigaction sa_dfl;
-			memset(&sa_dfl, 0, sizeof(sa_dfl));
-			sa_dfl.sa_handler = SIG_DFL;
-			sigaction(SIGTRAP, &sa_dfl, NULL);
-			LOG_WARN("emu: MAP_JIT unavailable, "
-			    "using interpreter");
-#endif
+			LOG_INFO("emu: AOT enabled at 0x%llx",
+			    (unsigned long long)g_native_base);
 		}
 #else
 		g_jit_enabled = 1;
 #endif
+	} else if (g_native_base == 0) {
+		LOG_WARN("emu: no free address range, using interpreter");
 	}
 
 	g_initialized = 1;

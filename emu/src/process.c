@@ -37,14 +37,20 @@
 #include "vfs.h"
 
 /*
- * JIT mode address constants.
- * Must be above iOS PAGEZERO (4GB) and away from the app binary
- * (loaded near 0x100000000 with ASLR). Using 0x500000000+ (20GB+)
- * avoids conflicts on all current iOS devices.
+ * Native mode address layout: 4GB range starting at a
+ * dynamically probed base address.  The probe avoids GPU
+ * carveouts and other reserved regions.
+ *
+ * Layout within the range:
+ *   base + 0x00000000  binary
+ *   base + 0x80000000  interpreter / dynamic linker
+ *   base + 0xFFFFF0000 stack top
  */
-#define JIT_BINARY_BASE		0x500000000ULL
-#define JIT_INTERP_BASE		0x580000000ULL
-#define JIT_STACK_TOP		0x5FFFFF0000ULL
+uint64_t	g_native_base;
+
+#define JIT_BINARY_BASE		(g_native_base)
+#define JIT_INTERP_BASE		(g_native_base + 0x80000000ULL)
+#define JIT_STACK_TOP		(g_native_base + 0xFFFFF0000ULL)
 
 /* Interpreter base addresses */
 #define INTERP_INTERP_BASE	0x7f00000000ULL
