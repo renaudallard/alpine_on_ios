@@ -28,7 +28,7 @@
 #include "cpu.h"
 #include "elf_loader.h"
 #include "emu.h"
-#include "jit.h"
+#include "native.h"
 #include "log.h"
 #include "memory.h"
 #include "process.h"
@@ -555,18 +555,18 @@ proc_run(void *arg)
 #ifdef __aarch64__
 	/*
 	 * Use AOT native execution when the code is mapped at
-	 * the guest address (not calloc fallback).  jit_enter
+	 * the guest address (not calloc fallback).  native_enter
 	 * jumps to the guest PC directly, so host addr must
 	 * equal guest addr.
 	 */
 	if (proc->mem != NULL && proc->mem->aot_mode &&
-	    jit_available()) {
+	    native_available()) {
 		void *hp = mem_translate(proc->mem, proc->cpu.pc, 4,
 		    MEM_PROT_READ);
 		if (hp == (void *)proc->cpu.pc) {
 			LOG_INFO("proc: pid %d using AOT native",
 			    proc->pid);
-			jit_run(proc);
+			native_run(proc);
 			proc_run_exit(proc, proc->cpu.exit_code);
 			return (NULL);
 		}

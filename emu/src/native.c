@@ -19,7 +19,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "jit.h"
+#include "native.h"
 #include "cpu.h"
 #include "log.h"
 #include "process.h"
@@ -29,17 +29,17 @@
 #include <dlfcn.h>
 
 /*
- * pthread_jit_write_protect_np is available at runtime on iOS 14.2+
+ * pthread_native_write_protect_np is available at runtime on iOS 14.2+
  * and macOS 11+ but iOS SDK headers mark it __API_UNAVAILABLE(ios).
  * Resolve via dlsym to bypass the header restriction.
  */
-static void (*jit_write_protect_fn)(int);
+static void (*native_write_protect_fn)(int);
 
 void
-jit_write_protect(int enabled)
+native_write_protect(int enabled)
 {
-	if (jit_write_protect_fn != NULL)
-		jit_write_protect_fn(enabled);
+	if (native_write_protect_fn != NULL)
+		native_write_protect_fn(enabled);
 }
 #endif
 
@@ -65,10 +65,10 @@ jit_write_protect(int enabled)
 #define UC_CPSR(uc)	((uc)->uc_mcontext.pstate)
 #endif
 
-static _Thread_local emu_process_t *jit_current_proc;
+static _Thread_local emu_process_t *native_current_proc;
 
 static void
-jit_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
+native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 {
 	ucontext_t	*uc;
 	emu_process_t	*proc;
@@ -85,7 +85,7 @@ jit_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 	insn = *(uint32_t *)pc;
 	imm = (insn >> 5) & 0xFFFF;
 
-	proc = jit_current_proc;
+	proc = native_current_proc;
 	if (proc == NULL) {
 		/* Not in JIT context - restore default and re-raise */
 		struct sigaction sa;
@@ -108,14 +108,14 @@ jit_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		UC_REGS(uc)[0] = proc->cpu.x[0];
 
 		if (!proc->cpu.running) {
-			/* Save guest state and jump to jit_exit */
+			/* Save guest state and jump to native_exit */
 			for (i = 0; i < 31; i++)
 				proc->cpu.x[i] = UC_REGS(uc)[i];
 			proc->cpu.sp = UC_SP(uc);
 			proc->cpu.pc = pc + 4;
 			proc->cpu.nzcv = UC_CPSR(uc) & 0xF0000000;
 
-			UC_PC(uc) = (uint64_t)jit_exit;
+			UC_PC(uc) = (uint64_t)native_exit;
 			UC_REGS(uc)[0] = (uint64_t)&proc->cpu;
 			return;
 		}
@@ -139,7 +139,7 @@ jit_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		proc->cpu.pc = pc;
 		proc->cpu.nzcv = UC_CPSR(uc) & 0xF0000000;
 
-		UC_PC(uc) = (uint64_t)jit_exit;
+		UC_PC(uc) = (uint64_t)native_exit;
 		UC_REGS(uc)[0] = (uint64_t)&proc->cpu;
 		return;
 	}
@@ -148,22 +148,22 @@ jit_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 }
 
 int
-jit_init(void)
+native_init(void)
 {
 	struct sigaction	sa;
 
 #ifdef __APPLE__
-	/* Resolve pthread_jit_write_protect_np at runtime */
-	jit_write_protect_fn = (void (*)(int))
-	    dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
-	if (jit_write_protect_fn != NULL)
-		LOG_INFO("jit: pthread_jit_write_protect_np available");
+	/* Resolve pthread_native_write_protect_np at runtime */
+	native_write_protect_fn = (void (*)(int))
+	    dlsym(RTLD_DEFAULT, "pthread_native_write_protect_np");
+	if (native_write_protect_fn != NULL)
+		LOG_INFO("jit: pthread_native_write_protect_np available");
 	else
-		LOG_WARN("jit: pthread_jit_write_protect_np not found");
+		LOG_WARN("jit: pthread_native_write_protect_np not found");
 #endif
 
 	memset(&sa, 0, sizeof(sa));
-	sa.sa_sigaction = jit_sigtrap_handler;
+	sa.sa_sigaction = native_sigtrap_handler;
 	sa.sa_flags = SA_SIGINFO;
 	sigfillset(&sa.sa_mask);
 
@@ -177,25 +177,25 @@ jit_init(void)
 }
 
 int
-jit_available(void)
+native_available(void)
 {
 	return (1);
 }
 
 int
-jit_run(emu_process_t *proc)
+native_run(emu_process_t *proc)
 {
-	jit_current_proc = proc;
+	native_current_proc = proc;
 
 	/* In JIT mode, guest addr = host addr */
-	jit_enter(&proc->cpu, (void *)proc->cpu.pc);
+	native_enter(&proc->cpu, (void *)proc->cpu.pc);
 
-	/* Reached here via jit_exit */
+	/* Reached here via native_exit */
 	return (proc->cpu.exit_code);
 }
 
 void
-jit_patch_code(void *code, size_t size)
+native_patch_code(void *code, size_t size)
 {
 	uint32_t	*insns;
 	size_t		 count, i;
@@ -232,20 +232,20 @@ jit_patch_code(void *code, size_t size)
 #else /* !__aarch64__ */
 
 int
-jit_init(void)
+native_init(void)
 {
 	LOG_INFO("jit: not available (not aarch64)");
 	return (0);
 }
 
 int
-jit_available(void)
+native_available(void)
 {
 	return (0);
 }
 
 int
-jit_run(emu_process_t *proc)
+native_run(emu_process_t *proc)
 {
 	(void)proc;
 	LOG_ERR("jit: cannot run on non-aarch64");
@@ -253,7 +253,7 @@ jit_run(emu_process_t *proc)
 }
 
 void
-jit_patch_code(void *code, size_t size)
+native_patch_code(void *code, size_t size)
 {
 	(void)code;
 	(void)size;

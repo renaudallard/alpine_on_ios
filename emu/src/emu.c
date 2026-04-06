@@ -29,7 +29,7 @@
 #include <unistd.h>
 
 #include "emu.h"
-#include "jit.h"
+#include "native.h"
 #include "log.h"
 #include "memory.h"
 #include "process.h"
@@ -146,7 +146,7 @@ emu_init(const char *rootfs_path)
 	 * Enable AOT native execution: pre-patched binaries use
 	 * file-backed exec from the signed app bundle.
 	 */
-	if (g_native_base != 0 && jit_available() && jit_init() == 0) {
+	if (g_native_base != 0 && native_available() && native_init() == 0) {
 		g_aot_enabled = 1;
 		LOG_INFO("emu: AOT enabled at 0x%llx",
 		    (unsigned long long)g_native_base);
@@ -298,24 +298,6 @@ emu_shutdown(void)
 	}
 	g_initialized = 0;
 	pthread_mutex_unlock(&g_lock);
-}
-
-/*
- * Stubs kept for backward compatibility with callers that
- * haven't been updated yet (e.g. Swift UI code).
- * JIT runtime patching has been removed; only AOT is used.
- */
-int
-emu_set_jit_enabled(int on)
-{
-	(void)on;
-	return (0);
-}
-
-int
-emu_jit_enabled(void)
-{
-	return (0);
 }
 
 int

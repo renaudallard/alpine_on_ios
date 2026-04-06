@@ -24,30 +24,30 @@
 #define CPU_HOST_SAVE	848
 
 /*
- * void jit_enter(cpu_state_t *cpu, void *host_pc)
+ * void native_enter(cpu_state_t *cpu, void *host_pc)
  *
  * x0 = pointer to cpu_state_t
  * x1 = host PC to jump to (guest code address)
  *
  * Saves host callee-saved registers, loads guest state, branches to
- * guest code.  Returns when jit_exit is invoked by the signal handler.
+ * guest code.  Returns when native_exit is invoked by the signal handler.
  */
 
 #ifdef __APPLE__
-	.globl _jit_enter
-	.globl _jit_exit
+	.globl _native_enter
+	.globl _native_exit
 	.p2align 2
-_jit_enter:
+_native_enter:
 #else
-	.globl jit_enter
-	.globl jit_exit
+	.globl native_enter
+	.globl native_exit
 	.p2align 2
-	.type jit_enter, %function
-jit_enter:
+	.type native_enter, %function
+native_enter:
 #endif
 
 	/*
-	 * Save host callee-saved registers into cpu->jit_host_save.
+	 * Save host callee-saved registers into cpu->native_host_save.
 	 * The offset (848) is too large for stp immediate, so
 	 * compute the save area address in x16 first.
 	 */
@@ -98,21 +98,21 @@ jit_enter:
 	br	x16
 
 /*
- * jit_exit:
+ * native_exit:
  *
  * Jumped to by the signal handler via ucontext PC modification.
  * x0 = pointer to cpu_state_t (set by signal handler).
  *
  * Restores host callee-saved registers, SP, and returns to
- * jit_enter's caller.
+ * native_enter's caller.
  */
 #ifdef __APPLE__
 	.p2align 2
-_jit_exit:
+_native_exit:
 #else
 	.p2align 2
-	.type jit_exit, %function
-jit_exit:
+	.type native_exit, %function
+native_exit:
 #endif
 
 	/* Compute save area address */
@@ -130,7 +130,7 @@ jit_exit:
 	ldp	x27, x28, [x16, #64]
 	ldp	x29, x30, [x16, #80]
 
-	/* Return 0 to jit_enter's caller */
+	/* Return 0 to native_enter's caller */
 	mov	x0, #0
 	ret
 

@@ -25,7 +25,7 @@ targets:
         type: sources
         excludes:
           - "**/*.S"
-      - path: emu/src/jit_entry.S
+      - path: emu/src/native_entry.S
         type: sources
       - path: emu/include
         type: headers
@@ -78,7 +78,7 @@ targets:
         type: sources
         excludes:
           - "**/*.S"
-      - path: emu/src/jit_entry.S
+      - path: emu/src/native_entry.S
         type: sources
       - path: emu/include
         type: headers
