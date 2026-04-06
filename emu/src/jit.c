@@ -205,10 +205,6 @@ jit_patch_code(void *code, size_t size)
 	insns = (uint32_t *)code;
 	count = size / 4;
 
-#ifdef __APPLE__
-	JIT_WRITE_ENABLE();
-#endif
-
 	for (i = 0; i < count; i++) {
 		insn = insns[i];
 
@@ -225,10 +221,6 @@ jit_patch_code(void *code, size_t size)
 			insns[i] = 0xD4200000 | ((0x0200 | rn) << 5);
 		}
 	}
-
-#ifdef __APPLE__
-	JIT_WRITE_DISABLE();
-#endif
 
 #ifdef __APPLE__
 	sys_icache_invalidate(code, size);

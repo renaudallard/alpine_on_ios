@@ -40,7 +40,6 @@
 /* Global state */
 static vfs_t		*g_vfs;
 static int		 g_initialized;
-static int		 g_jit_enabled;
 static int		 g_aot_enabled;
 static pthread_mutex_t	 g_lock = PTHREAD_MUTEX_INITIALIZER;
 extern uint64_t		 g_native_base;
@@ -122,34 +121,13 @@ emu_init(const char *rootfs_path)
 	}
 
 	/*
-	 * Enable native execution.  Try JIT (MAP_JIT) first.
-	 * If MAP_JIT fails, enable AOT (pre-patched binaries
-	 * with file-backed exec from the signed app bundle).
+	 * Enable AOT native execution: pre-patched binaries use
+	 * file-backed exec from the signed app bundle.
 	 */
 	if (g_native_base != 0 && jit_available() && jit_init() == 0) {
-#ifdef __APPLE__
-		void *probe = mmap((void *)g_native_base, 4096,
-		    PROT_READ | PROT_WRITE,
-		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_JIT,
-		    -1, 0);
-		if (probe != MAP_FAILED) {
-			munmap(probe, 4096);
-			g_jit_enabled = 1;
-			LOG_INFO("emu: JIT enabled at 0x%llx",
-			    (unsigned long long)g_native_base);
-		} else {
-			/*
-			 * MAP_JIT unavailable.  Enable AOT: pre-patched
-			 * binaries use file-backed exec from the signed
-			 * bundle.  Works on both iOS and macOS.
-			 */
-			g_aot_enabled = 1;
-			LOG_INFO("emu: AOT enabled at 0x%llx",
-			    (unsigned long long)g_native_base);
-		}
-#else
-		g_jit_enabled = 1;
-#endif
+		g_aot_enabled = 1;
+		LOG_INFO("emu: AOT enabled at 0x%llx",
+		    (unsigned long long)g_native_base);
 	} else if (g_native_base == 0) {
 		LOG_WARN("emu: no free address range, using interpreter");
 	}
@@ -217,8 +195,7 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 	if (ret != 0) {
 		/* Only set generic error if elf_load didn't set a specific one */
 		if (g_last_error[0] == '\0')
-			set_error("execve %s: error %d (jit=%d)",
-			    path, ret, g_jit_enabled);
+			set_error("execve %s: error %d", path, ret);
 		close(sockpair[0]);
 		proc_destroy(proc);
 		return (-1);
@@ -298,26 +275,25 @@ emu_shutdown(void)
 		g_vfs = NULL;
 	}
 	g_initialized = 0;
-	g_jit_enabled = 0;
 	pthread_mutex_unlock(&g_lock);
 }
 
+/*
+ * Stubs kept for backward compatibility with callers that
+ * haven't been updated yet (e.g. Swift UI code).
+ * JIT runtime patching has been removed; only AOT is used.
+ */
 int
 emu_set_jit_enabled(int on)
 {
-	int	prev;
-
-	pthread_mutex_lock(&g_lock);
-	prev = g_jit_enabled;
-	g_jit_enabled = on && jit_available();
-	pthread_mutex_unlock(&g_lock);
-	return (prev);
+	(void)on;
+	return (0);
 }
 
 int
 emu_jit_enabled(void)
 {
-	return (g_jit_enabled);
+	return (0);
 }
 
 int

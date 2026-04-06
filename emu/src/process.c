@@ -37,7 +37,7 @@
 #include "vfs.h"
 
 /*
- * Native mode address layout: 4GB range starting at a
+ * AOT native mode address layout: 4GB range starting at a
  * dynamically probed base address.  The probe avoids GPU
  * carveouts and other reserved regions.
  *
@@ -48,9 +48,9 @@
  */
 uint64_t	g_native_base;
 
-#define JIT_BINARY_BASE		(g_native_base)
-#define JIT_INTERP_BASE		(g_native_base + 0x80000000ULL)
-#define JIT_STACK_TOP		(g_native_base + 0xFFFFF0000ULL)
+#define AOT_BINARY_BASE		(g_native_base)
+#define AOT_INTERP_BASE		(g_native_base + 0x80000000ULL)
+#define AOT_STACK_TOP		(g_native_base + 0xFFFFF0000ULL)
 
 /* Interpreter base addresses */
 #define INTERP_INTERP_BASE	0x7f00000000ULL
@@ -369,7 +369,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	elf_info_t	info, interp_info;
 	mem_space_t	*newmem;
 	uint64_t	sp, entry, interp_base, stack_top, bin_base;
-	int		ret, use_jit;
+	int		ret;
 
 	/* Resolve path through VFS. */
 	ret = vfs_resolve(proc->vfs, path, host_path, sizeof(host_path));
@@ -384,15 +384,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		return (-ENOMEM);
 
 	/* Determine execution mode. */
-	use_jit = (proc->mem != NULL && proc->mem->jit_mode) ||
-	    (jit_available() && emu_jit_enabled());
-	if (use_jit) {
-		newmem->jit_mode = 1;
-		newmem->mmap_next = MMAP_START_JIT;
-		bin_base = JIT_BINARY_BASE;
-		interp_base = JIT_INTERP_BASE;
-		stack_top = JIT_STACK_TOP;
-	} else if (emu_aot_enabled() && proc->ppid == 0) {
+	if (emu_aot_enabled() && proc->ppid == 0) {
 		/*
 		 * AOT only for the initial process (ppid==0, not
 		 * forked).  Forked children can't use MAP_FIXED at
@@ -400,10 +392,10 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		 * threads in the same host process.
 		 */
 		newmem->aot_mode = 1;
-		newmem->mmap_next = MMAP_START_JIT;
-		bin_base = JIT_BINARY_BASE;
-		interp_base = JIT_INTERP_BASE;
-		stack_top = JIT_STACK_TOP;
+		newmem->mmap_next = MMAP_START_AOT;
+		bin_base = AOT_BINARY_BASE;
+		interp_base = AOT_INTERP_BASE;
+		stack_top = AOT_STACK_TOP;
 	} else {
 		bin_base = 0;
 		interp_base = INTERP_INTERP_BASE;
@@ -413,23 +405,8 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	/* Load ELF. */
 	memset(&info, 0, sizeof(info));
 	ret = elf_load(host_path, newmem, bin_base, &info);
-	if (ret != 0 && use_jit) {
-		/* JIT mmap may have failed; fall back to interpreter. */
-		LOG_WARN("proc: execve: JIT load failed, trying interpreter");
-		mem_space_destroy(newmem);
-		newmem = mem_space_create();
-		if (newmem == NULL)
-			return (-ENOMEM);
-		use_jit = 0;
-		bin_base = 0;
-		interp_base = INTERP_INTERP_BASE;
-		stack_top = INTERP_STACK_TOP;
-		memset(&info, 0, sizeof(info));
-		ret = elf_load(host_path, newmem, bin_base, &info);
-	}
 	if (ret != 0) {
-		LOG_ERR("execve: elf_load %s failed (jit=%d)",
-		    host_path, use_jit);
+		LOG_ERR("execve: elf_load %s failed", host_path);
 		mem_space_destroy(newmem);
 		return (-ENOEXEC);
 	}
@@ -576,12 +553,10 @@ proc_run(void *arg)
 	    (unsigned long)proc->cpu.pc, (unsigned long)proc->cpu.sp);
 
 #ifdef __aarch64__
-	/* Use native execution (JIT or AOT) when available. */
-	if (proc->mem != NULL &&
-	    (proc->mem->jit_mode || proc->mem->aot_mode) &&
+	/* Use AOT native execution when available. */
+	if (proc->mem != NULL && proc->mem->aot_mode &&
 	    jit_available()) {
-		LOG_INFO("proc: pid %d using %s execution", proc->pid,
-		    proc->mem->aot_mode ? "AOT" : "JIT");
+		LOG_INFO("proc: pid %d using AOT execution", proc->pid);
 		jit_run(proc);
 		proc_run_exit(proc, proc->cpu.exit_code);
 		return (NULL);

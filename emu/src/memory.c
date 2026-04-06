@@ -29,14 +29,13 @@
 
 #include "memory.h"
 #include "log.h"
-#include "jit.h"
 
 #define PAGE_SIZE	4096
 #define PAGE_MASK	(~((uint64_t)PAGE_SIZE - 1))
 #define MMAP_START	0x7F0000000000ULL
 
-/* True when guest addr == host addr (JIT or AOT native mode). */
-#define NATIVE_MODE(ms)	((ms)->jit_mode || (ms)->aot_mode)
+/* True when guest addr == host addr (AOT native mode). */
+#define NATIVE_MODE(ms)	((ms)->aot_mode)
 
 /* Host page size (may differ from guest 4K on macOS 16K). */
 static uint64_t
@@ -101,7 +100,6 @@ mem_space_create(void)
 		return NULL;
 
 	ms->mmap_next = MMAP_START;
-	ms->jit_mode = 0;
 	ms->refcount = 1;
 	pthread_mutex_init(&ms->lock, NULL);
 	return ms;
@@ -176,14 +174,14 @@ mem_space_clone(mem_space_t *src)
 
 	/*
 	 * Clone always produces an interpreter-mode copy.
-	 * In JIT mode the parent's host addresses ARE the guest
+	 * In AOT mode the parent's host addresses ARE the guest
 	 * addresses, and both parent and child are threads in the
 	 * same host process.  Using MAP_FIXED at the same address
 	 * would destroy the parent's mappings.  The interpreter
 	 * fallback is safe because fork is almost always followed
-	 * by execve, which creates a fresh JIT address space.
+	 * by execve, which creates a fresh AOT address space.
 	 */
-	dst->jit_mode = 0;
+	dst->aot_mode = 0;
 	dst->mmap_next = MMAP_START;
 
 	pp = &dst->regions;
@@ -218,7 +216,7 @@ fail:
 	return NULL;
 }
 
-/* Free a region's host memory depending on jit_mode. */
+/* Free a region's host memory depending on native mode. */
 static void
 region_free_host(mem_space_t *ms, mem_region_t *r)
 {
@@ -278,26 +276,14 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 				mflags = MAP_PRIVATE | MAP_ANONYMOUS |
 				    MAP_FIXED;
 				mprot = PROT_READ | PROT_WRITE;
-#ifdef __APPLE__
-				if (r->prot & MEM_PROT_EXEC)
-					mflags |= MAP_JIT;
-#endif
 				tail->host = mmap((void *)end, tail_size,
 				    mprot, mflags, -1, 0);
 				if (tail->host == MAP_FAILED) {
 					free(tail);
 					continue;
 				}
-#ifdef __APPLE__
-				if (r->prot & MEM_PROT_EXEC)
-					JIT_WRITE_ENABLE();
-#endif
 				memcpy(tail->host, r->host + tail_off,
 				    tail_size);
-#ifdef __APPLE__
-				if (r->prot & MEM_PROT_EXEC)
-					JIT_WRITE_DISABLE();
-#endif
 			} else {
 				tail->host = calloc(1, tail_size);
 				if (tail->host == NULL) {
@@ -310,8 +296,8 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 
 			region_insert(ms, tail);
 
-			/* Truncate original (JIT: partial munmap not
-			 * needed, mmap MAP_FIXED above reclaims tail). */
+			/* Truncate original (native mode: partial munmap
+			 * not needed, mmap MAP_FIXED above reclaims). */
 			r->size = addr - r->base;
 			continue;
 		}
@@ -421,10 +407,6 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 
 		mflags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
 		mprot = PROT_READ | PROT_WRITE;
-#ifdef __APPLE__
-		if (prot & MEM_PROT_EXEC)
-			mflags |= MAP_JIT;
-#endif
 		r->host = mmap((void *)addr, aligned_size,
 		    mprot, mflags, -1, 0);
 		if (r->host == MAP_FAILED) {
@@ -461,30 +443,15 @@ region_ready:
 		if (to_read > aligned_size)
 			to_read = aligned_size;
 
-		if (NATIVE_MODE(ms)) {
-#ifdef __APPLE__
-			if (prot & MEM_PROT_EXEC)
-				JIT_WRITE_ENABLE();
-#endif
-			n = pread(fd, r->host, to_read, offset);
-#ifdef __APPLE__
-			if (prot & MEM_PROT_EXEC)
-				JIT_WRITE_DISABLE();
-#endif
-		} else {
-			n = pread(fd, r->host, to_read, offset);
-		}
+		n = pread(fd, r->host, to_read, offset);
 		if (n < 0)
 			LOG_WARN("mmap: pread failed for fd %d", fd);
 	}
 
-	/* JIT mode: set final protection and patch executable code.
-	 * AOT mode skips patching (already done at build time). */
+	/* AOT mode: set final protection (code is already patched). */
 	if (NATIVE_MODE(ms) && (prot & MEM_PROT_EXEC)) {
 		int	fp;
 
-		if (!ms->aot_mode)
-			jit_patch_code(r->host, aligned_size);
 		fp = PROT_READ | PROT_EXEC;
 		if (prot & MEM_PROT_WRITE)
 			fp |= PROT_WRITE;
@@ -682,7 +649,6 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 	pthread_mutex_lock(&ms->lock);
 	for (r = ms->regions; r != NULL; r = next) {
 		uint64_t	rend, overlap_start, overlap_end;
-		int		old_prot;
 
 		next = r->next;
 		rend = r->base + r->size;
@@ -697,7 +663,6 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 		 * change the protection in place.
 		 */
 		if (overlap_start == r->base && overlap_end == rend) {
-			old_prot = r->prot;
 			r->prot = prot;
 		} else {
 			/*
@@ -705,11 +670,9 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 			 *
 			 * In interpreter mode each split piece gets its
 			 * own host allocation so free() is safe later.
-			 * In JIT mode host==guest so we just adjust
+			 * In native mode host==guest so we just adjust
 			 * pointers (no separate alloc needed).
 			 */
-			old_prot = r->prot;
-
 			if (overlap_start > r->base) {
 				/* Split: keep [base, overlap_start) as-is,
 				 * create [overlap_start, overlap_end) with new prot */
@@ -829,7 +792,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 				r->next = nr;
 				next = nr->next;
 			}
-			continue;	/* JIT mprotect handled per-region below */
+			continue;	/* native mprotect handled per-region below */
 		}
 
 		if (NATIVE_MODE(ms)) {
@@ -838,12 +801,8 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 				hp |= PROT_READ;
 			if (prot & MEM_PROT_WRITE)
 				hp |= PROT_WRITE;
-			if (prot & MEM_PROT_EXEC) {
-				if (!(old_prot & MEM_PROT_EXEC) &&
-				    !ms->aot_mode)
-					jit_patch_code(r->host, r->size);
+			if (prot & MEM_PROT_EXEC)
 				hp |= PROT_EXEC;
-			}
 			mprotect(r->host, r->size, hp);
 		}
 	}
