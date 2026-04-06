@@ -574,12 +574,35 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 
 	p = mmap((void *)addr, aligned_size, host_prot,
 	    MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
+	if (p == MAP_FAILED && (host_prot & PROT_EXEC)) {
+		/*
+		 * File-backed exec mmap failed (code signing on
+		 * macOS rejects ad-hoc signed file pages).  Try
+		 * anonymous mmap at the guest address + copy +
+		 * mprotect.  This works on macOS without hardened
+		 * runtime and gives native execution speed.
+		 */
+		p = mmap((void *)addr, aligned_size,
+		    PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+		    -1, 0);
+		if (p != MAP_FAILED) {
+			if (pread(fd, p, size, (off_t)offset) < 0) {
+				munmap(p, aligned_size);
+				p = MAP_FAILED;
+			} else if (mprotect(p, aligned_size,
+			    host_prot) != 0) {
+				munmap(p, aligned_size);
+				p = MAP_FAILED;
+			}
+		}
+	}
 	if (p == MAP_FAILED) {
 		/*
-		 * File-backed mmap failed (likely 4K ELF on 16K
-		 * host).  Fall back to calloc + pread.  The region
-		 * is accessed via mem_translate's r->host + offset
-		 * path (interpreter-style), so no PROT_EXEC needed.
+		 * All exec mmap strategies failed.  Fall back to
+		 * calloc + pread.  The region is accessed via
+		 * mem_translate's r->host + offset path
+		 * (interpreter-style), so no PROT_EXEC needed.
 		 */
 		p = calloc(1, aligned_size);
 		if (p == NULL) {
