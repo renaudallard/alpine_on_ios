@@ -318,6 +318,19 @@ emu_aot_enabled(void)
 	return (g_aot_enabled);
 }
 
+const char *
+emu_mode_info(void)
+{
+	static char	buf[256];
+
+	snprintf(buf, sizeof(buf),
+	    "aot=%d base=0x%llx native=%d",
+	    g_aot_enabled,
+	    (unsigned long long)g_native_base,
+	    native_available());
+	return (buf);
+}
+
 void
 emu_set_overlay(const char *overlay_path)
 {

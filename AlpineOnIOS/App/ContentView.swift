@@ -55,7 +55,7 @@ struct ContentView: View {
                             HStack {
                                 ProgressView()
                                     .tint(.green)
-                                Text("Loading shell...")
+                                Text("Loading shell [\(String(cString: emu_mode_info()))]")
                                     .font(.system(.caption, design: .monospaced))
                                     .foregroundColor(.green)
                             }

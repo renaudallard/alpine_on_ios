@@ -93,4 +93,10 @@ const char *emu_last_error(void);
 void emu_set_error(const char *fmt, ...)
     __attribute__((format(printf, 1, 2)));
 
+/*
+ * Get diagnostic info about execution mode.
+ * Returns a static string describing AOT/native base status.
+ */
+const char *emu_mode_info(void);
+
 #endif /* EMU_H */
