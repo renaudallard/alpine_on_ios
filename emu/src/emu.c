@@ -106,15 +106,37 @@ emu_init(const char *rootfs_path)
 		};
 		g_native_base = 0;
 		for (int ci = 0; candidates[ci] != 0; ci++) {
-			void *p = mmap((void *)candidates[ci], 4096,
+			uint64_t base = candidates[ci];
+			uint64_t interp = base + 0x80000000ULL;
+			uint64_t stack = base + 0xFFFFF0000ULL;
+			void *p1, *p2, *p3;
+			int ok;
+
+			/* Probe base, interpreter, and stack regions. */
+			p1 = mmap((void *)base, 4096,
 			    PROT_READ | PROT_WRITE,
 			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
 			    -1, 0);
-			if (p != MAP_FAILED) {
-				munmap(p, 4096);
-				g_native_base = candidates[ci];
+			p2 = mmap((void *)interp, 4096,
+			    PROT_READ | PROT_WRITE,
+			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+			    -1, 0);
+			p3 = mmap((void *)stack, 4096,
+			    PROT_READ | PROT_WRITE,
+			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+			    -1, 0);
+
+			ok = (p1 != MAP_FAILED && p2 != MAP_FAILED &&
+			    p3 != MAP_FAILED);
+
+			if (p1 != MAP_FAILED) munmap(p1, 4096);
+			if (p2 != MAP_FAILED) munmap(p2, 4096);
+			if (p3 != MAP_FAILED) munmap(p3, 4096);
+
+			if (ok) {
+				g_native_base = base;
 				LOG_INFO("emu: native base 0x%llx",
-				    (unsigned long long)g_native_base);
+				    (unsigned long long)base);
 				break;
 			}
 		}
