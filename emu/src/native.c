@@ -189,7 +189,10 @@ native_run(emu_process_t *proc)
 {
 	native_current_proc = proc;
 
-	/* guest addr == host addr in AOT mode */
+	/* Ensure this thread is in execute mode (W^X is per-thread;
+	 * the ELF loader ran on a different thread). */
+	NATIVE_WRITE_DISABLE();
+
 	native_enter(&proc->cpu, (void *)proc->cpu.pc);
 
 	/* Reached here via native_exit */

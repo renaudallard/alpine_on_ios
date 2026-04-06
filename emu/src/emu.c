@@ -21,6 +21,10 @@
 #include <TargetConditionals.h>
 #endif
 
+#ifndef MAP_JIT
+#define MAP_JIT 0
+#endif
+
 #include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -41,6 +45,7 @@
 static vfs_t		*g_vfs;
 static int		 g_initialized;
 static int		 g_aot_enabled;
+static int		 g_jit_available;
 static pthread_mutex_t	 g_lock = PTHREAD_MUTEX_INITIALIZER;
 extern uint64_t		 g_native_base;
 static char		 g_last_error[512];
@@ -99,7 +104,25 @@ emu_init(const char *rootfs_path)
 	 * is determined per-ELF in elf_load.
 	 */
 	g_native_base = 0;
-	if (native_available() && native_init() == 0) {
+	g_jit_available = 0;
+
+	/* Test if MAP_JIT works (iOS needs JIT entitlement + enabled). */
+	{
+		void *tp = mmap(NULL, 4096,
+		    PROT_READ | PROT_WRITE | PROT_EXEC,
+		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT,
+		    -1, 0);
+		if (tp != MAP_FAILED) {
+			g_jit_available = 1;
+			munmap(tp, 4096);
+			LOG_INFO("emu: MAP_JIT available");
+		} else {
+			LOG_WARN("emu: MAP_JIT not available (errno=%d)",
+			    errno);
+		}
+	}
+
+	if (native_available() && native_init() == 0 && g_jit_available) {
 		g_aot_enabled = 1;
 		g_native_base = 1;	/* flag: AOT enabled */
 		LOG_INFO("emu: AOT enabled");
@@ -275,9 +298,9 @@ emu_mode_info(void)
 	static char	buf[256];
 
 	snprintf(buf, sizeof(buf),
-	    "aot=%d base=0x%llx native=%d",
+	    "aot=%d jit=%d native=%d",
 	    g_aot_enabled,
-	    (unsigned long long)g_native_base,
+	    g_jit_available,
 	    native_available());
 	return (buf);
 }
