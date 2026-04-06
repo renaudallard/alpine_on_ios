@@ -55,7 +55,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alpineonios.app
-        MARKETING_VERSION: "0.6.43"
+        MARKETING_VERSION: "0.6.44"
         CURRENT_PROJECT_VERSION: 61
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_ALLOWED: "NO"
@@ -109,7 +109,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alpineonios.mac
-        MARKETING_VERSION: "0.6.43"
+        MARKETING_VERSION: "0.6.44"
         CURRENT_PROJECT_VERSION: 61
         CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: "YES"
