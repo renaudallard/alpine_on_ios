@@ -480,120 +480,91 @@ struct AccessoryKeyBar: View {
 
 #elseif os(macOS)
 
-/// A hidden NSTextField to capture keyboard input on macOS.
+/// An invisible NSView that captures all keyboard input on macOS.
 struct KeyboardInputView: NSViewRepresentable {
     var onKeyPress: (String) -> Void
     @Binding var ctrlPressed: Bool
 
-    func makeNSView(context: Context) -> HiddenNSTextField {
-        let tf = HiddenNSTextField()
-        tf.delegate = context.coordinator
-        tf.isBordered = false
-        tf.drawsBackground = false
-        tf.isEditable = true
-        tf.isSelectable = true
-        tf.focusRingType = .none
-        tf.textColor = .clear
-        tf.font = .systemFont(ofSize: 1)
-        tf.stringValue = " "
-
-        context.coordinator.textField = tf
+    func makeNSView(context: Context) -> KeyCaptureView {
+        let view = KeyCaptureView()
+        view.onKeyPress = onKeyPress
 
         NotificationCenter.default.addObserver(
             context.coordinator,
-            selector: #selector(Coordinator.focusKeyboard),
+            selector: #selector(Coordinator.focusKeyboard(_:)),
             name: .terminalFocusKeyboard,
             object: nil)
+        context.coordinator.view = view
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            tf.window?.makeFirstResponder(tf)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            view.window?.makeFirstResponder(view)
         }
-
-        return tf
+        return view
     }
 
-    func updateNSView(_ nsView: HiddenNSTextField, context: Context) {
-        context.coordinator.textField = nsView
+    func updateNSView(_ nsView: KeyCaptureView, context: Context) {
+        nsView.onKeyPress = onKeyPress
+        context.coordinator.view = nsView
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onKeyPress: onKeyPress)
-    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
-    class Coordinator: NSObject, NSTextFieldDelegate {
-        var onKeyPress: (String) -> Void
-        var textField: HiddenNSTextField?
+    class Coordinator: NSObject {
+        var view: KeyCaptureView?
 
-        init(onKeyPress: @escaping (String) -> Void) {
-            self.onKeyPress = onKeyPress
+        @objc func focusKeyboard(_ notification: Notification) {
+            if let v = view {
+                v.window?.makeFirstResponder(v)
+            }
         }
 
         deinit {
             NotificationCenter.default.removeObserver(self)
         }
-
-        @objc func focusKeyboard(_ notification: Notification) {
-            if let tf = textField {
-                tf.window?.makeFirstResponder(tf)
-            }
-        }
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let tf = obj.object as? NSTextField else { return }
-            let text = tf.stringValue
-            /* The field always has " " as base; new chars appended after */
-            if text.count > 1 {
-                let newChars = String(text.dropFirst())
-                onKeyPress(newChars)
-            }
-            tf.stringValue = " "
-        }
     }
 }
 
-/// NSTextField subclass that intercepts special keys.
-class HiddenNSTextField: NSTextField {
+/// NSView subclass that handles ALL keyboard input via keyDown.
+class KeyCaptureView: NSView {
+    var onKeyPress: ((String) -> Void)?
+
     override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
 
     override func keyDown(with event: NSEvent) {
-        /* Handle special keys before the text system sees them */
+        let chars = event.charactersIgnoringModifiers ?? ""
+        let flags = event.modifierFlags
+
+        /* Handle special keys */
         switch event.keyCode {
-        case 126: /* up arrow */
-            NotificationCenter.default.post(
-                name: .terminalSpecialKey, object: "\u{1B}[A")
-            return
-        case 125: /* down arrow */
-            NotificationCenter.default.post(
-                name: .terminalSpecialKey, object: "\u{1B}[B")
-            return
-        case 124: /* right arrow */
-            NotificationCenter.default.post(
-                name: .terminalSpecialKey, object: "\u{1B}[C")
-            return
-        case 123: /* left arrow */
-            NotificationCenter.default.post(
-                name: .terminalSpecialKey, object: "\u{1B}[D")
-            return
-        case 53: /* escape */
-            NotificationCenter.default.post(
-                name: .terminalSpecialKey, object: "\u{1B}")
-            return
-        case 48: /* tab */
-            NotificationCenter.default.post(
-                name: .terminalSpecialKey, object: "\t")
-            return
-        case 51: /* backspace */
-            NotificationCenter.default.post(
-                name: .terminalSpecialKey, object: "\u{08}")
-            return
-        case 36: /* return */
-            NotificationCenter.default.post(
-                name: .terminalSpecialKey, object: "\n")
-            return
-        default:
-            break
+        case 126: onKeyPress?("\u{1B}[A"); return  /* up */
+        case 125: onKeyPress?("\u{1B}[B"); return  /* down */
+        case 124: onKeyPress?("\u{1B}[C"); return  /* right */
+        case 123: onKeyPress?("\u{1B}[D"); return  /* left */
+        case 53:  onKeyPress?("\u{1B}"); return     /* escape */
+        case 48:  onKeyPress?("\t"); return          /* tab */
+        case 51:  onKeyPress?("\u{7F}"); return      /* backspace (DEL) */
+        case 36:  onKeyPress?("\n"); return           /* return */
+        default: break
         }
-        super.keyDown(with: event)
+
+        /* Ctrl+key → control character */
+        if flags.contains(.control), let ch = chars.uppercased().unicodeScalars.first,
+           ch.value >= 0x40, ch.value <= 0x5F {
+            let ctrl = String(UnicodeScalar(ch.value - 0x40)!)
+            onKeyPress?(ctrl)
+            return
+        }
+
+        /* Regular characters */
+        if let characters = event.characters, !characters.isEmpty {
+            onKeyPress?(characters)
+        }
+    }
+
+    /* Suppress the beep for unhandled keys */
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        return false
     }
 }
 
