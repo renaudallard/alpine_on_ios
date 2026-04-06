@@ -91,31 +91,13 @@ emu_init(const char *rootfs_path)
 	}
 
 	/*
-	 * Reserve a contiguous address range for native execution.
-	 * Let the kernel choose the address (safe on all platforms),
-	 * then keep it as a PROT_NONE reservation.  ELF loading will
-	 * use MAP_FIXED within this range to place segments.
-	 *
-	 * Layout: binary at base, interpreter at base+64MB,
-	 * stack at base+128MB.  Total: 128 MB virtual (no physical
-	 * memory used for PROT_NONE pages).
+	 * Set a virtual base address for AOT.  ELF segments are
+	 * assigned guest addresses relative to this base.  The
+	 * actual host addresses may differ (MAP_JIT on iOS gives
+	 * kernel-chosen addresses); mem_translate handles the
+	 * guest-to-host mapping.
 	 */
-	{
-		uint64_t	reserve_size;
-		void		*p;
-
-		reserve_size = 0x8000000ULL;	/* 128 MB */
-		g_native_base = 0;
-
-		p = mmap(NULL, reserve_size, PROT_NONE,
-		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		if (p != MAP_FAILED) {
-			g_native_base = (uint64_t)p;
-			LOG_INFO("emu: native base 0x%llx (reserved %llu MB)",
-			    (unsigned long long)g_native_base,
-			    (unsigned long long)(reserve_size >> 20));
-		}
-	}
+	g_native_base = 0x10000000ULL;	/* 256 MB */
 
 	/*
 	 * Enable AOT native execution: pre-patched binaries use

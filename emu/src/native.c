@@ -185,10 +185,17 @@ native_available(void)
 int
 native_run(emu_process_t *proc)
 {
+	void	*host_pc;
+
 	native_current_proc = proc;
 
-	/* In JIT mode, guest addr = host addr */
-	native_enter(&proc->cpu, (void *)proc->cpu.pc);
+	host_pc = mem_translate(proc->mem, proc->cpu.pc, 4, MEM_PROT_READ);
+	if (host_pc == NULL) {
+		LOG_ERR("native_run: cannot translate pc 0x%llx",
+		    (unsigned long long)proc->cpu.pc);
+		return (-1);
+	}
+	native_enter(&proc->cpu, host_pc);
 
 	/* Reached here via native_exit */
 	return (proc->cpu.exit_code);
