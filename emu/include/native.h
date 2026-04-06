@@ -49,7 +49,7 @@ void	native_patch_code(void *code, size_t size);
 
 /*
  * W^X toggle for native code regions.
- * On Apple platforms, pthread_native_write_protect_np toggles MAP_JIT
+ * On Apple platforms, pthread_jit_write_protect_np toggles MAP_JIT
  * page permissions. The function exists at runtime on iOS 14.2+ and
  * macOS 11+ but iOS SDK headers mark it __API_UNAVAILABLE(ios).
  * We resolve it via dlsym to bypass the availability check.

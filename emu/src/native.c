@@ -29,7 +29,7 @@
 #include <dlfcn.h>
 
 /*
- * pthread_native_write_protect_np is available at runtime on iOS 14.2+
+ * pthread_jit_write_protect_np is available at runtime on iOS 14.2+
  * and macOS 11+ but iOS SDK headers mark it __API_UNAVAILABLE(ios).
  * Resolve via dlsym to bypass the header restriction.
  */
@@ -155,13 +155,13 @@ native_init(void)
 	struct sigaction	sa;
 
 #ifdef __APPLE__
-	/* Resolve pthread_native_write_protect_np at runtime */
+	/* Resolve pthread_jit_write_protect_np at runtime */
 	native_write_protect_fn = (void (*)(int))
-	    dlsym(RTLD_DEFAULT, "pthread_native_write_protect_np");
+	    dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
 	if (native_write_protect_fn != NULL)
-		LOG_INFO("jit: pthread_native_write_protect_np available");
+		LOG_INFO("native: pthread_jit_write_protect_np available");
 	else
-		LOG_WARN("jit: pthread_native_write_protect_np not found");
+		LOG_WARN("native: pthread_jit_write_protect_np not found");
 #endif
 
 	memset(&sa, 0, sizeof(sa));
