@@ -43,9 +43,30 @@ struct ContentView: View {
             case .idle, .extracting, .initializing, .spawning:
                 statusView
             case .running:
-                TerminalView()
-                    .environmentObject(bridge)
-                    .environmentObject(settings)
+                ZStack {
+                    TerminalView()
+                        .environmentObject(bridge)
+                        .environmentObject(settings)
+
+                    /* Show loading hint until shell produces output.
+                     * Interpreter mode is slow (~1 min to first prompt). */
+                    if !bridge.hasOutput {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                ProgressView()
+                                    .tint(.green)
+                                Text("Loading shell (interpreter mode)...")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.green)
+                            }
+                            .padding(8)
+                            .background(Color.black.opacity(0.8))
+                            .cornerRadius(8)
+                            .padding(.bottom, 40)
+                        }
+                    }
+                }
             case .error(let msg):
                 errorView(msg)
             }

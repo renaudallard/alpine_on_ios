@@ -29,6 +29,7 @@ enum EmulatorState: Equatable {
 class EmulatorBridge: ObservableObject {
     @Published var state: EmulatorState = .idle
     @Published var pid: Int = -1
+    @Published var hasOutput: Bool = false
 
     private(set) var termFD: Int32 = -1
     private var readThread: Thread?
@@ -177,6 +178,9 @@ class EmulatorBridge: ObservableObject {
                 let n = read(fd, buf, bufSize)
                 if n <= 0 { break }
                 let data = Data(bytes: buf, count: n)
+                if !self.hasOutput {
+                    DispatchQueue.main.async { self.hasOutput = true }
+                }
                 callback(data)
             }
         }
