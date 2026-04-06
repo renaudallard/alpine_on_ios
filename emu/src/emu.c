@@ -95,12 +95,16 @@ emu_init(const char *rootfs_path)
 	 * Let the kernel choose the address (safe on all platforms),
 	 * then keep it as a PROT_NONE reservation.  ELF loading will
 	 * use MAP_FIXED within this range to place segments.
+	 *
+	 * Layout: binary at base, interpreter at base+64MB,
+	 * stack at base+128MB.  Total: 128 MB virtual (no physical
+	 * memory used for PROT_NONE pages).
 	 */
 	{
 		uint64_t	reserve_size;
 		void		*p;
 
-		reserve_size = 0xC0000000ULL;	/* 3 GB */
+		reserve_size = 0x8000000ULL;	/* 128 MB */
 		g_native_base = 0;
 
 		p = mmap(NULL, reserve_size, PROT_NONE,
@@ -110,8 +114,6 @@ emu_init(const char *rootfs_path)
 			LOG_INFO("emu: native base 0x%llx (reserved %llu MB)",
 			    (unsigned long long)g_native_base,
 			    (unsigned long long)(reserve_size >> 20));
-			/* Keep the reservation mapped.  ELF loading
-			 * overwrites it with MAP_FIXED as needed. */
 		}
 	}
 

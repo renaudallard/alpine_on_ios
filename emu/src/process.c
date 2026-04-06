@@ -49,8 +49,8 @@
 uint64_t	g_native_base;
 
 #define AOT_BINARY_BASE		(g_native_base)
-#define AOT_INTERP_BASE		(g_native_base + 0x80000000ULL)
-#define AOT_STACK_TOP		(g_native_base + 0xBFFF0000ULL)
+#define AOT_INTERP_BASE		(g_native_base + 0x4000000ULL)  /* +64 MB */
+#define AOT_STACK_TOP		(g_native_base + 0x7FF0000ULL)  /* ~128 MB */
 
 /* Interpreter base addresses */
 #define INTERP_INTERP_BASE	0x7f00000000ULL
@@ -392,7 +392,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		 * threads in the same host process.
 		 */
 		newmem->aot_mode = 1;
-		newmem->mmap_next = MMAP_START_AOT;
+		newmem->mmap_next = g_native_base + 0x8000000ULL;
 		bin_base = AOT_BINARY_BASE;
 		interp_base = AOT_INTERP_BASE;
 		stack_top = AOT_STACK_TOP;
