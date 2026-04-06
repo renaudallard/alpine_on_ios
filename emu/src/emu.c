@@ -116,22 +116,28 @@ emu_init(const char *rootfs_path)
 			void *p1, *p2, *p3;
 			int ok;
 
-			/* Probe base, interpreter, and stack regions. */
+			/*
+			 * Probe without MAP_FIXED to avoid clobbering
+			 * existing mappings.  Pass the address as a
+			 * hint; if the kernel returns the exact address,
+			 * the range is free.
+			 */
 			p1 = mmap((void *)base, 4096,
-			    PROT_READ | PROT_WRITE,
-			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+			    PROT_NONE,
+			    MAP_PRIVATE | MAP_ANONYMOUS,
 			    -1, 0);
 			p2 = mmap((void *)interp, 4096,
-			    PROT_READ | PROT_WRITE,
-			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+			    PROT_NONE,
+			    MAP_PRIVATE | MAP_ANONYMOUS,
 			    -1, 0);
 			p3 = mmap((void *)stack, 4096,
-			    PROT_READ | PROT_WRITE,
-			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+			    PROT_NONE,
+			    MAP_PRIVATE | MAP_ANONYMOUS,
 			    -1, 0);
 
-			ok = (p1 != MAP_FAILED && p2 != MAP_FAILED &&
-			    p3 != MAP_FAILED);
+			ok = (p1 == (void *)base &&
+			    p2 == (void *)interp &&
+			    p3 == (void *)stack);
 
 			if (p1 != MAP_FAILED) munmap(p1, 4096);
 			if (p2 != MAP_FAILED) munmap(p2, 4096);
