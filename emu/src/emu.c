@@ -91,57 +91,27 @@ emu_init(const char *rootfs_path)
 	}
 
 	/*
-	 * Probe for a free address range for native execution.
-	 * Need ~3 GB: binary at base, interpreter at base+2GB,
-	 * stack at base+3GB.  Try low addresses first for iOS
-	 * (limited address space), then higher for macOS (avoids
-	 * GPU carveout).
+	 * Reserve a contiguous address range for native execution.
+	 * Let the kernel choose the address (safe on all platforms),
+	 * then keep it as a PROT_NONE reservation.  ELF loading will
+	 * use MAP_FIXED within this range to place segments.
 	 */
 	{
-		static const uint64_t candidates[] = {
-			0x110000000ULL,		/*  4.25 GB - just above iOS app */
-			0x180000000ULL,		/*  6 GB */
-			0x200000000ULL,		/*  8 GB */
-			0x300000000ULL,		/* 12 GB */
-			0x500000000ULL,		/* 20 GB - macOS default */
-			0x800000000ULL,		/* 32 GB - above small GPU */
-			0xC00000000ULL,		/* 48 GB - above large GPU */
-			0
-		};
+		uint64_t	reserve_size;
+		void		*p;
+
+		reserve_size = 0xC0000000ULL;	/* 3 GB */
 		g_native_base = 0;
-		for (int ci = 0; candidates[ci] != 0; ci++) {
-			uint64_t base = candidates[ci];
-			uint64_t interp = base + 0x80000000ULL;
-			uint64_t stack = base + 0xBFFF0000ULL;
-			void *p1, *p2, *p3;
-			int ok;
 
-			/*
-			 * Probe without MAP_FIXED: pass address as hint.
-			 * If the kernel returns the exact address, the
-			 * range is free.  Safe on all platforms.
-			 */
-			p1 = mmap((void *)base, 4096, PROT_NONE,
-			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-			p2 = mmap((void *)interp, 4096, PROT_NONE,
-			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-			p3 = mmap((void *)stack, 4096, PROT_NONE,
-			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-
-			ok = (p1 == (void *)base &&
-			    p2 == (void *)interp &&
-			    p3 == (void *)stack);
-
-			if (p1 != MAP_FAILED) munmap(p1, 4096);
-			if (p2 != MAP_FAILED) munmap(p2, 4096);
-			if (p3 != MAP_FAILED) munmap(p3, 4096);
-
-			if (ok) {
-				g_native_base = base;
-				LOG_INFO("emu: native base 0x%llx",
-				    (unsigned long long)base);
-				break;
-			}
+		p = mmap(NULL, reserve_size, PROT_NONE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (p != MAP_FAILED) {
+			g_native_base = (uint64_t)p;
+			LOG_INFO("emu: native base 0x%llx (reserved %llu MB)",
+			    (unsigned long long)g_native_base,
+			    (unsigned long long)(reserve_size >> 20));
+			/* Keep the reservation mapped.  ELF loading
+			 * overwrites it with MAP_FIXED as needed. */
 		}
 	}
 
