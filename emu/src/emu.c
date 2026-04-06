@@ -19,6 +19,7 @@
 #include <sys/socket.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>
+#include <mach/mach.h>
 #endif
 
 #include <errno.h>
@@ -111,38 +112,63 @@ emu_init(const char *rootfs_path)
 		g_native_base = 0;
 		for (int ci = 0; candidates[ci] != 0; ci++) {
 			uint64_t base = candidates[ci];
-			uint64_t interp = base + 0x80000000ULL;
-			uint64_t stack = base + 0xBFFF0000ULL;
-			void *p1, *p2, *p3;
-			int ok;
+			uint64_t range = 0xC0000000ULL; /* 3 GB */
+			int ok = 0;
 
+#ifdef __APPLE__
 			/*
-			 * Probe without MAP_FIXED to avoid clobbering
-			 * existing mappings.  Pass the address as a
-			 * hint; if the kernel returns the exact address,
-			 * the range is free.
+			 * Use mach_vm_region to check the range is free.
+			 * Walk the VM map starting at base; if the first
+			 * region starts at or after base+range, the space
+			 * is available.
 			 */
-			p1 = mmap((void *)base, 4096,
-			    PROT_NONE,
-			    MAP_PRIVATE | MAP_ANONYMOUS,
-			    -1, 0);
-			p2 = mmap((void *)interp, 4096,
-			    PROT_NONE,
-			    MAP_PRIVATE | MAP_ANONYMOUS,
-			    -1, 0);
-			p3 = mmap((void *)stack, 4096,
-			    PROT_NONE,
-			    MAP_PRIVATE | MAP_ANONYMOUS,
-			    -1, 0);
+			{
+				mach_vm_address_t addr = base;
+				mach_vm_size_t sz = 0;
+				vm_region_basic_info_data_64_t info;
+				mach_msg_type_number_t cnt;
+				mach_port_t obj;
 
-			ok = (p1 == (void *)base &&
-			    p2 == (void *)interp &&
-			    p3 == (void *)stack);
+				cnt = VM_REGION_BASIC_INFO_COUNT_64;
+				kern_return_t kr = mach_vm_region(
+				    mach_task_self(), &addr, &sz,
+				    VM_REGION_BASIC_INFO_64,
+				    (vm_region_info_t)&info, &cnt, &obj);
+				if (kr == KERN_INVALID_ADDRESS) {
+					/* No regions at or above base - free */
+					ok = 1;
+				} else if (kr == KERN_SUCCESS &&
+				    addr >= base + range) {
+					/* First region above our range - free */
+					ok = 1;
+				}
+			}
+#else
+			/*
+			 * On Linux, use hint-only mmap.  If the kernel
+			 * returns the exact requested address, it's free.
+			 */
+			{
+				void *p1, *p2, *p3;
+				uint64_t interp = base + 0x80000000ULL;
+				uint64_t stack = base + 0xBFFF0000ULL;
 
-			if (p1 != MAP_FAILED) munmap(p1, 4096);
-			if (p2 != MAP_FAILED) munmap(p2, 4096);
-			if (p3 != MAP_FAILED) munmap(p3, 4096);
+				p1 = mmap((void *)base, 4096, PROT_NONE,
+				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+				p2 = mmap((void *)interp, 4096, PROT_NONE,
+				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+				p3 = mmap((void *)stack, 4096, PROT_NONE,
+				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
+				ok = (p1 == (void *)base &&
+				    p2 == (void *)interp &&
+				    p3 == (void *)stack);
+
+				if (p1 != MAP_FAILED) munmap(p1, 4096);
+				if (p2 != MAP_FAILED) munmap(p2, 4096);
+				if (p3 != MAP_FAILED) munmap(p3, 4096);
+			}
+#endif
 			if (ok) {
 				g_native_base = base;
 				LOG_INFO("emu: native base 0x%llx",
