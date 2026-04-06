@@ -562,7 +562,7 @@ proc_run(void *arg)
 	if (proc->mem != NULL && proc->mem->aot_mode &&
 	    native_available()) {
 		void *hp = mem_translate(proc->mem, proc->cpu.pc, 4,
-		    MEM_PROT_READ);
+		    MEM_PROT_EXEC);
 		if (hp != NULL) {
 			LOG_INFO("proc: pid %d using AOT native "
 			    "(pc=0x%lx hp=%p)",
@@ -571,8 +571,8 @@ proc_run(void *arg)
 			proc_run_exit(proc, proc->cpu.exit_code);
 			return (NULL);
 		}
-		LOG_INFO("proc: pid %d AOT translate failed for pc=0x%lx",
-		    proc->pid, (unsigned long)proc->cpu.pc);
+		LOG_INFO("proc: pid %d no exec pages, using interpreter",
+		    proc->pid);
 	} else {
 		LOG_INFO("proc: pid %d interpreter (aot=%d native=%d)",
 		    proc->pid,

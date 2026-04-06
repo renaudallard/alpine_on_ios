@@ -91,24 +91,15 @@ emu_init(const char *rootfs_path)
 	}
 
 	/*
-	 * Set a virtual base address for AOT.  ELF segments are
-	 * assigned guest addresses relative to this base.  The
-	 * actual host addresses may differ (MAP_JIT on iOS gives
-	 * kernel-chosen addresses); mem_translate handles the
-	 * guest-to-host mapping.
+	 * Set a virtual base for AOT guest addresses.  Host
+	 * addresses may differ; mem_translate maps between them.
 	 */
 	g_native_base = 0x10000000ULL;	/* 256 MB */
 
-	/*
-	 * Enable AOT native execution: pre-patched binaries use
-	 * file-backed exec from the signed app bundle.
-	 */
-	if (g_native_base != 0 && native_available() && native_init() == 0) {
+	if (native_available() && native_init() == 0) {
 		g_aot_enabled = 1;
-		LOG_INFO("emu: AOT enabled at 0x%llx",
+		LOG_INFO("emu: AOT enabled, base=0x%llx",
 		    (unsigned long long)g_native_base);
-	} else if (g_native_base == 0) {
-		LOG_WARN("emu: no free address range, using interpreter");
 	}
 
 	g_initialized = 1;

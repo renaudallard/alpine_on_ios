@@ -574,65 +574,37 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 		host_prot |= PROT_EXEC;
 
 	/*
-	 * Strategy for executable segments:
-	 *  1) File-backed mmap (Linux, signed bundles)
-	 *  2) MAP_JIT + copy (iOS with JIT entitlement)
-	 *  3) Anonymous + mprotect (macOS without hardened runtime)
-	 *  4) Calloc fallback (interpreter mode)
+	 * Try file-backed mmap (works on Linux, and on iOS/macOS
+	 * when files are properly codesigned in the app bundle).
 	 */
 	p = mmap((void *)addr, aligned_size, host_prot,
 	    MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
 
-#ifdef __APPLE__
 	if (p == MAP_FAILED && (host_prot & PROT_EXEC)) {
-		/*
-		 * File-backed exec failed.  Use MAP_JIT: allocate
-		 * RWX pages, copy code in, then toggle to executable.
-		 * Requires com.apple.security.cs.allow-jit entitlement.
-		 */
-		p = mmap(NULL, aligned_size,
-		    PROT_READ | PROT_WRITE | PROT_EXEC,
-		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT,
-		    -1, 0);
+		/* Try without PROT_EXEC to see if it's an exec issue. */
+		int noexec = host_prot & ~PROT_EXEC;
+		p = mmap((void *)addr, aligned_size, noexec,
+		    MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
 		if (p != MAP_FAILED) {
-			NATIVE_WRITE_ENABLE();
-			if (pread(fd, p, size, (off_t)offset) < 0) {
-				NATIVE_WRITE_DISABLE();
-				munmap(p, aligned_size);
-				p = MAP_FAILED;
-			} else {
-				NATIVE_WRITE_DISABLE();
-				LOG_INFO("mem_mmap_file: MAP_JIT "
-				    "guest=0x%llx host=%p",
-				    (unsigned long long)addr, p);
-			}
-		}
-	}
-#endif
-
-	if (p == MAP_FAILED && (host_prot & PROT_EXEC)) {
-		/* Anonymous + mprotect (macOS, Linux). */
-		p = mmap((void *)addr, aligned_size,
-		    PROT_READ | PROT_WRITE,
-		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-		    -1, 0);
-		if (p != MAP_FAILED) {
-			if (pread(fd, p, size, (off_t)offset) < 0) {
-				munmap(p, aligned_size);
-				p = MAP_FAILED;
-			} else if (mprotect(p, aligned_size,
-			    host_prot) != 0) {
-				munmap(p, aligned_size);
-				p = MAP_FAILED;
-			}
+			LOG_INFO("mem_mmap_file: mmap OK without exec "
+			    "at 0x%llx (exec denied)",
+			    (unsigned long long)addr);
+			/* Can't execute, use as data; fall through
+			 * to calloc path for interpreter. */
+			munmap(p, aligned_size);
+			p = MAP_FAILED;
+		} else {
+			LOG_INFO("mem_mmap_file: mmap failed entirely "
+			    "at 0x%llx errno=%d",
+			    (unsigned long long)addr, errno);
 		}
 	}
 
 	if (p == MAP_FAILED) {
-		/* Calloc fallback (interpreter mode). */
+		/* Calloc fallback - interpreter mode. */
 		p = calloc(1, aligned_size);
 		if (p == NULL) {
-			LOG_ERR("mem_mmap_file: calloc fallback failed");
+			LOG_ERR("mem_mmap_file: alloc failed");
 			return (uint64_t)-1;
 		}
 		if (pread(fd, p, size, (off_t)offset) < 0) {
