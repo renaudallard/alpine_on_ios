@@ -50,7 +50,7 @@ uint64_t	g_native_base;
 
 #define AOT_BINARY_BASE		(g_native_base)
 #define AOT_INTERP_BASE		(g_native_base + 0x80000000ULL)
-#define AOT_STACK_TOP		(g_native_base + 0xFFFFF0000ULL)
+#define AOT_STACK_TOP		(g_native_base + 0xBFFF0000ULL)
 
 /* Interpreter base addresses */
 #define INTERP_INTERP_BASE	0x7f00000000ULL

@@ -91,24 +91,28 @@ emu_init(const char *rootfs_path)
 	}
 
 	/*
-	 * Probe for a free 4GB address range for native execution.
-	 * Must avoid GPU carveouts and other reserved regions.
-	 * Try several candidates above the typical app region.
+	 * Probe for a free address range for native execution.
+	 * Need ~3 GB: binary at base, interpreter at base+2GB,
+	 * stack at base+3GB.  Try low addresses first for iOS
+	 * (limited address space), then higher for macOS (avoids
+	 * GPU carveout).
 	 */
 	{
 		static const uint64_t candidates[] = {
-			0x500000000ULL,		/* 20 GB - default */
+			0x110000000ULL,		/*  4.25 GB - just above iOS app */
+			0x180000000ULL,		/*  6 GB */
+			0x200000000ULL,		/*  8 GB */
+			0x300000000ULL,		/* 12 GB */
+			0x500000000ULL,		/* 20 GB - macOS default */
 			0x800000000ULL,		/* 32 GB - above small GPU */
 			0xC00000000ULL,		/* 48 GB - above large GPU */
-			0x1000000000ULL,	/* 64 GB - safe for all */
-			0x2000000000ULL,	/* 128 GB */
 			0
 		};
 		g_native_base = 0;
 		for (int ci = 0; candidates[ci] != 0; ci++) {
 			uint64_t base = candidates[ci];
 			uint64_t interp = base + 0x80000000ULL;
-			uint64_t stack = base + 0xFFFFF0000ULL;
+			uint64_t stack = base + 0xBFFF0000ULL;
 			void *p1, *p2, *p3;
 			int ok;
 
