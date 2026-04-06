@@ -553,13 +553,25 @@ proc_run(void *arg)
 	    (unsigned long)proc->cpu.pc, (unsigned long)proc->cpu.sp);
 
 #ifdef __aarch64__
-	/* Use AOT native execution when available. */
+	/*
+	 * Use AOT native execution when the code is mapped at
+	 * the guest address (not calloc fallback).  jit_enter
+	 * jumps to the guest PC directly, so host addr must
+	 * equal guest addr.
+	 */
 	if (proc->mem != NULL && proc->mem->aot_mode &&
 	    jit_available()) {
-		LOG_INFO("proc: pid %d using AOT execution", proc->pid);
-		jit_run(proc);
-		proc_run_exit(proc, proc->cpu.exit_code);
-		return (NULL);
+		void *hp = mem_translate(proc->mem, proc->cpu.pc, 4,
+		    MEM_PROT_READ);
+		if (hp == (void *)proc->cpu.pc) {
+			LOG_INFO("proc: pid %d using AOT native",
+			    proc->pid);
+			jit_run(proc);
+			proc_run_exit(proc, proc->cpu.exit_code);
+			return (NULL);
+		}
+		LOG_INFO("proc: pid %d AOT fallback to interpreter "
+		    "(code not at guest addr)", proc->pid);
 	}
 #endif
 
