@@ -384,23 +384,37 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 		return (uint64_t)-1;
 	}
 
-	if (NATIVE_MODE(ms)) {
+	if (NATIVE_MODE(ms) && !(flags & MEM_MAP_FIXED)) {
 		/*
-		 * AOT mode: MAP_FIXED within the pre-reserved region.
-		 * The reservation ensures the address is safe.
+		 * AOT mode, non-fixed: let the kernel choose a safe
+		 * host address.  Set the guest address to match so
+		 * native code can access it directly.
+		 */
+		int mprot = PROT_READ | PROT_WRITE;
+		if (prot & MEM_PROT_EXEC)
+			mprot |= PROT_EXEC;
+		r->host = mmap(NULL, aligned_size, mprot,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (r->host == MAP_FAILED) {
+			free(r);
+			pthread_rwlock_unlock(&ms->lock);
+			return (uint64_t)-1;
+		}
+		addr = (uint64_t)r->host;
+		ms->mmap_next = addr + aligned_size;
+	} else if (NATIVE_MODE(ms)) {
+		/*
+		 * AOT mode, MAP_FIXED: address is within a known
+		 * reservation (ELF loader).  Safe to MAP_FIXED.
 		 */
 		r->host = mmap((void *)addr, aligned_size,
 		    PROT_READ | PROT_WRITE,
 		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
 		    -1, 0);
 		if (r->host == MAP_FAILED) {
-			r->host = calloc(1, aligned_size);
-			if (r->host == NULL) {
-				free(r);
-				pthread_rwlock_unlock(&ms->lock);
-				return (uint64_t)-1;
-			}
-			r->flags = MEM_MAP_CALLOC;
+			free(r);
+			pthread_rwlock_unlock(&ms->lock);
+			return (uint64_t)-1;
 		}
 	} else {
 		r->host = calloc(1, aligned_size);
@@ -548,6 +562,22 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 	p = mmap((void *)addr, aligned_size, host_prot,
 	    MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
 
+	if (p == MAP_FAILED && NATIVE_MODE(ms)) {
+		/*
+		 * AOT fallback: kernel picks address, read content.
+		 * Update addr so guest == host.
+		 */
+		p = mmap(NULL, aligned_size, PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (p != MAP_FAILED) {
+			if (pread(fd, p, size, (off_t)offset) < 0) {
+				munmap(p, aligned_size);
+				p = MAP_FAILED;
+			} else {
+				addr = (uint64_t)p;
+			}
+		}
+	}
 	if (p == MAP_FAILED) {
 		/* Calloc fallback (interpreter mode). */
 		p = calloc(1, aligned_size);
@@ -829,20 +859,25 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 				r->host = newhost;
 				r->size += grow;
 			} else if (r != NULL && NATIVE_MODE(ms)) {
-				/* Extend by mapping adjacent pages. */
-				uint64_t	ext_base;
-				void		*p;
-
-				ext_base = r->base + r->size;
-				p = mmap((void *)ext_base, grow,
+				/*
+				 * Extend heap: allocate new region via
+				 * mmap(NULL), copy old data, replace.
+				 */
+				uint8_t	*newhost;
+				newhost = mmap(NULL, r->size + grow,
 				    PROT_READ | PROT_WRITE,
-				    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-				    -1, 0);
-				if (p == MAP_FAILED) {
+				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+				if (newhost == MAP_FAILED) {
 					pthread_rwlock_unlock(&ms->lock);
 					return ms->brk_current;
 				}
+				memcpy(newhost, r->host, r->size);
+				memset(newhost + r->size, 0, grow);
+				munmap(r->host, r->size);
+				r->host = newhost;
+				r->base = (uint64_t)newhost;
 				r->size += grow;
+				ms->brk_base = r->base;
 			} else {
 				r = calloc(1, sizeof(*r));
 				if (r == NULL) {
@@ -851,17 +886,17 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 				}
 				new_size = new_brk - ms->brk_base;
 				if (NATIVE_MODE(ms)) {
-					r->host = mmap(
-					    (void *)ms->brk_base, new_size,
+					r->host = mmap(NULL, new_size,
 					    PROT_READ | PROT_WRITE,
-					    MAP_PRIVATE | MAP_ANONYMOUS |
-					    MAP_FIXED, -1, 0);
+					    MAP_PRIVATE | MAP_ANONYMOUS,
+					    -1, 0);
 					if (r->host == MAP_FAILED) {
 						free(r);
 						pthread_rwlock_unlock(
 						    &ms->lock);
 						return ms->brk_current;
 					}
+					ms->brk_base = (uint64_t)r->host;
 				} else {
 					r->host = calloc(1, new_size);
 					if (r->host == NULL) {
