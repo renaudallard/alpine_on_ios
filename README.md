@@ -51,9 +51,9 @@ syscalls. This gives near-native performance with no per-instruction
 overhead.
 
 On iOS, the pre-patched binaries are loaded via file-backed executable
-mappings from the signed app bundle. On macOS with ad-hoc signing, a
-full AArch64 instruction interpreter serves as fallback (native speed
-requires Developer ID signing).
+mappings from the signed app bundle. On macOS, anonymous executable
+mappings are used as fallback when file-backed exec fails. A full
+AArch64 instruction interpreter with TLB cache serves as last resort.
 
 ```
 +-----------------------+
@@ -107,8 +107,8 @@ Download the latest `.dmg` from
 [**Releases**](https://github.com/renaudallard/alpine_on_ios/releases/latest),
 open it, and drag **Alpine Terminal** to Applications.
 
-Note: ad-hoc signed macOS apps run in interpreter mode (slower). Build
-from Xcode with your Apple ID for native speed.
+Note: if native execution fails on macOS, the app falls back to an
+interpreter (slower). Build from Xcode with your Apple ID for best results.
 
 ### First launch
 
@@ -216,9 +216,9 @@ alpine_on_ios/
 | AltStore can't find server | Ensure AltServer is running, same Wi-Fi |
 | App expires after 7 days | Re-sign with AltStore/Sideloadly, or use TrollStore |
 | No keyboard input | Tap the terminal area to focus the keyboard |
-| Blank terminal | Wait for interpreter to load (~1 min on macOS ad-hoc) |
+| Blank terminal | Wait for shell to load; check loading indicator for mode info |
 | apk signature errors | Use `--allow-untrusted` for the AOT repository |
-| Slow on macOS | Ad-hoc signed apps use interpreter; build from Xcode for native |
+| Slow startup | Loading indicator shows `aot=0` if native failed; rebuild from Xcode |
 
 ## Support
 
