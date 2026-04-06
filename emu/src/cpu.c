@@ -29,24 +29,18 @@ cpu_init(cpu_state_t *cpu)
 	cpu_tlb_flush(cpu);
 }
 
-int
-cpu_step(cpu_state_t *cpu)
+static inline int
+cpu_exec_one(cpu_state_t *cpu)
 {
 	uint32_t	insn;
 	uint64_t	old_pc;
 	int		group;
 	int		rc;
 
-	if (cpu_mem_read32(cpu, cpu->pc, &insn) != 0) {
-		LOG_ERR("instruction fetch fault at 0x%llx",
-		    (unsigned long long)cpu->pc);
+	if (cpu_mem_read32(cpu, cpu->pc, &insn) != 0)
 		return EMU_SEGFAULT;
-	}
 
 	old_pc = cpu->pc;
-
-
-
 	group = (insn >> 25) & 0xF;
 
 	switch (group) {
@@ -73,16 +67,37 @@ cpu_step(cpu_state_t *cpu)
 		rc = exec_simd(cpu, insn);
 		break;
 	default:
-		LOG_WARN("unimplemented insn group %d at 0x%llx: 0x%08x",
-		    group, (unsigned long long)cpu->pc, insn);
 		return EMU_UNIMPL;
 	}
 
-	/* Advance PC if instruction did not branch */
 	if (rc == EMU_OK && cpu->pc == old_pc)
 		cpu->pc += 4;
 
 	return rc;
+}
+
+int
+cpu_step(cpu_state_t *cpu)
+{
+	return cpu_exec_one(cpu);
+}
+
+/*
+ * Execute up to 'count' instructions without returning.
+ * Stops early on syscall, fault, exit, or breakpoint.
+ * Returns the number of instructions executed.
+ */
+int
+cpu_run(cpu_state_t *cpu, int count)
+{
+	int	i, rc;
+
+	for (i = 0; i < count; i++) {
+		rc = cpu_exec_one(cpu);
+		if (rc != EMU_OK)
+			return rc;
+	}
+	return EMU_OK;
 }
 
 int

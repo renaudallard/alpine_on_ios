@@ -610,7 +610,8 @@ proc_run(void *arg)
 #endif
 
 	while (proc->cpu.running) {
-		ret = cpu_step(&proc->cpu);
+		/* Execute a batch of instructions before checking signals. */
+		ret = cpu_run(&proc->cpu, 256);
 
 		switch (ret) {
 		case EMU_OK:

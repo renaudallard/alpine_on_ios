@@ -142,6 +142,7 @@ cpu_tlb_insert(cpu_state_t *cpu, uint64_t addr, void *host, int prot)
 
 void	cpu_init(cpu_state_t *cpu);
 int	cpu_step(cpu_state_t *cpu);
+int	cpu_run(cpu_state_t *cpu, int count);
 int	cpu_check_cond(cpu_state_t *cpu, unsigned int cond);
 
 /* Register access: R31 = zero register */
