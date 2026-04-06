@@ -265,7 +265,12 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 	}
 
 	/* Set initial brk to end of loaded segments (page-aligned). */
-	info->brk = (base + vmax + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+	{
+		long bpg = mem->aot_mode ? sysconf(_SC_PAGESIZE) : PAGE_SIZE;
+		if (bpg <= 0) bpg = PAGE_SIZE;
+		info->brk = (base + vmax + (uint64_t)bpg - 1) &
+		    ~((uint64_t)bpg - 1);
+	}
 
 	/* Second pass: load segments. */
 	for (i = 0; i < ehdr.e_phnum; i++) {

@@ -447,19 +447,28 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		void *sp_region = mmap(NULL, AOT_STACK_SIZE,
 		    PROT_READ | PROT_WRITE,
 		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		if (sp_region != MAP_FAILED) {
-			stack_top = (uint64_t)sp_region + AOT_STACK_SIZE;
-			/* Register with mem_space so mem_translate works. */
-			mem_mmap_host(newmem, (uint64_t)sp_region,
-			    AOT_STACK_SIZE,
-			    MEM_PROT_READ | MEM_PROT_WRITE,
-			    (uint8_t *)sp_region);
-		} else {
-			stack_top = INTERP_STACK_TOP;
+		if (sp_region == MAP_FAILED) {
+			LOG_ERR("execve: AOT stack mmap failed");
+			mem_space_destroy(newmem);
+			return (-ENOMEM);
+		}
+		stack_top = (uint64_t)sp_region + AOT_STACK_SIZE;
+		if (mem_mmap_host(newmem, (uint64_t)sp_region,
+		    AOT_STACK_SIZE,
+		    MEM_PROT_READ | MEM_PROT_WRITE,
+		    (uint8_t *)sp_region) == (uint64_t)-1) {
+			LOG_ERR("execve: AOT stack register failed");
+			munmap(sp_region, AOT_STACK_SIZE);
+			mem_space_destroy(newmem);
+			return (-ENOMEM);
 		}
 	}
-	if (newmem->aot_mode)
-		newmem->mmap_next = stack_top + 0x10000;
+	if (newmem->aot_mode) {
+		long hpg = sysconf(_SC_PAGESIZE);
+		if (hpg <= 0) hpg = 4096;
+		newmem->mmap_next = (stack_top + (uint64_t)hpg - 1) &
+		    ~((uint64_t)hpg - 1);
+	}
 
 	/* Set up stack. */
 	sp = elf_setup_stack(newmem, &info, argv, envp, stack_top);
