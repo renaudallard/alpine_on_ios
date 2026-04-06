@@ -48,15 +48,14 @@ struct ContentView: View {
                         .environmentObject(bridge)
                         .environmentObject(settings)
 
-                    /* Show loading hint until shell produces output.
-                     * Interpreter mode is slow (~1 min to first prompt). */
+                    /* Show loading hint until shell produces output. */
                     if !bridge.hasOutput {
                         VStack {
                             Spacer()
                             HStack {
                                 ProgressView()
                                     .tint(.green)
-                                Text("Loading shell (interpreter mode)...")
+                                Text("Loading shell...")
                                     .font(.system(.caption, design: .monospaced))
                                     .foregroundColor(.green)
                             }

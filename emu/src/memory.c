@@ -582,18 +582,28 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 		 * mprotect.  This works on macOS without hardened
 		 * runtime and gives native execution speed.
 		 */
+		LOG_INFO("mem_mmap_file: file-backed exec failed at "
+		    "0x%llx, trying anonymous+mprotect",
+		    (unsigned long long)addr);
 		p = mmap((void *)addr, aligned_size,
 		    PROT_READ | PROT_WRITE,
 		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
 		    -1, 0);
 		if (p != MAP_FAILED) {
 			if (pread(fd, p, size, (off_t)offset) < 0) {
+				LOG_INFO("mem_mmap_file: anon pread failed");
 				munmap(p, aligned_size);
 				p = MAP_FAILED;
 			} else if (mprotect(p, aligned_size,
 			    host_prot) != 0) {
+				LOG_INFO("mem_mmap_file: mprotect exec "
+				    "failed, errno=%d", errno);
 				munmap(p, aligned_size);
 				p = MAP_FAILED;
+			} else {
+				LOG_INFO("mem_mmap_file: anonymous exec "
+				    "mmap OK at 0x%llx",
+				    (unsigned long long)addr);
 			}
 		}
 	}

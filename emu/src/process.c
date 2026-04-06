@@ -571,8 +571,16 @@ proc_run(void *arg)
 			return (NULL);
 		}
 		LOG_INFO("proc: pid %d AOT fallback to interpreter "
-		    "(code not at guest addr)", proc->pid);
+		    "(code not at guest addr, hp=%p pc=0x%lx)",
+		    proc->pid, hp, (unsigned long)proc->cpu.pc);
+	} else {
+		LOG_INFO("proc: pid %d interpreter (mem=%p aot=%d native=%d)",
+		    proc->pid, (void *)proc->mem,
+		    proc->mem ? proc->mem->aot_mode : -1,
+		    native_available());
 	}
+#else
+	LOG_INFO("proc: pid %d interpreter (not aarch64)", proc->pid);
 #endif
 
 	while (proc->cpu.running) {
