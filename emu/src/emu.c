@@ -91,14 +91,43 @@ emu_init(const char *rootfs_path)
 	}
 
 	/*
-	 * Set a virtual base for AOT guest addresses.  Host
-	 * addresses may differ; mem_translate maps between them.
+	 * Pre-allocate a MAP_JIT region for native execution.
+	 * On iOS, MAP_JIT is the only way to get executable
+	 * anonymous pages.  The kernel chooses the address;
+	 * we set g_native_base to match so guest addr == host addr.
+	 * ELF loading writes code into this region via pread.
 	 */
-	g_native_base = 0x10000000ULL;	/* 256 MB */
+	g_native_base = 0;
+#if defined(__APPLE__) && defined(__aarch64__)
+	{
+		uint64_t	jit_size = 64ULL * 1024 * 1024; /* 64 MB */
+		void		*p;
 
-	if (native_available() && native_init() == 0) {
+		p = mmap(NULL, jit_size,
+		    PROT_READ | PROT_WRITE | PROT_EXEC,
+		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT,
+		    -1, 0);
+		if (p != MAP_FAILED) {
+			g_native_base = (uint64_t)p;
+			LOG_INFO("emu: JIT region at %p (%llu MB)",
+			    p, (unsigned long long)(jit_size >> 20));
+		} else {
+			LOG_WARN("emu: MAP_JIT failed, errno=%d", errno);
+		}
+	}
+#endif
+	/* Linux aarch64: use direct mmap at chosen address. */
+	if (g_native_base == 0 && native_available()) {
+		void *p = mmap(NULL, 64ULL * 1024 * 1024, PROT_NONE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (p != MAP_FAILED)
+			g_native_base = (uint64_t)p;
+	}
+
+	if (g_native_base != 0 && native_available() &&
+	    native_init() == 0) {
 		g_aot_enabled = 1;
-		LOG_INFO("emu: AOT enabled, base=0x%llx",
+		LOG_INFO("emu: AOT enabled at 0x%llx",
 		    (unsigned long long)g_native_base);
 	}
 

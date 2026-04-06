@@ -385,41 +385,17 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 	}
 
 	if (NATIVE_MODE(ms)) {
-		int	mflags, mprot;
-		uint64_t hp = host_page_size();
-
 		/*
-		 * If the guest address isn't host-page-aligned
-		 * (e.g. 4K ELF segment on 16K macOS), fall back
-		 * to calloc.  mem_translate uses r->host + offset
-		 * so this works transparently.
+		 * AOT mode: the address is within the pre-allocated
+		 * JIT region (on iOS) or a reserved range (on Linux).
+		 * Use the address directly as the host pointer.
+		 * Data writes go via W^X toggle on iOS.
 		 */
-		if ((addr & (hp - 1)) != 0 ||
-		    (aligned_size & (hp - 1)) != 0) {
-			r->host = calloc(1, aligned_size);
-			if (r->host == NULL) {
-				free(r);
-				pthread_rwlock_unlock(&ms->lock);
-				return (uint64_t)-1;
-			}
-			r->flags = MEM_MAP_CALLOC;
-			goto region_ready;
-		}
-
-		mflags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
-		mprot = PROT_READ | PROT_WRITE;
-		r->host = mmap((void *)addr, aligned_size,
-		    mprot, mflags, -1, 0);
-		if (r->host == MAP_FAILED) {
-			/* Fallback to calloc on mmap failure. */
-			r->host = calloc(1, aligned_size);
-			if (r->host == NULL) {
-				free(r);
-				pthread_rwlock_unlock(&ms->lock);
-				return (uint64_t)-1;
-			}
-			r->flags = MEM_MAP_CALLOC;
-		}
+		r->host = (uint8_t *)addr;
+		r->flags |= MEM_MAP_EXTERNAL; /* Don't free JIT region */
+		NATIVE_WRITE_ENABLE();
+		memset(r->host, 0, aligned_size);
+		NATIVE_WRITE_DISABLE();
 	} else {
 		r->host = calloc(1, aligned_size);
 		if (r->host == NULL) {
@@ -444,19 +420,11 @@ region_ready:
 		if (to_read > aligned_size)
 			to_read = aligned_size;
 
+		NATIVE_WRITE_ENABLE();
 		n = pread(fd, r->host, to_read, offset);
+		NATIVE_WRITE_DISABLE();
 		if (n < 0)
 			LOG_WARN("mmap: pread failed for fd %d", fd);
-	}
-
-	/* AOT mode: set final protection (code is already patched). */
-	if (NATIVE_MODE(ms) && (prot & MEM_PROT_EXEC)) {
-		int	fp;
-
-		fp = PROT_READ | PROT_EXEC;
-		if (prot & MEM_PROT_WRITE)
-			fp |= PROT_WRITE;
-		mprotect(r->host, aligned_size, fp);
 	}
 
 	region_insert(ms, r);
@@ -574,34 +542,34 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 		host_prot |= PROT_EXEC;
 
 	/*
-	 * Try file-backed mmap (works on Linux, and on iOS/macOS
-	 * when files are properly codesigned in the app bundle).
+	 * If the target address is inside a pre-allocated JIT
+	 * region (MAP_JIT on iOS), write directly into it.
+	 * The region is already RWX; we just need to toggle
+	 * W^X protection to write.
 	 */
+	if (NATIVE_MODE(ms) && (void *)addr >= (void *)addr &&
+	    ms->aot_mode) {
+		p = (void *)addr;
+		NATIVE_WRITE_ENABLE();
+		if (pread(fd, p, size, (off_t)offset) < 0) {
+			NATIVE_WRITE_DISABLE();
+			LOG_ERR("mem_mmap_file: pread into JIT failed");
+			return (uint64_t)-1;
+		}
+		/* Zero padding beyond file content. */
+		if (aligned_size > size)
+			memset((char *)p + size, 0,
+			    aligned_size - size);
+		NATIVE_WRITE_DISABLE();
+		goto region_setup;
+	}
+
+	/* File-backed mmap (Linux, signed bundles). */
 	p = mmap((void *)addr, aligned_size, host_prot,
 	    MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
 
-	if (p == MAP_FAILED && (host_prot & PROT_EXEC)) {
-		/* Try without PROT_EXEC to see if it's an exec issue. */
-		int noexec = host_prot & ~PROT_EXEC;
-		p = mmap((void *)addr, aligned_size, noexec,
-		    MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
-		if (p != MAP_FAILED) {
-			LOG_INFO("mem_mmap_file: mmap OK without exec "
-			    "at 0x%llx (exec denied)",
-			    (unsigned long long)addr);
-			/* Can't execute, use as data; fall through
-			 * to calloc path for interpreter. */
-			munmap(p, aligned_size);
-			p = MAP_FAILED;
-		} else {
-			LOG_INFO("mem_mmap_file: mmap failed entirely "
-			    "at 0x%llx errno=%d",
-			    (unsigned long long)addr, errno);
-		}
-	}
-
 	if (p == MAP_FAILED) {
-		/* Calloc fallback - interpreter mode. */
+		/* Calloc fallback (interpreter mode). */
 		p = calloc(1, aligned_size);
 		if (p == NULL) {
 			LOG_ERR("mem_mmap_file: alloc failed");
@@ -616,6 +584,7 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 		used_calloc = 1;
 	}
 
+region_setup:
 	pthread_rwlock_wrlock(&ms->lock);
 
 	unmap_range(ms, addr, aligned_size);
@@ -624,7 +593,7 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 	if (r == NULL) {
 		if (used_calloc)
 			free(p);
-		else
+		else if (!ms->aot_mode)
 			munmap(p, aligned_size);
 		pthread_rwlock_unlock(&ms->lock);
 		return (uint64_t)-1;
@@ -634,6 +603,8 @@ mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,
 	r->size = aligned_size;
 	r->prot = prot;
 	r->flags = MEM_MAP_PRIVATE | (used_calloc ? MEM_MAP_CALLOC : 0);
+	if (ms->aot_mode && !used_calloc)
+		r->flags |= MEM_MAP_EXTERNAL; /* Don't free JIT region */
 	r->host = p;
 
 	region_insert(ms, r);

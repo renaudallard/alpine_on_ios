@@ -102,7 +102,9 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		for (i = 0; i < 6; i++)
 			proc->cpu.x[i] = UC_REGS(uc)[i];
 
+		NATIVE_WRITE_ENABLE();
 		sys_handle(proc);
+		NATIVE_WRITE_DISABLE();
 
 		/* Write back return value */
 		UC_REGS(uc)[0] = proc->cpu.x[0];
@@ -185,17 +187,10 @@ native_available(void)
 int
 native_run(emu_process_t *proc)
 {
-	void	*host_pc;
-
 	native_current_proc = proc;
 
-	host_pc = mem_translate(proc->mem, proc->cpu.pc, 4, MEM_PROT_READ);
-	if (host_pc == NULL) {
-		LOG_ERR("native_run: cannot translate pc 0x%llx",
-		    (unsigned long long)proc->cpu.pc);
-		return (-1);
-	}
-	native_enter(&proc->cpu, host_pc);
+	/* guest addr == host addr in AOT mode */
+	native_enter(&proc->cpu, (void *)proc->cpu.pc);
 
 	/* Reached here via native_exit */
 	return (proc->cpu.exit_code);
