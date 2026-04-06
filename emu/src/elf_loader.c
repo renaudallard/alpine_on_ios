@@ -16,6 +16,7 @@
 
 #define _DEFAULT_SOURCE
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <stdlib.h>
@@ -227,8 +228,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			span = ((vmax - aligned_vmin) +
 			    (uint64_t)host_page - 1) & hmask;
 
-			reservation = mmap(NULL, span,
-			    PROT_READ | PROT_WRITE,
+			reservation = mmap(NULL, span, PROT_NONE,
 			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (reservation == MAP_FAILED) {
 				emu_set_error("elf: reservation mmap failed");
@@ -270,38 +270,73 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 		if (mem->aot_mode) {
 			/*
-			 * AOT: the reservation already covers this range
-			 * with PROT_READ|PROT_WRITE.  Read file content
-			 * directly into the reservation, then register
-			 * the region with mem_mmap_host.
-			 * host addr == guest addr.
+			 * AOT: load into the PROT_NONE reservation.
+			 * Code segments: file-backed mmap(PROT_EXEC)
+			 * from the signed bundle (required on iOS).
+			 * Data segments: anonymous mmap(PROT_RW) + pread.
+			 * Both use MAP_FIXED within the reservation.
 			 */
-			uint64_t asize = (map_size + PAGE_SIZE - 1) &
-			    ~((uint64_t)PAGE_SIZE - 1);
+			long hpg = sysconf(_SC_PAGESIZE);
+			uint64_t hmask, aoff, aaddr, asize;
+			int is_exec;
 
-			/* Zero the region (covers bss). */
-			memset((void *)map_addr, 0, asize);
+			if (hpg <= 0) hpg = PAGE_SIZE;
+			hmask = ~((uint64_t)hpg - 1);
+			is_exec = (phdrs[i].p_flags & PF_X) &&
+			    !(phdrs[i].p_flags & PF_W);
 
-			/* Read file content. */
-			if (phdrs[i].p_filesz > 0) {
-				if (pread(fd, (void *)addr,
-				    phdrs[i].p_filesz,
-				    phdrs[i].p_offset) < 0) {
-					emu_set_error("elf: pread seg %d", i);
+			if (is_exec) {
+				/* Align file offset and address to host page. */
+				aoff = phdrs[i].p_offset & hmask;
+				aaddr = (addr - (phdrs[i].p_offset - aoff)) & hmask;
+				asize = ((addr + phdrs[i].p_memsz) - aaddr +
+				    (uint64_t)hpg - 1) & hmask;
+
+				p = mmap((void *)aaddr, asize,
+				    PROT_READ | PROT_EXEC,
+				    MAP_PRIVATE | MAP_FIXED,
+				    fd, (off_t)aoff);
+				if (p == MAP_FAILED) {
+					emu_set_error("elf: exec mmap seg %d "
+					    "addr=0x%lx off=0x%lx errno=%d",
+					    i, (unsigned long)aaddr,
+					    (unsigned long)aoff, errno);
 					goto fail;
+				}
+			} else {
+				/* Data segment: anonymous RW + read content. */
+				aaddr = map_addr & hmask;
+				asize = ((map_addr + map_size) - aaddr +
+				    (uint64_t)hpg - 1) & hmask;
+
+				p = mmap((void *)aaddr, asize,
+				    PROT_READ | PROT_WRITE,
+				    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+				    -1, 0);
+				if (p == MAP_FAILED) {
+					emu_set_error("elf: data mmap seg %d", i);
+					goto fail;
+				}
+				if (phdrs[i].p_filesz > 0) {
+					if (pread(fd, (void *)addr,
+					    phdrs[i].p_filesz,
+					    phdrs[i].p_offset) < 0) {
+						emu_set_error("elf: pread seg %d", i);
+						goto fail;
+					}
 				}
 			}
 
 			/* Register so mem_translate finds it. */
-			if (mem_mmap_host(mem, map_addr, asize, prot,
-			    (uint8_t *)map_addr) == (uint64_t)-1) {
+			if (mem_mmap_host(mem, aaddr, asize, prot,
+			    (uint8_t *)aaddr) == (uint64_t)-1) {
 				emu_set_error("elf: register seg %d", i);
 				goto fail;
 			}
-			LOG_DBG("elf_load: seg %d AOT direct "
+			LOG_DBG("elf_load: seg %d AOT %s "
 			    "addr=0x%lx size=0x%lx",
-			    i, (unsigned long)map_addr,
-			    (unsigned long)asize);
+			    i, is_exec ? "exec" : "data",
+			    (unsigned long)aaddr, (unsigned long)asize);
 			continue;
 		}
 
