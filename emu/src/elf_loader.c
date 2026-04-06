@@ -233,8 +233,19 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			span = ((vmax - aligned_vmin) +
 			    (uint64_t)host_page - 1) & hmask;
 
-			reservation = mmap(NULL, span, PROT_NONE,
-			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			/*
+			 * Try MAP_JIT first (iOS: only way to get
+			 * executable pages).  Fallback to plain
+			 * anonymous (Linux).
+			 */
+			reservation = mmap(NULL, span,
+			    PROT_READ | PROT_WRITE | PROT_EXEC,
+			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT,
+			    -1, 0);
+			if (reservation == MAP_FAILED)
+				reservation = mmap(NULL, span,
+				    PROT_READ | PROT_WRITE,
+				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (reservation == MAP_FAILED) {
 				emu_set_error("elf: reservation mmap failed");
 				goto fail;
@@ -275,14 +286,13 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 		if (mem->aot_mode) {
 			/*
-			 * AOT: load into the PROT_NONE reservation.
-			 * Code segments: file-backed mmap(PROT_EXEC)
-			 * from the signed bundle (required on iOS).
-			 * Data segments: anonymous mmap(PROT_RW) + pread.
-			 * Both use MAP_FIXED within the reservation.
+			 * AOT: write directly into the MAP_JIT reservation.
+			 * Toggle W^X to write content.  For data segments,
+			 * mprotect to PROT_RW so they stay writable during
+			 * native execution (W^X only affects exec pages).
 			 */
 			long hpg = sysconf(_SC_PAGESIZE);
-			uint64_t hmask, aoff, aaddr, asize;
+			uint64_t hmask, aaddr, asize;
 			int is_exec;
 
 			if (hpg <= 0) hpg = PAGE_SIZE;
@@ -290,58 +300,32 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			is_exec = (phdrs[i].p_flags & PF_X) &&
 			    !(phdrs[i].p_flags & PF_W);
 
-			if (is_exec) {
-				/* Code: MAP_JIT within the reservation.
-				 * Toggle W^X to write, then back to exec. */
-				aaddr = map_addr & hmask;
-				asize = ((map_addr + map_size) - aaddr +
-				    (uint64_t)hpg - 1) & hmask;
+			aaddr = map_addr & hmask;
+			asize = ((map_addr + map_size) - aaddr +
+			    (uint64_t)hpg - 1) & hmask;
 
-				p = mmap((void *)aaddr, asize,
-				    PROT_READ | PROT_WRITE | PROT_EXEC,
-				    MAP_PRIVATE | MAP_ANONYMOUS |
-				    MAP_JIT | MAP_FIXED,
-				    -1, 0);
-				if (p == MAP_FAILED) {
-					emu_set_error("elf: JIT mmap seg %d "
-					    "addr=0x%lx size=0x%lx errno=%d",
-					    i, (unsigned long)aaddr,
-					    (unsigned long)asize, errno);
+			/* Write segment content into the JIT region. */
+			NATIVE_WRITE_ENABLE();
+			/* Zero bss. */
+			if (phdrs[i].p_memsz > phdrs[i].p_filesz)
+				memset((void *)(addr + phdrs[i].p_filesz), 0,
+				    phdrs[i].p_memsz - phdrs[i].p_filesz);
+			if (phdrs[i].p_filesz > 0) {
+				if (pread(fd, (void *)addr,
+				    phdrs[i].p_filesz,
+				    phdrs[i].p_offset) < 0) {
+					NATIVE_WRITE_DISABLE();
+					emu_set_error("elf: pread seg %d", i);
 					goto fail;
 				}
-				NATIVE_WRITE_ENABLE();
-				if (phdrs[i].p_filesz > 0) {
-					if (pread(fd, (void *)addr,
-					    phdrs[i].p_filesz,
-					    phdrs[i].p_offset) < 0) {
-						NATIVE_WRITE_DISABLE();
-						emu_set_error("elf: pread code seg %d", i);
-						goto fail;
-					}
-				}
-				NATIVE_WRITE_DISABLE();
-			} else {
-				/* Data segment: anonymous RW + read content. */
-				aaddr = map_addr & hmask;
-				asize = ((map_addr + map_size) - aaddr +
-				    (uint64_t)hpg - 1) & hmask;
+			}
+			NATIVE_WRITE_DISABLE();
 
-				p = mmap((void *)aaddr, asize,
-				    PROT_READ | PROT_WRITE,
-				    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-				    -1, 0);
-				if (p == MAP_FAILED) {
-					emu_set_error("elf: data mmap seg %d", i);
-					goto fail;
-				}
-				if (phdrs[i].p_filesz > 0) {
-					if (pread(fd, (void *)addr,
-					    phdrs[i].p_filesz,
-					    phdrs[i].p_offset) < 0) {
-						emu_set_error("elf: pread seg %d", i);
-						goto fail;
-					}
-				}
+			/* Data segments: remove exec so W^X toggle
+			 * doesn't affect them (always writable). */
+			if (!is_exec) {
+				mprotect((void *)aaddr, asize,
+				    PROT_READ | PROT_WRITE);
 			}
 
 			/* Register so mem_translate finds it. */
