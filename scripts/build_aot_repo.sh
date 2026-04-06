@@ -225,18 +225,35 @@ echo ""
 
 # Step 4: Generate APKINDEX.
 echo "Generating APKINDEX..."
-(
-	for apkfile in "$OUTDIR"/*.apk; do
-		[ -f "$apkfile" ] || continue
-		pkginfo=$(tar -xzf "$apkfile" -O .PKGINFO 2>/dev/null || true)
-		if [ -n "$pkginfo" ]; then
-			echo "$pkginfo" | grep -E '^(pkgname|pkgver|arch|size|pkgdesc|url|depend|provides|install_if|replaces|triggers)' || true
-			size=$(wc -c < "$apkfile" | tr -d ' ')
-			echo "S:$size"
-			echo ""
-		fi
-	done
-) > "$WORKDIR/APKINDEX"
+: > "$WORKDIR/APKINDEX"
+for apkfile in "$OUTDIR"/*.apk; do
+	[ -f "$apkfile" ] || continue
+	pkginfo=$(tar -xzf "$apkfile" -O ./.PKGINFO 2>/dev/null || true)
+	[ -z "$pkginfo" ] && continue
+
+	# Convert .PKGINFO format to APKINDEX format.
+	# PKGINFO uses "key = value", APKINDEX uses "K:value".
+	name=$(echo "$pkginfo" | awk -F' = ' '/^pkgname/{print $2}')
+	ver=$(echo "$pkginfo" | awk -F' = ' '/^pkgver/{print $2}')
+	arch=$(echo "$pkginfo" | awk -F' = ' '/^arch/{print $2}')
+	desc=$(echo "$pkginfo" | awk -F' = ' '/^pkgdesc/{print $2}')
+	url=$(echo "$pkginfo" | awk -F' = ' '/^url/{print $2}')
+	size=$(wc -c < "$apkfile" | tr -d ' ')
+
+	{
+		echo "P:$name"
+		echo "V:$ver"
+		echo "A:$arch"
+		echo "S:$size"
+		echo "T:$desc"
+		[ -n "$url" ] && echo "U:$url"
+		# Dependencies
+		echo "$pkginfo" | awk -F' = ' '/^depend/{print "D:" $2}'
+		# Provides
+		echo "$pkginfo" | awk -F' = ' '/^provides/{print "p:" $2}'
+		echo ""
+	} >> "$WORKDIR/APKINDEX"
+done
 
 tar -czf "$OUTDIR/APKINDEX.tar.gz" -C "$WORKDIR" APKINDEX
 
