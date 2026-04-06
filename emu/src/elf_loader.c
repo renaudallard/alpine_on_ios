@@ -208,19 +208,27 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 	if (is_dyn) {
 		if (mem->aot_mode) {
 			/*
-			 * AOT: reserve the full span and let the kernel
-			 * pick the address.  Segments are then placed
-			 * with MAP_FIXED inside this reservation.
-			 * guest addr == host addr for native execution.
+			 * AOT: reserve the full span aligned to host
+			 * page size.  On iOS (16K pages), ELF segments
+			 * may be 4K-aligned; the reservation must cover
+			 * the host-page-aligned range.
 			 */
 			uint64_t span, aligned_vmin;
+			long host_page;
+			uint64_t hmask;
 			void *reservation;
 
-			aligned_vmin = vmin & ~((uint64_t)PAGE_SIZE - 1);
-			span = ((vmax - aligned_vmin) + PAGE_SIZE - 1) &
-			    ~((uint64_t)PAGE_SIZE - 1);
+			host_page = sysconf(_SC_PAGESIZE);
+			if (host_page <= 0)
+				host_page = PAGE_SIZE;
+			hmask = ~((uint64_t)host_page - 1);
 
-			reservation = mmap(NULL, span, PROT_NONE,
+			aligned_vmin = vmin & hmask;
+			span = ((vmax - aligned_vmin) +
+			    (uint64_t)host_page - 1) & hmask;
+
+			reservation = mmap(NULL, span,
+			    PROT_READ | PROT_WRITE,
 			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (reservation == MAP_FAILED) {
 				emu_set_error("elf: reservation mmap failed");
@@ -260,31 +268,44 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 		prot = elf_pflags_to_prot(phdrs[i].p_flags);
 
-		/*
-		 * AOT mode: executable segments are mapped directly
-		 * from the pre-patched file (file-backed PROT_EXEC).
-		 * No MAP_JIT or write access needed.
-		 */
-		if (mem->aot_mode && (phdrs[i].p_flags & PF_X) &&
-		    !(phdrs[i].p_flags & PF_W) &&
-		    phdrs[i].p_offset >= page_off) {
-			uint64_t	file_page_off;
+		if (mem->aot_mode) {
+			/*
+			 * AOT: the reservation already covers this range
+			 * with PROT_READ|PROT_WRITE.  Read file content
+			 * directly into the reservation, then register
+			 * the region with mem_mmap_host.
+			 * host addr == guest addr.
+			 */
+			uint64_t asize = (map_size + PAGE_SIZE - 1) &
+			    ~((uint64_t)PAGE_SIZE - 1);
 
-			file_page_off = phdrs[i].p_offset - page_off;
-			if (mem_mmap_file(mem, map_addr, map_size,
-			    prot, fd, file_page_off) == (uint64_t)-1) {
-				emu_set_error("elf: AOT mmap failed seg %d",
-				    i);
+			/* Zero the region (covers bss). */
+			memset((void *)map_addr, 0, asize);
+
+			/* Read file content. */
+			if (phdrs[i].p_filesz > 0) {
+				if (pread(fd, (void *)addr,
+				    phdrs[i].p_filesz,
+				    phdrs[i].p_offset) < 0) {
+					emu_set_error("elf: pread seg %d", i);
+					goto fail;
+				}
+			}
+
+			/* Register so mem_translate finds it. */
+			if (mem_mmap_host(mem, map_addr, asize, prot,
+			    (uint8_t *)map_addr) == (uint64_t)-1) {
+				emu_set_error("elf: register seg %d", i);
 				goto fail;
 			}
-			LOG_DBG("elf_load: seg %d AOT file-backed "
-			    "mapaddr=0x%lx size=0x%lx",
+			LOG_DBG("elf_load: seg %d AOT direct "
+			    "addr=0x%lx size=0x%lx",
 			    i, (unsigned long)map_addr,
-			    (unsigned long)map_size);
+			    (unsigned long)asize);
 			continue;
 		}
 
-		/* Map with write permission so we can fill data. */
+		/* Non-AOT: map with write permission so we can fill data. */
 		if (mem_mmap(mem, map_addr, map_size,
 		    prot | MEM_PROT_WRITE,
 		    MEM_MAP_PRIVATE | MEM_MAP_FIXED | MEM_MAP_ANONYMOUS,
