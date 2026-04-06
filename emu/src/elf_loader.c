@@ -17,6 +17,7 @@
 #define _DEFAULT_SOURCE
 
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -205,9 +206,36 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 	/* Compute base address. */
 	if (is_dyn) {
-		base = base_hint;
-		if (base == 0)
-			base = 0x400000;
+		if (mem->aot_mode) {
+			/*
+			 * AOT: reserve the full span and let the kernel
+			 * pick the address.  Segments are then placed
+			 * with MAP_FIXED inside this reservation.
+			 * guest addr == host addr for native execution.
+			 */
+			uint64_t span, aligned_vmin;
+			void *reservation;
+
+			aligned_vmin = vmin & ~((uint64_t)PAGE_SIZE - 1);
+			span = ((vmax - aligned_vmin) + PAGE_SIZE - 1) &
+			    ~((uint64_t)PAGE_SIZE - 1);
+
+			reservation = mmap(NULL, span, PROT_NONE,
+			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			if (reservation == MAP_FAILED) {
+				emu_set_error("elf: reservation mmap failed");
+				goto fail;
+			}
+			base = (uint64_t)reservation - aligned_vmin;
+			LOG_INFO("elf_load: AOT reservation %p span=0x%lx "
+			    "base=0x%lx",
+			    reservation, (unsigned long)span,
+			    (unsigned long)base);
+		} else {
+			base = base_hint;
+			if (base == 0)
+				base = 0x400000;
+		}
 	} else {
 		base = 0;
 	}

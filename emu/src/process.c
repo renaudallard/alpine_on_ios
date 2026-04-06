@@ -15,6 +15,7 @@
  */
 
 #include <sys/types.h>
+#include <sys/mman.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -48,9 +49,8 @@
  */
 uint64_t	g_native_base;
 
-#define AOT_BINARY_BASE		(g_native_base)
-#define AOT_INTERP_BASE		(g_native_base + 0x4000000ULL)  /* +64 MB */
-#define AOT_STACK_TOP		(g_native_base + 0x7FF0000ULL)  /* ~128 MB */
+/* AOT: base addresses are chosen by the kernel via mmap(NULL) in elf_load. */
+#define AOT_STACK_SIZE		(8ULL * 1024 * 1024)	/* 8 MB */
 
 /* Interpreter base addresses */
 #define INTERP_INTERP_BASE	0x7f00000000ULL
@@ -392,10 +392,9 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		 * threads in the same host process.
 		 */
 		newmem->aot_mode = 1;
-		newmem->mmap_next = g_native_base + 0x8000000ULL;
-		bin_base = AOT_BINARY_BASE;
-		interp_base = AOT_INTERP_BASE;
-		stack_top = AOT_STACK_TOP;
+		bin_base = 0;	/* kernel chooses via mmap(NULL) */
+		interp_base = 0;
+		stack_top = 0;	/* determined after loading */
 	} else {
 		bin_base = 0;
 		interp_base = INTERP_INTERP_BASE;
@@ -442,6 +441,25 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	/* Set initial brk to end of loaded binary. */
 	newmem->brk_base = info.brk;
 	newmem->brk_current = info.brk;
+
+	/* AOT: allocate stack via mmap so host addr == guest addr. */
+	if (newmem->aot_mode && stack_top == 0) {
+		void *sp_region = mmap(NULL, AOT_STACK_SIZE,
+		    PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (sp_region != MAP_FAILED) {
+			stack_top = (uint64_t)sp_region + AOT_STACK_SIZE;
+			/* Register with mem_space so mem_translate works. */
+			mem_mmap_host(newmem, (uint64_t)sp_region,
+			    AOT_STACK_SIZE,
+			    MEM_PROT_READ | MEM_PROT_WRITE,
+			    (uint8_t *)sp_region);
+		} else {
+			stack_top = INTERP_STACK_TOP;
+		}
+	}
+	if (newmem->aot_mode)
+		newmem->mmap_next = stack_top + 0x10000;
 
 	/* Set up stack. */
 	sp = elf_setup_stack(newmem, &info, argv, envp, stack_top);
