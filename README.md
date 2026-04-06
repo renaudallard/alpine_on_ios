@@ -14,13 +14,13 @@
   <a href="https://github.com/renaudallard/alpine_on_ios/releases/latest">
     <img src="https://img.shields.io/github/downloads/renaudallard/alpine_on_ios/total?style=flat-square&label=downloads" alt="Downloads">
   </a>
-  <img src="https://img.shields.io/badge/platform-iOS%2015%2B-blue?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20macOS%2013%2B-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/license-ISC-green?style=flat-square" alt="License">
 </p>
 
 <p align="center">
-  Run a full Alpine Linux aarch64 distribution on iPhone and iPad.<br>
-  Near-native speed via AOT precompilation, no MAP_JIT required.
+  Run a full Alpine Linux aarch64 distribution on iPhone, iPad, and Mac.<br>
+  Near-native speed via AOT precompilation on iOS. No developer account needed.
 </p>
 
 ---
@@ -28,7 +28,8 @@
 ## Features
 
 - **Full Alpine Linux** with `apk` package manager and AOT package repository
-- **Near-native execution** via AOT precompilation (no MAP_JIT entitlement needed)
+- **Near-native execution** on iOS via AOT precompilation (no entitlements needed)
+- **macOS support** (Apple Silicon, interpreter mode for ad-hoc signed apps)
 - **Terminal emulator** with VT100/xterm-256color, ANSI colors, line editing, history
 - **Graphical display** via `/dev/fb0` framebuffer and Metal rendering at 60fps
 - **Touch input** mapped to Linux evdev mouse events
@@ -43,18 +44,20 @@
 ## How It Works
 
 Since iOS devices use ARM64 and Alpine Linux provides aarch64 packages,
-guest code runs **natively** on the host CPU. At build time, `SVC`
+guest code can run **natively** on the host CPU. At build time, `SVC`
 (syscall) instructions are replaced with `BRK` traps. At runtime, a
 `SIGTRAP` handler intercepts the traps and dispatches to emulated Linux
 syscalls. This gives near-native performance with no per-instruction
-overhead and no MAP_JIT entitlement.
+overhead.
 
-A full AArch64 instruction interpreter serves as fallback for forked
-child processes and non-aarch64 hosts.
+On iOS, the pre-patched binaries are loaded via file-backed executable
+mappings from the signed app bundle. On macOS with ad-hoc signing, a
+full AArch64 instruction interpreter serves as fallback (native speed
+requires Developer ID signing).
 
 ```
 +-----------------------+
-|  Terminal | Display   |   SwiftUI tabs
+|  Terminal | Display   |   SwiftUI tabs (iOS + macOS)
 +-----+-----+-----+----+
       |           |
 +-----+-----+----+-----+
@@ -67,7 +70,7 @@ child processes and non-aarch64 hosts.
             |
       +-----+-----+
       | AOT Native |         Pre-patched BRK traps + SIGTRAP handler
-      | / Interp   |         Interpreter fallback for child processes
+      | / Interp   |         Interpreter fallback
       +-----+-----+
             |
       +-----+-----+
@@ -76,11 +79,13 @@ child processes and non-aarch64 hosts.
       +-----+-----+
             |
       +-----+-----+
-      |  VFS      |         rootfs + overlay + /proc + /dev + /dev/fb0
+      |  VFS      |         bundle rootfs + overlay + /proc + /dev
       +-----------+
 ```
 
 ## Installing
+
+### iOS
 
 Download the latest `.ipa` from
 [**Releases**](https://github.com/renaudallard/alpine_on_ios/releases/latest)
@@ -96,16 +101,22 @@ and sideload it.
 After installing, trust the developer profile in
 **Settings > General > Device Management**.
 
+### macOS (Apple Silicon)
+
+Download the latest `.dmg` from
+[**Releases**](https://github.com/renaudallard/alpine_on_ios/releases/latest),
+open it, and drag **Alpine Terminal** to Applications.
+
+Note: ad-hoc signed macOS apps run in interpreter mode (slower). Build
+from Xcode with your Apple ID for native speed.
+
 ### First launch
 
-1. Open **Alpine Terminal** from your home screen
+1. Open **Alpine Terminal**
 2. The app sets up symlinks and configuration on first launch
 3. You get an interactive shell with line editing and history
 
 ### Installing packages
-
-The app is preconfigured with an AOT repository (pre-patched for native
-speed) and Alpine's HTTP mirrors as fallback:
 
 ```
 apk update --allow-untrusted
@@ -119,8 +130,7 @@ apk add --allow-untrusted xorg-server xf86-video-fbdev xterm openbox
 startx
 ```
 
-Switch to the **Display** tab to see the graphical output. Touch
-the display for mouse input.
+Switch to the **Display** tab to see the graphical output.
 
 ### Firefox
 
@@ -129,13 +139,11 @@ apk add --allow-untrusted firefox-esr font-noto openbox dbus
 sh ~/start-firefox.sh
 ```
 
-Switch to the **Display** tab to browse the web.
-
 ## Building from Source
 
 ### Prerequisites
 
-- **iOS**: macOS + Xcode 15+ + [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+- **iOS/macOS**: macOS + Xcode 15+ + [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 - **Linux testing**: GCC or Clang (C11), make, pthreads
 
 ### Quick start
@@ -150,20 +158,24 @@ xcodebuild build -project AlpineOnIOS.xcodeproj \
     -scheme AlpineOnIOS -sdk iphoneos \
     -configuration Release CODE_SIGNING_ALLOWED=NO
 
+# macOS build
+xcodebuild build -project AlpineOnIOS.xcodeproj \
+    -scheme AlpineOnMac -configuration Release
+
 # package .ipa
 ./scripts/package_ipa.sh build/Build/Products/Release-iphoneos
 ```
 
-The Xcode post-build script copies the rootfs into the app bundle and
-runs `scripts/patch_rootfs_aot.sh` to AOT-patch all ELF binaries.
+The Xcode post-build script copies the rootfs into the app bundle,
+AOT-patches all ELF binaries, and ad-hoc codesigns them.
 
 ### CI and releases
 
 | Workflow | Trigger | Action |
 |----------|---------|--------|
-| `ci.yml` | Push / PR | Test on Linux, build iOS, upload artifact |
-| `version-tag.yml` | `MARKETING_VERSION` change | Auto-create `v*` tag |
-| `release.yml` | `v*` tag | Build .ipa, publish GitHub Release |
+| `ci.yml` | Push / PR | Test on Linux, build iOS + macOS |
+| `version-tag.yml` | `MARKETING_VERSION` change | Auto-create `v*` tag, dispatch release |
+| `release.yml` | Tag / dispatch | Build IPA + DMG, publish GitHub Release |
 | `aot-repo.yml` | Daily / manual | Build AOT-patched APK repository |
 
 Bump `MARKETING_VERSION` in `project.yml` and push to release.
@@ -179,19 +191,19 @@ alpine_on_ios/
     Settings/       Font size preferences
     Bridge/         Swift-to-C bridge, bridging header
   emu/
-    include/        C headers (cpu, jit, memory, process, vfs, syscall, ...)
-    src/            C implementation + jit_entry.S assembly
+    include/        C headers (cpu, native, memory, process, vfs, syscall, ...)
+    src/            C implementation + native_entry.S assembly
     tests/          Unit + integration tests (42 unit, 2 integration)
   rootfs/
     download_rootfs.sh   Download Alpine minirootfs
     overlay/             X11 config, .profile, start-firefox.sh
   scripts/
     aot_patch.c          AOT patcher: SVC->BRK in ELF binaries
-    patch_rootfs_aot.sh  Patch all ELFs in a rootfs directory
+    patch_rootfs_aot.sh  Patch + codesign all ELFs in a rootfs
     build_aot_repo.sh    Build AOT-patched APK repository
     build_rootfs.sh      Rootfs assembly
     package_ipa.sh       IPA packaging
-  project.yml            XcodeGen spec
+  project.yml            XcodeGen spec (iOS + macOS targets)
   .github/workflows/     CI, release, auto-tag, AOT repo
 ```
 
@@ -200,13 +212,13 @@ alpine_on_ios/
 | Problem | Solution |
 |---------|----------|
 | "Untrusted Developer" | Settings > General > Device Management > Trust |
-| App crashes on launch | Requires iOS 15.0 or later |
+| App crashes on launch | Requires iOS 15.0 / macOS 13.0 or later |
 | AltStore can't find server | Ensure AltServer is running, same Wi-Fi |
 | App expires after 7 days | Re-sign with AltStore/Sideloadly, or use TrollStore |
 | No keyboard input | Tap the terminal area to focus the keyboard |
-| Blank terminal | Delete and reinstall the app to re-extract rootfs |
+| Blank terminal | Wait for interpreter to load (~1 min on macOS ad-hoc) |
 | apk signature errors | Use `--allow-untrusted` for the AOT repository |
-| Slow package install | AOT repo packages run natively; fallback repos use interpreter |
+| Slow on macOS | Ad-hoc signed apps use interpreter; build from Xcode for native |
 
 ## Support
 
