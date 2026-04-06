@@ -572,121 +572,46 @@ void *
 proc_run(void *arg)
 {
 	emu_process_t	*proc;
-	int		 ret;
 
 	proc = (emu_process_t *)arg;
 
 	LOG_DBG("proc: running pid %d, pc=0x%lx sp=0x%lx", proc->pid,
 	    (unsigned long)proc->cpu.pc, (unsigned long)proc->cpu.sp);
 
-#ifdef __aarch64__
 	/*
-	 * Use AOT native execution when the code is mapped at
-	 * the guest address (not calloc fallback).  native_enter
-	 * jumps to the guest PC directly, so host addr must
-	 * equal guest addr.
+	 * AOT native execution only.  The code runs directly on the
+	 * host CPU with BRK traps for syscalls.  No interpreter fallback.
 	 */
-	if (proc->mem != NULL && proc->mem->aot_mode &&
-	    native_available()) {
+	if (proc->mem == NULL || !proc->mem->aot_mode ||
+	    !native_available()) {
+		LOG_ERR("proc: pid %d cannot run without AOT", proc->pid);
+		emu_set_error("AOT native execution not available. "
+		    "Install via TrollStore or enable JIT in AltStore.");
+		proc_run_exit(proc, 1);
+		return (NULL);
+	}
+
+	{
 		void *hp = mem_translate(proc->mem, proc->cpu.pc, 4,
 		    MEM_PROT_READ);
-		if (hp == (void *)proc->cpu.pc) {
-			LOG_INFO("proc: pid %d using AOT native",
-			    proc->pid);
-			native_run(proc);
-			proc_run_exit(proc, proc->cpu.exit_code);
-			return (NULL);
-		}
-		LOG_INFO("proc: pid %d AOT fallback (hp=%p pc=0x%lx)",
-		    proc->pid, hp, (unsigned long)proc->cpu.pc);
-	} else {
-		LOG_INFO("proc: pid %d interpreter (aot=%d native=%d)",
-		    proc->pid,
-		    proc->mem ? proc->mem->aot_mode : -1,
-		    native_available());
-	}
-#else
-	LOG_INFO("proc: pid %d interpreter (not aarch64)", proc->pid);
-#endif
-
-	while (proc->cpu.running) {
-		/* Execute a batch of instructions before checking signals. */
-		ret = cpu_run(&proc->cpu, 256);
-
-		switch (ret) {
-		case EMU_OK:
-			break;
-		case EMU_SYSCALL:
-			sys_handle(proc);
-			cpu_tlb_flush(&proc->cpu);
-			break;
-		case EMU_SEGFAULT:
-			LOG_ERR("proc: pid %d SIGSEGV at pc=0x%lx",
-			    proc->pid, (unsigned long)proc->cpu.pc);
-			sig_send(proc, EMU_SIGSEGV);
-			break;
-		case EMU_UNIMPL:
-			LOG_ERR("proc: pid %d unimplemented insn at pc=0x%lx",
-			    proc->pid, (unsigned long)proc->cpu.pc);
-			proc_run_exit(proc, EMU_SIGILL & 0x7f);
-			return (NULL);
-		case EMU_BREAK: {
-			/*
-			 * Handle AOT BRK traps in interpreter mode
-			 * (forked child before execve).  Decode the
-			 * BRK immediate the same way the JIT SIGTRAP
-			 * handler does.
-			 */
-			uint32_t	brk_insn, brk_imm;
-
-			if (mem_read32(proc->mem, proc->cpu.pc,
-			    &brk_insn) != 0) {
-				proc->cpu.pc += 4;
-				break;
-			}
-			brk_imm = (brk_insn >> 5) & 0xFFFF;
-
-			if (brk_imm == 0x0001) {
-				/* SVC #0: syscall */
-				proc->cpu.pc += 4;
-				sys_handle(proc);
-				cpu_tlb_flush(&proc->cpu);
-			} else if ((brk_imm & 0xFF00) == 0x0100) {
-				/* MSR TPIDR_EL0, Xn */
-				int rn = brk_imm & 0x1F;
-				proc->cpu.tpidr_el0 =
-				    cpu_xreg(&proc->cpu, rn);
-				proc->cpu.pc += 4;
-			} else if ((brk_imm & 0xFF00) == 0x0200) {
-				/* MRS Xn, TPIDR_EL0 */
-				int rn = brk_imm & 0x1F;
-				cpu_set_xreg(&proc->cpu, rn,
-				    proc->cpu.tpidr_el0);
-				proc->cpu.pc += 4;
-			} else {
-				LOG_DBG("proc: pid %d breakpoint at "
-				    "pc=0x%lx imm=0x%x",
-				    proc->pid,
-				    (unsigned long)proc->cpu.pc,
-				    brk_imm);
-				proc->cpu.pc += 4;
-			}
-			break;
-		}
-		case EMU_EXIT:
-			proc_run_exit(proc, proc->cpu.exit_code);
-			return (NULL);
-		default:
-			LOG_ERR("proc: pid %d unexpected cpu_step ret=%d",
-			    proc->pid, ret);
+		if (hp != (void *)proc->cpu.pc) {
+			LOG_ERR("proc: pid %d code not at guest addr "
+			    "(hp=%p pc=0x%lx)", proc->pid, hp,
+			    (unsigned long)proc->cpu.pc);
+			emu_set_error("AOT: code not mapped at expected "
+			    "address");
 			proc_run_exit(proc, 1);
 			return (NULL);
 		}
-
-		sig_deliver(proc);
 	}
 
-	/* Process called exit/exit_group (running set to 0). */
+	LOG_INFO("proc: pid %d AOT native pc=0x%lx",
+	    proc->pid, (unsigned long)proc->cpu.pc);
+	native_run(proc);
+	proc_run_exit(proc, proc->cpu.exit_code);
+	return (NULL);
+
+	/* Not reached. */
 	proc_run_exit(proc, proc->exit_status);
 	return (NULL);
 }
