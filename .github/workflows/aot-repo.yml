@@ -26,8 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Build AOT patcher
-        run: cc -O2 -o scripts/.aot_patch scripts/aot_patch.c
+      - name: Build AOT tools
+        run: |
+          cc -O2 -o scripts/.aot_patch scripts/aot_patch.c
+          cc -O2 -o scripts/.elf2macho scripts/elf2macho.c
 
       - name: Restore previous repository from branch
         run: |

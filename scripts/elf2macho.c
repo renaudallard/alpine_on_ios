@@ -140,12 +140,6 @@ typedef struct {
 /* ---- Helpers ---- */
 
 static void
-w8(uint8_t **p, uint8_t v) { **p = v; (*p)++; }
-
-static void
-w32(uint8_t **p, uint32_t v) { memcpy(*p, &v, 4); *p += 4; }
-
-static void
 wbuf(uint8_t **p, const void *src, size_t n) { memcpy(*p, src, n); *p += n; }
 
 static void

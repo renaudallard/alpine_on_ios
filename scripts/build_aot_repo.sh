@@ -44,10 +44,15 @@ if [ $# -eq 0 ]; then
 	    networkmanager bash coreutils
 fi
 
-# Build the patcher tool.
+# Build tools.
 if [ ! -x "$AOT_PATCH" ]; then
 	echo "Building aot_patch tool..."
 	cc -O2 -o "$AOT_PATCH" "$SCRIPT_DIR/aot_patch.c"
+fi
+ELF2MACHO="$SCRIPT_DIR/.elf2macho"
+if [ ! -x "$ELF2MACHO" ]; then
+	echo "Building elf2macho tool..."
+	cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
 fi
 
 # Step 1: Resolve all dependencies using Alpine's package database.
@@ -210,6 +215,7 @@ for apkfile in "$DLDIR"/*.apk; do
 		head=$(head -c 4 "$f" 2>/dev/null | od -A n -t x1 2>/dev/null | tr -d ' ')
 		if [ "$head" = "7f454c46" ]; then
 			"$AOT_PATCH" "$f"
+			"$ELF2MACHO" "$f" "${f}.dylib" >/dev/null 2>&1 || true
 		fi
 	done
 
