@@ -20,12 +20,17 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <stdlib.h>
+
+#ifndef MAP_JIT
+#define MAP_JIT 0
+#endif
 #include <string.h>
 #include <unistd.h>
 
 #include "elf_loader.h"
 #include "emu.h"
 #include "memory.h"
+#include "native.h"
 #include "log.h"
 
 /* ELF64 types defined inline to avoid host elf.h dependency. */
@@ -286,23 +291,35 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			    !(phdrs[i].p_flags & PF_W);
 
 			if (is_exec) {
-				/* Align file offset and address to host page. */
-				aoff = phdrs[i].p_offset & hmask;
-				aaddr = (addr - (phdrs[i].p_offset - aoff)) & hmask;
-				asize = ((addr + phdrs[i].p_memsz) - aaddr +
+				/* Code: MAP_JIT within the reservation.
+				 * Toggle W^X to write, then back to exec. */
+				aaddr = map_addr & hmask;
+				asize = ((map_addr + map_size) - aaddr +
 				    (uint64_t)hpg - 1) & hmask;
 
 				p = mmap((void *)aaddr, asize,
-				    PROT_READ | PROT_EXEC,
-				    MAP_PRIVATE | MAP_FIXED,
-				    fd, (off_t)aoff);
+				    PROT_READ | PROT_WRITE | PROT_EXEC,
+				    MAP_PRIVATE | MAP_ANONYMOUS |
+				    MAP_JIT | MAP_FIXED,
+				    -1, 0);
 				if (p == MAP_FAILED) {
-					emu_set_error("elf: exec mmap seg %d "
-					    "addr=0x%lx off=0x%lx errno=%d",
+					emu_set_error("elf: JIT mmap seg %d "
+					    "addr=0x%lx size=0x%lx errno=%d",
 					    i, (unsigned long)aaddr,
-					    (unsigned long)aoff, errno);
+					    (unsigned long)asize, errno);
 					goto fail;
 				}
+				NATIVE_WRITE_ENABLE();
+				if (phdrs[i].p_filesz > 0) {
+					if (pread(fd, (void *)addr,
+					    phdrs[i].p_filesz,
+					    phdrs[i].p_offset) < 0) {
+						NATIVE_WRITE_DISABLE();
+						emu_set_error("elf: pread code seg %d", i);
+						goto fail;
+					}
+				}
+				NATIVE_WRITE_DISABLE();
 			} else {
 				/* Data segment: anonymous RW + read content. */
 				aaddr = map_addr & hmask;
