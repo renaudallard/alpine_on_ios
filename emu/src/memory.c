@@ -633,6 +633,28 @@ mem_munmap(mem_space_t *ms, uint64_t addr, uint64_t size)
 	return 0;
 }
 
+/*
+ * Apply the host page protection for a region.  Used by mem_mprotect
+ * after either an in-place prot change or a region split, so the
+ * kernel page table tracks the prot field we just stored.
+ */
+static void
+host_mprotect_region(mem_space_t *ms, mem_region_t *r)
+{
+	int	hp;
+
+	if (!NATIVE_MODE(ms))
+		return;
+	hp = 0;
+	if (r->prot & MEM_PROT_READ)
+		hp |= PROT_READ;
+	if (r->prot & MEM_PROT_WRITE)
+		hp |= PROT_WRITE;
+	if (r->prot & MEM_PROT_EXEC)
+		hp |= PROT_EXEC;
+	mprotect(r->host, r->size, hp);
+}
+
 int
 mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 {
@@ -661,6 +683,8 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 		 */
 		if (overlap_start == r->base && overlap_end == rend) {
 			r->prot = prot;
+			host_mprotect_region(ms, r);
+			continue;
 		} else {
 			/*
 			 * Partial overlap: split the region.
@@ -747,6 +771,7 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 				r->size = overlap_start - r->base;
 				r->next = nr;
 				next = nr->next;
+				host_mprotect_region(ms, nr);
 			} else {
 				/* overlap_start == r->base, overlap_end < rend:
 				 * change [base, overlap_end), keep [overlap_end, rend) */
@@ -788,19 +813,9 @@ mem_mprotect(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 				r->prot = prot;
 				r->next = nr;
 				next = nr->next;
+				host_mprotect_region(ms, r);
 			}
-			continue;	/* native mprotect handled per-region below */
-		}
-
-		if (NATIVE_MODE(ms)) {
-			int	hp = 0;
-			if (prot & MEM_PROT_READ)
-				hp |= PROT_READ;
-			if (prot & MEM_PROT_WRITE)
-				hp |= PROT_WRITE;
-			if (prot & MEM_PROT_EXEC)
-				hp |= PROT_EXEC;
-			mprotect(r->host, r->size, hp);
+			continue;
 		}
 	}
 	pthread_rwlock_unlock(&ms->lock);
