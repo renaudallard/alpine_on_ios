@@ -2027,6 +2027,19 @@ struct eventfd_state {
 #define LINUX_EFD_CLOEXEC	LINUX_O_CLOEXEC
 #define LINUX_EFD_NONBLOCK	LINUX_O_NONBLOCK
 
+static void
+eventfd_close(void *priv)
+{
+	struct eventfd_state	*evs = priv;
+
+	if (evs == NULL)
+		return;
+	/* fd_close already closed pipefd[0] via real_fd. */
+	if (evs->pipefd[1] >= 0)
+		close(evs->pipefd[1]);
+	free(evs);
+}
+
 static int64_t
 do_eventfd2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 {
@@ -2066,6 +2079,7 @@ do_eventfd2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	fde->flags = 0;
 	fde->cloexec = ((int)a1 & LINUX_EFD_CLOEXEC) ? 1 : 0;
 	fde->private = evs;
+	fde->close_fn = eventfd_close;
 
 	if ((int)a1 & LINUX_EFD_NONBLOCK) {
 		int	fl;
