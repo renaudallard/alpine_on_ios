@@ -755,6 +755,19 @@ fd_alloc(fd_table_t *tbl, int minfd)
 	pthread_mutex_lock(&tbl->lock);
 	for (i = minfd; i < MAX_FDS; i++) {
 		if (tbl->fds[i].type == FD_NONE) {
+			/*
+			 * Reserve the slot before releasing the lock so
+			 * another thread sharing this fd_table cannot pick
+			 * the same index before the caller fills in the
+			 * real type/real_fd.  Set real_fd to -1 so a stray
+			 * fd_close on this slot does not close stdin.
+			 */
+			tbl->fds[i].type = FD_FILE;
+			tbl->fds[i].real_fd = -1;
+			tbl->fds[i].cloexec = 0;
+			tbl->fds[i].flags = 0;
+			tbl->fds[i].private = NULL;
+			tbl->fds[i].close_fn = NULL;
 			pthread_mutex_unlock(&tbl->lock);
 			return (i);
 		}
