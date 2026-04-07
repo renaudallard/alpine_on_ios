@@ -224,7 +224,27 @@ do_resolve:
 
 	/* Resolve each path component, following symlinks within rootfs */
 	depth = 0;
+	size_t rootlen = strlen(vfs->rootfs);
 	for (i = 0; i < ncomp; i++) {
+		/*
+		 * Handle "." and ".." here so they never reach the
+		 * kernel as literal path elements.  ".." pops the last
+		 * segment of resolved but is clamped at vfs->rootfs so
+		 * a hostile symlink target cannot escape the chroot.
+		 */
+		if (strcmp(components[i], ".") == 0)
+			continue;
+		if (strcmp(components[i], "..") == 0) {
+			size_t curlen = strlen(resolved);
+			if (curlen > rootlen) {
+				char *slash = strrchr(resolved, '/');
+				if (slash != NULL &&
+				    (size_t)(slash - resolved) >= rootlen)
+					*slash = '\0';
+			}
+			continue;
+		}
+
 		/* Append component */
 		if (snprintf(host_path, host_path_size, "%s/%s",
 		    resolved, components[i]) >= (int)host_path_size)
