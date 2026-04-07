@@ -589,20 +589,26 @@ sys_process(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 			proc->egid = (int)(int32_t)a1;
 		return 0;
 	case SYS_GETRESUID:
-		if (a0 != 0)
-			mem_write32(proc->mem, a0, (uint32_t)proc->uid);
-		if (a1 != 0)
-			mem_write32(proc->mem, a1, (uint32_t)proc->euid);
-		if (a2 != 0)
-			mem_write32(proc->mem, a2, (uint32_t)proc->uid);
+		if (a0 != 0 && mem_write32(proc->mem, a0,
+		    (uint32_t)proc->uid) != 0)
+			return -LINUX_EFAULT;
+		if (a1 != 0 && mem_write32(proc->mem, a1,
+		    (uint32_t)proc->euid) != 0)
+			return -LINUX_EFAULT;
+		if (a2 != 0 && mem_write32(proc->mem, a2,
+		    (uint32_t)proc->uid) != 0)
+			return -LINUX_EFAULT;
 		return 0;
 	case SYS_GETRESGID:
-		if (a0 != 0)
-			mem_write32(proc->mem, a0, (uint32_t)proc->gid);
-		if (a1 != 0)
-			mem_write32(proc->mem, a1, (uint32_t)proc->egid);
-		if (a2 != 0)
-			mem_write32(proc->mem, a2, (uint32_t)proc->gid);
+		if (a0 != 0 && mem_write32(proc->mem, a0,
+		    (uint32_t)proc->gid) != 0)
+			return -LINUX_EFAULT;
+		if (a1 != 0 && mem_write32(proc->mem, a1,
+		    (uint32_t)proc->egid) != 0)
+			return -LINUX_EFAULT;
+		if (a2 != 0 && mem_write32(proc->mem, a2,
+		    (uint32_t)proc->gid) != 0)
+			return -LINUX_EFAULT;
 		return 0;
 
 	case SYS_GETGROUPS:
@@ -624,8 +630,9 @@ sys_process(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 		uint8_t	buf[144];
 
 		memset(buf, 0, sizeof(buf));
-		if (a1 != 0)
-			mem_copy_to(proc->mem, a1, buf, sizeof(buf));
+		if (a1 != 0 &&
+		    mem_copy_to(proc->mem, a1, buf, sizeof(buf)) != 0)
+			return -LINUX_EFAULT;
 		return 0;
 	}
 
@@ -639,7 +646,8 @@ sys_process(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 			uint8_t	buf[32];
 
 			memset(buf, 0, sizeof(buf));
-			mem_copy_to(proc->mem, a0, buf, sizeof(buf));
+			if (mem_copy_to(proc->mem, a0, buf, sizeof(buf)) != 0)
+				return -LINUX_EFAULT;
 		}
 		return 0;
 
