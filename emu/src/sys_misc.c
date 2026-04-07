@@ -275,11 +275,27 @@ do_clock_nanosleep(emu_process_t *proc, uint64_t a0, uint64_t a1,
 		return -LINUX_EINVAL;
 	}
 
-	nanosleep(&req, &rem);
+	memset(&rem, 0, sizeof(rem));
+	if (nanosleep(&req, &rem) < 0) {
+		int saved_errno = errno;
+		if (a3 != 0) {
+			if (mem_write64(proc->mem, a3,
+			    (uint64_t)rem.tv_sec) != 0)
+				return -LINUX_EFAULT;
+			if (mem_write64(proc->mem, a3 + 8,
+			    (uint64_t)rem.tv_nsec) != 0)
+				return -LINUX_EFAULT;
+		}
+		if (saved_errno == EINTR)
+			return -LINUX_EINTR;
+		return -LINUX_EINVAL;
+	}
 
 	if (a3 != 0) {
-		mem_write64(proc->mem, a3, (uint64_t)rem.tv_sec);
-		mem_write64(proc->mem, a3 + 8, (uint64_t)rem.tv_nsec);
+		if (mem_write64(proc->mem, a3, 0) != 0)
+			return -LINUX_EFAULT;
+		if (mem_write64(proc->mem, a3 + 8, 0) != 0)
+			return -LINUX_EFAULT;
 	}
 
 	return 0;
@@ -314,8 +330,12 @@ do_nanosleep(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	if (ret < 0) {
 		int saved_errno = errno;
 		if (a1 != 0) {
-			mem_write64(proc->mem, a1, (uint64_t)rem.tv_sec);
-			mem_write64(proc->mem, a1 + 8, (uint64_t)rem.tv_nsec);
+			if (mem_write64(proc->mem, a1,
+			    (uint64_t)rem.tv_sec) != 0)
+				return -LINUX_EFAULT;
+			if (mem_write64(proc->mem, a1 + 8,
+			    (uint64_t)rem.tv_nsec) != 0)
+				return -LINUX_EFAULT;
 		}
 		if (saved_errno == EINTR)
 			return -LINUX_EINTR;
@@ -323,8 +343,10 @@ do_nanosleep(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	}
 
 	if (a1 != 0) {
-		mem_write64(proc->mem, a1, 0);
-		mem_write64(proc->mem, a1 + 8, 0);
+		if (mem_write64(proc->mem, a1, 0) != 0)
+			return -LINUX_EFAULT;
+		if (mem_write64(proc->mem, a1 + 8, 0) != 0)
+			return -LINUX_EFAULT;
 	}
 
 	return 0;
@@ -757,7 +779,8 @@ sys_misc(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 			uint8_t	buf[32];
 
 			memset(buf, 0, sizeof(buf));
-			mem_copy_to(proc->mem, a1, buf, sizeof(buf));
+			if (mem_copy_to(proc->mem, a1, buf, sizeof(buf)) != 0)
+				return -LINUX_EFAULT;
 		}
 		return 0;
 	case SYS_SETITIMER:
@@ -766,7 +789,8 @@ sys_misc(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 			uint8_t	buf[32];
 
 			memset(buf, 0, sizeof(buf));
-			mem_copy_to(proc->mem, a2, buf, sizeof(buf));
+			if (mem_copy_to(proc->mem, a2, buf, sizeof(buf)) != 0)
+				return -LINUX_EFAULT;
 		}
 		return 0;
 	case SYS_SYSINFO:
