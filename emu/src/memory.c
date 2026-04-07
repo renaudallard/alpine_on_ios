@@ -304,6 +304,11 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 			uint64_t	trim;
 
 			trim = end - r->base;
+			if (r->flags & MEM_MAP_EXTERNAL) {
+				/* Cannot modify externally-owned memory.
+				 * Skip the trim - parent retains ownership. */
+				continue;
+			}
 			if (!NATIVE_MODE(ms)) {
 				uint8_t	*newhost;
 

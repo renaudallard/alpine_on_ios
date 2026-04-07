@@ -51,6 +51,25 @@ uint64_t	g_native_base;
 
 #define AOT_STACK_SIZE		(8ULL * 1024 * 1024)	/* 8 MB */
 
+/*
+ * Helper macro for proc_execve cleanup on error.  Closes any
+ * dylib handles loaded so far and destroys the new mem_space.
+ */
+#if defined(__APPLE__)
+#define EXECVE_FAIL(rc) do { \
+		if (info.dl_handle != NULL) dlclose(info.dl_handle); \
+		if (interp_info.dl_handle != NULL) \
+			dlclose(interp_info.dl_handle); \
+		mem_space_destroy(newmem); \
+		return (rc); \
+	} while (0)
+#else
+#define EXECVE_FAIL(rc) do { \
+		mem_space_destroy(newmem); \
+		return (rc); \
+	} while (0)
+#endif
+
 
 /* WNOHANG from Linux. */
 #define LINUX_WNOHANG	1
@@ -409,8 +428,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		    interp_host, sizeof(interp_host));
 		if (ret != 0) {
 			LOG_ERR("execve: cannot resolve interp %s", info.interp);
-			mem_space_destroy(newmem);
-			return (-ENOENT);
+			EXECVE_FAIL(-ENOENT);
 		}
 
 		memset(&interp_info, 0, sizeof(interp_info));
@@ -418,8 +436,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		    &interp_info);
 		if (ret != 0) {
 			LOG_ERR("execve: interp elf_load %s failed", interp_host);
-			mem_space_destroy(newmem);
-			return (-ENOEXEC);
+			EXECVE_FAIL(-ENOEXEC);
 		}
 
 		info.interp_base = interp_info.base;
@@ -439,8 +456,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		if (heap == MAP_FAILED) {
 			LOG_ERR("execve: AOT heap mmap failed");
-			mem_space_destroy(newmem);
-			return (-ENOMEM);
+			EXECVE_FAIL(-ENOMEM);
 		}
 		newmem->brk_base = (uint64_t)heap;
 		newmem->brk_current = (uint64_t)heap;
@@ -449,8 +465,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		    (uint8_t *)heap) == (uint64_t)-1) {
 			LOG_ERR("execve: AOT heap register failed");
 			munmap(heap, heap_size);
-			mem_space_destroy(newmem);
-			return (-ENOMEM);
+			EXECVE_FAIL(-ENOMEM);
 		}
 	}
 
@@ -461,8 +476,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		if (sp_region == MAP_FAILED) {
 			LOG_ERR("execve: AOT stack mmap failed");
-			mem_space_destroy(newmem);
-			return (-ENOMEM);
+			EXECVE_FAIL(-ENOMEM);
 		}
 		stack_top = (uint64_t)sp_region + AOT_STACK_SIZE;
 		if (mem_mmap_host(newmem, (uint64_t)sp_region,
@@ -471,8 +485,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		    (uint8_t *)sp_region) == (uint64_t)-1) {
 			LOG_ERR("execve: AOT stack register failed");
 			munmap(sp_region, AOT_STACK_SIZE);
-			mem_space_destroy(newmem);
-			return (-ENOMEM);
+			EXECVE_FAIL(-ENOMEM);
 		}
 	}
 	if (newmem->aot_mode) {
@@ -486,8 +499,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	sp = elf_setup_stack(newmem, &info, argv, envp, stack_top);
 	if (sp == 0) {
 		LOG_ERR("execve: failed to set up stack");
-		mem_space_destroy(newmem);
-		return (-ENOMEM);
+		EXECVE_FAIL(-ENOMEM);
 	}
 
 	/* Replace old memory space and dylib handles. */
