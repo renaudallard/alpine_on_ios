@@ -145,6 +145,8 @@ typedef struct {
 #define REBASE_OPCODE_DONE			0x00
 #define REBASE_OPCODE_SET_TYPE_IMM		0x10
 #define REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB 0x20
+#define REBASE_OPCODE_ADD_ADDR_ULEB		0x30
+#define REBASE_OPCODE_DO_REBASE_IMM_TIMES	0x50
 #define REBASE_OPCODE_DO_REBASE_ULEB_TIMES	0x60
 
 #define VM_PROT_READ	1
@@ -600,6 +602,180 @@ free_binds(struct bind_builder *bb)
 	memset(bb, 0, sizeof(*bb));
 }
 
+/* ---- Rebase opcode generation ---- */
+
+struct rebase_builder {
+	uint8_t		*buf;
+	size_t		 size;
+	size_t		 cap;
+};
+
+static void
+rebase_byte(struct rebase_builder *rb, uint8_t b)
+{
+	if (rb->size + 1 > rb->cap) {
+		rb->cap = (rb->cap + 1 + 256) * 2;
+		rb->buf = realloc(rb->buf, rb->cap);
+	}
+	rb->buf[rb->size++] = b;
+}
+
+static void
+rebase_uleb(struct rebase_builder *rb, uint64_t v)
+{
+	if (rb->size + 10 > rb->cap) {
+		rb->cap = (rb->cap + 10 + 256) * 2;
+		rb->buf = realloc(rb->buf, rb->cap);
+	}
+	rb->size += write_uleb(rb->buf + rb->size, v);
+}
+
+/*
+ * Build rebase opcodes for R_AARCH64_RELATIVE and DT_RELR entries.
+ * Each rebase: dyld adds the slide to the existing value at offset.
+ *
+ * Sorts offsets and emits efficient opcode runs.
+ */
+static int
+build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
+    int data_seg_idx, uint64_t data_seg_vmaddr, uint64_t shift,
+    uint8_t *out_buf)
+{
+	uint64_t i, n;
+	uint64_t *offsets = NULL;
+	size_t n_offsets = 0, cap_offsets = 0;
+
+	memset(rb, 0, sizeof(*rb));
+
+	/* Collect all relative relocation offsets. */
+
+	/* From DT_RELA: R_AARCH64_RELATIVE entries. */
+	if (dyn->rela != NULL) {
+		n = dyn->relasz / sizeof(Elf64_Rela);
+		for (i = 0; i < n; i++) {
+			Elf64_Rela *rl = &dyn->rela[i];
+			if (ELF64_R_TYPE(rl->r_info) != R_AARCH64_RELATIVE)
+				continue;
+			if (n_offsets >= cap_offsets) {
+				cap_offsets = (cap_offsets + 1) * 2;
+				offsets = realloc(offsets,
+				    cap_offsets * sizeof(uint64_t));
+			}
+			offsets[n_offsets++] = rl->r_offset;
+			/* Pre-write addend at the offset in our output buffer. */
+			if (out_buf != NULL) {
+				uint64_t off_in_file =
+				    (rl->r_offset + shift) - data_seg_vmaddr;
+				/* Write the addend value (dyld will add slide). */
+				/* Already in the data segment from pread. */
+				(void)off_in_file;
+			}
+		}
+	}
+
+	/* From DT_RELR: compressed RELATIVE relocations.
+	 * Format: words alternating between addresses and bitmaps.
+	 * If LSB == 0: it's an address; emit it.
+	 * If LSB == 1: it's a bitmap; bits 1..63 indicate offsets
+	 *              from the previous address (in 8-byte units). */
+	if (dyn->relr != NULL) {
+		uint64_t base = 0;
+		n = dyn->relrsz / sizeof(uint64_t);
+		for (i = 0; i < n; i++) {
+			uint64_t entry = dyn->relr[i];
+			if ((entry & 1) == 0) {
+				/* Address entry. */
+				base = entry;
+				if (n_offsets >= cap_offsets) {
+					cap_offsets = (cap_offsets + 1) * 2;
+					offsets = realloc(offsets,
+					    cap_offsets * sizeof(uint64_t));
+				}
+				offsets[n_offsets++] = base;
+				base += 8;
+			} else {
+				/* Bitmap entry: 63 bits of bitmap. */
+				int bit;
+				for (bit = 1; bit < 64; bit++) {
+					if (entry & (1ULL << bit)) {
+						uint64_t off = base + (bit - 1) * 8;
+						if (n_offsets >= cap_offsets) {
+							cap_offsets =
+							    (cap_offsets + 1) * 2;
+							offsets = realloc(offsets,
+							    cap_offsets *
+							    sizeof(uint64_t));
+						}
+						offsets[n_offsets++] = off;
+					}
+				}
+				base += 63 * 8;
+			}
+		}
+	}
+
+	if (n_offsets == 0) {
+		free(offsets);
+		rebase_byte(rb, REBASE_OPCODE_DONE);
+		return 0;
+	}
+
+	/* Sort offsets ascending. */
+	for (i = 0; i + 1 < n_offsets; i++) {
+		size_t j;
+		for (j = i + 1; j < n_offsets; j++) {
+			if (offsets[j] < offsets[i]) {
+				uint64_t t = offsets[i];
+				offsets[i] = offsets[j];
+				offsets[j] = t;
+			}
+		}
+	}
+
+	/* Emit opcodes. */
+	rebase_byte(rb, REBASE_OPCODE_SET_TYPE_IMM | REBASE_TYPE_POINTER);
+
+	uint64_t cur_off = 0;
+	int set_seg = 0;
+	for (i = 0; i < n_offsets; i++) {
+		uint64_t target = offsets[i] + shift;
+		if (target < data_seg_vmaddr)
+			continue;
+		uint64_t seg_off = target - data_seg_vmaddr;
+
+		if (!set_seg) {
+			rebase_byte(rb,
+			    REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB |
+			    (data_seg_idx & 0xf));
+			rebase_uleb(rb, seg_off);
+			cur_off = seg_off;
+			set_seg = 1;
+		} else if (seg_off > cur_off) {
+			/* Skip ahead. */
+			uint64_t skip = seg_off - cur_off;
+			rebase_byte(rb, REBASE_OPCODE_ADD_ADDR_ULEB);
+			rebase_uleb(rb, skip);
+			cur_off = seg_off;
+		}
+
+		/* Do one rebase, advance cur_off by 8. */
+		rebase_byte(rb, REBASE_OPCODE_DO_REBASE_ULEB_TIMES);
+		rebase_uleb(rb, 1);
+		cur_off += 8;
+	}
+
+	rebase_byte(rb, REBASE_OPCODE_DONE);
+	free(offsets);
+	return 0;
+}
+
+static void
+free_rebases(struct rebase_builder *rb)
+{
+	free(rb->buf);
+	memset(rb, 0, sizeof(*rb));
+}
+
 /*
  * Parse PT_DYNAMIC segment and fill struct dynamic_info.
  * Returns 0 on success, -1 if no dynamic section found.
@@ -739,6 +915,7 @@ main(int argc, char **argv)
 	struct dynamic_info dyn;
 	struct symtab_builder sb;
 	struct bind_builder bb;
+	struct rebase_builder rb;
 	int		 has_dyn;
 
 	/* Output layout offsets */
@@ -905,9 +1082,12 @@ main(int argc, char **argv)
 
 	/* Build bind opcodes now that we know the layout. */
 	memset(&bb, 0, sizeof(bb));
+	memset(&rb, 0, sizeof(rb));
 	if (has_dyn && has_data) {
 		build_binds(&dyn, &sb, &bb, /*data_seg_idx=*/1,
 		    data_seg_vmaddr, shift);
+		build_rebases(&dyn, &rb, /*data_seg_idx=*/1,
+		    data_seg_vmaddr, shift, NULL);
 	}
 
 	/* Allocate output. */
@@ -1154,7 +1334,8 @@ main(int argc, char **argv)
 			    dyn.needed[i] : "(null)");
 		printf("symtab: nsyms=%d (ext=%d undef=%d) strsz=%u\n",
 		    sb.nsyms, sb.next, sb.nundef, sb.strsz);
-		printf("binds: %zu bytes\n", bb.size);
+		printf("binds: %zu bytes  rebases: %zu bytes\n",
+		    bb.size, rb.size);
 	}
 
 	/* Print metadata for diagnosis. */
@@ -1167,6 +1348,7 @@ main(int argc, char **argv)
 
 	free_symtab(&sb);
 	free_binds(&bb);
+	free_rebases(&rb);
 	free(out);
 	free(elf);
 	return 0;
