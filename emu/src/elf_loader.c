@@ -770,11 +770,20 @@ elf_setup_stack(mem_space_t *mem, elf_info_t *info,
 	AUXV(AT_EGID, 0);
 	AUXV(AT_RANDOM, random_addr);
 	/*
-	 * Baseline aarch64 capabilities: HWCAP_FP (1) and HWCAP_ASIMD
-	 * (2).  Without these musl falls back to scalar code paths in
-	 * memcpy/memmove/strlen and friends.
+	 * aarch64 HWCAP bits (linux/arch/arm64/include/uapi/asm/hwcap.h):
+	 *   FP      (1<<0)   ASIMD    (1<<1)   EVTSTRM  (1<<2)
+	 *   AES     (1<<3)   PMULL    (1<<4)   SHA1     (1<<5)
+	 *   SHA2    (1<<6)   CRC32    (1<<7)   ATOMICS  (1<<8)
+	 *   FPHP    (1<<9)   ASIMDHP  (1<<10)  CPUID    (1<<11)
+	 *   ASIMDRDM(1<<12)  JSCVT    (1<<13)  FCMA     (1<<14)
+	 *   LRCPC   (1<<15)  DCPOP    (1<<16)  SHA3     (1<<17)
+	 *   SM3     (1<<18)  SM4      (1<<19)  ASIMDDP  (1<<20)
+	 *   SHA512  (1<<21)
+	 * Every Apple M1+ (and any aarch64 that can host iOS) has
+	 * all of these, so advertise them so musl can enable its
+	 * LSE atomics, SHA, AES and NEON dot-product fast paths.
 	 */
-	AUXV(AT_HWCAP, 3);
+	AUXV(AT_HWCAP, 0x3fffffULL);
 	AUXV(AT_PLATFORM, platform_addr);
 	AUXV(AT_NULL, 0);
 
