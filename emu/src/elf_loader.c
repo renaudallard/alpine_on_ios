@@ -316,7 +316,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			/* Register each segment with mem_space.  Use 16K
 			 * alignment to match what dyld actually mapped. */
 			for (i = 0; i < ehdr.e_phnum; i++) {
-				uint64_t	saddr, ssize;
+				uint64_t	saddr, ssize, got;
 				int		sprot;
 
 				if (phdrs[i].p_type != PT_LOAD)
@@ -326,11 +326,19 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				ssize = ALIGN_UP(phdrs[i].p_memsz, 0x4000);
 				sprot = elf_pflags_to_prot(phdrs[i].p_flags);
 
-				if (mem_mmap_host(mem, saddr, ssize, sprot,
-				    (uint8_t *)saddr) == (uint64_t)-1) {
+				/*
+				 * mem_mmap_host will silently relocate on
+				 * conflict; in AOT mode the guest VA must
+				 * equal the host VA dyld picked, so refuse
+				 * any mismatch instead of papering over it.
+				 */
+				got = mem_mmap_host(mem, saddr, ssize, sprot,
+				    (uint8_t *)saddr);
+				if (got == (uint64_t)-1 || got != saddr) {
 					emu_set_error("elf: register seg %d "
-					    "addr=0x%lx", i,
-					    (unsigned long)saddr);
+					    "wanted 0x%lx got 0x%lx", i,
+					    (unsigned long)saddr,
+					    (unsigned long)got);
 					goto fail;
 				}
 			}
