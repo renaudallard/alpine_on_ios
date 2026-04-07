@@ -1282,14 +1282,14 @@ main(int argc, char **argv)
 		data_seg_vmsize = 0;
 	}
 
-	/* LINKEDIT after __DATA. */
+	/* LINKEDIT after __DATA - compute base offset only for now.
+	 * Actual size depends on the dyld_info opcodes, symtab, etc.
+	 * which we compute below. */
 	linkedit_off = data_seg_fileoff + data_seg_filesize;
 	if (linkedit_off < text_seg_filesize)
 		linkedit_off = text_seg_filesize;
 	linkedit_off = ALIGN_UP(linkedit_off, PAGE_SZ);
-	linkedit_sz = PAGE_SZ;
-
-	total_sz = linkedit_off + linkedit_sz;
+	linkedit_sz = PAGE_SZ; /* placeholder, recomputed below */
 
 	/* Header sanity: must fit before code at file offset PAGE_SZ. */
 	hdr_size = 32 + (size_t)(72 + 80) +
@@ -1322,6 +1322,33 @@ main(int argc, char **argv)
 		    shift);
 	}
 
+	/* Compute LINKEDIT internal layout.
+	 *   rebase_off
+	 *   bind_off
+	 *   export_off
+	 *   symtab_off (8-byte aligned)
+	 *   strtab_off
+	 *   codesig_off (16-byte aligned)
+	 */
+	uint64_t le_rebase_off = 0;
+	uint64_t le_rebase_sz = (rb.size + 7) & ~(uint64_t)7;
+	uint64_t le_bind_off = le_rebase_off + le_rebase_sz;
+	uint64_t le_bind_sz = (bb.size + 7) & ~(uint64_t)7;
+	uint64_t le_export_off = le_bind_off + le_bind_sz;
+	uint64_t le_export_sz = (export_trie_size + 7) & ~(uint64_t)7;
+	uint64_t le_symtab_off = le_export_off + le_export_sz;
+	uint64_t le_symtab_sz = (uint64_t)sb.nsyms * sizeof(nlist_64);
+	uint64_t le_strtab_off = le_symtab_off + le_symtab_sz;
+	uint64_t le_strtab_sz = (sb.strsz + 7) & ~(uint64_t)7;
+	if (le_strtab_sz == 0) le_strtab_sz = 8;
+	uint64_t le_codesig_off = le_strtab_off + le_strtab_sz;
+	le_codesig_off = (le_codesig_off + 15) & ~(uint64_t)15;
+	uint64_t le_codesig_sz = 4096; /* placeholder space for codesign */
+	uint64_t le_total = le_codesig_off + le_codesig_sz;
+
+	linkedit_sz = ALIGN_UP(le_total, PAGE_SZ);
+	total_sz = linkedit_off + linkedit_sz;
+
 	/* Allocate output. */
 	out = calloc(1, (size_t)total_sz);
 	if (!out) { perror("calloc"); free(elf); return 1; }
@@ -1339,14 +1366,40 @@ main(int argc, char **argv)
 	 */
 	wp = out;
 
-	/* Install name. */
-	const char *install_name = "@rpath/guest.dylib";
+	/* Install name (basename of input file with .dylib suffix). */
+	char install_name[256];
+	{
+		const char *base = strrchr(argv[1], '/');
+		base = base ? base + 1 : argv[1];
+		snprintf(install_name, sizeof(install_name),
+		    "@rpath/%s.dylib", base);
+	}
 	uint32_t name_len = (uint32_t)strlen(install_name) + 1;
 	uint32_t id_cmdsize = ALIGN_UP(24 + name_len, 8);
 
+	/* LC_LOAD_DYLIB for each dependency. */
+	uint32_t load_dylib_cmdsizes[MAX_NEEDED];
+	char load_dylib_names[MAX_NEEDED][256];
+	int n_load_dylib = 0;
+	if (has_dyn) {
+		for (int j = 0; j < dyn.n_needed; j++) {
+			if (dyn.needed[j] == NULL) continue;
+			snprintf(load_dylib_names[n_load_dylib],
+			    sizeof(load_dylib_names[0]),
+			    "@rpath/%s.dylib", dyn.needed[j]);
+			uint32_t l = (uint32_t)strlen(
+			    load_dylib_names[n_load_dylib]) + 1;
+			load_dylib_cmdsizes[n_load_dylib] =
+			    ALIGN_UP(24 + l, 8);
+			n_load_dylib++;
+		}
+	}
+
 	/* Count load commands. */
-	uint32_t ncmds = 1 + (has_data ? 1 : 0) + 1 + 7;
-	/* __TEXT, optional __DATA, __LINKEDIT, then 7 other commands */
+	uint32_t ncmds = 1 + (has_data ? 1 : 0) + 1 + 8 + n_load_dylib;
+	/* segments + LC_ID_DYLIB + LC_BUILD_VERSION + LC_UUID
+	 * + LC_DYLD_INFO_ONLY + LC_SYMTAB + LC_DYSYMTAB
+	 * + LC_DYLD_EXPORTS_TRIE + LC_CODE_SIGNATURE + n_load_dylib */
 
 	uint32_t sizeofcmds =
 	    (72 + 80) +				/* __TEXT + 1 section */
@@ -1355,10 +1408,13 @@ main(int argc, char **argv)
 	    id_cmdsize +			/* LC_ID_DYLIB */
 	    24 +				/* LC_BUILD_VERSION */
 	    24 +				/* LC_UUID */
+	    48 +				/* LC_DYLD_INFO_ONLY */
 	    24 +				/* LC_SYMTAB */
 	    80 +				/* LC_DYSYMTAB */
 	    16 +				/* LC_DYLD_EXPORTS_TRIE */
 	    16;					/* LC_CODE_SIGNATURE */
+	for (int j = 0; j < n_load_dylib; j++)
+		sizeofcmds += load_dylib_cmdsizes[j];
 
 	/* mach_header_64 */
 	mach_header_64 mh = {
@@ -1489,22 +1545,79 @@ main(int argc, char **argv)
 		wbuf(&wp, &uc, 24);
 	}
 
-	/* LINKEDIT content: exports trie + strtab */
-	uint32_t exports_off = (uint32_t)linkedit_off;
-	uint32_t strtab_off = exports_off + 2;
-	out[exports_off] = 0;		/* empty trie */
-	out[exports_off + 1] = 0;
-	out[strtab_off] = 0;		/* empty string table */
+	/* LC_LOAD_DYLIB for each dependency. */
+	for (int j = 0; j < n_load_dylib; j++) {
+		dylib_command dc = {
+			.cmd = LC_LOAD_DYLIB,
+			.cmdsize = load_dylib_cmdsizes[j],
+			.name_offset = 24,
+			.timestamp = 1,
+			.current_version = 0x00010000,
+			.compat_version = 0x00010000
+		};
+		wbuf(&wp, &dc, 24);
+		uint32_t l = (uint32_t)strlen(load_dylib_names[j]) + 1;
+		wbuf(&wp, load_dylib_names[j], l);
+		wpad(&wp, load_dylib_cmdsizes[j] - 24 - l);
+	}
+
+	/*
+	 * Compute absolute file offsets within LINKEDIT.
+	 * Then write the LINKEDIT content into the output buffer.
+	 */
+	uint32_t abs_rebase_off = (uint32_t)(linkedit_off + le_rebase_off);
+	uint32_t abs_bind_off = (uint32_t)(linkedit_off + le_bind_off);
+	uint32_t abs_export_off = (uint32_t)(linkedit_off + le_export_off);
+	uint32_t abs_symtab_off = (uint32_t)(linkedit_off + le_symtab_off);
+	uint32_t abs_strtab_off = (uint32_t)(linkedit_off + le_strtab_off);
+	uint32_t abs_codesig_off = (uint32_t)(linkedit_off + le_codesig_off);
+
+	if (rb.size > 0)
+		memcpy(out + abs_rebase_off, rb.buf, rb.size);
+	if (bb.size > 0)
+		memcpy(out + abs_bind_off, bb.buf, bb.size);
+	if (export_trie != NULL && export_trie_size > 0)
+		memcpy(out + abs_export_off, export_trie, export_trie_size);
+
+	/* Write nlist_64 entries to symtab. */
+	for (int k = 0; k < sb.nsyms; k++) {
+		nlist_64 nl;
+		nl.n_strx = sb.syms[k].strx;
+		nl.n_type = sb.syms[k].type;
+		nl.n_sect = sb.syms[k].sect;
+		nl.n_desc = sb.syms[k].desc;
+		nl.n_value = sb.syms[k].vaddr +
+		    (sb.syms[k].type & N_SECT ? shift : 0);
+		memcpy(out + abs_symtab_off + (size_t)k * sizeof(nl),
+		    &nl, sizeof(nl));
+	}
+	if (sb.strsz > 0)
+		memcpy(out + abs_strtab_off, sb.strtab, sb.strsz);
+
+	/* LC_DYLD_INFO_ONLY */
+	{
+		dyld_info_command dc = {
+			.cmd = LC_DYLD_INFO_ONLY,
+			.cmdsize = 48,
+			.rebase_off = rb.size > 0 ? abs_rebase_off : 0,
+			.rebase_size = (uint32_t)rb.size,
+			.bind_off = bb.size > 0 ? abs_bind_off : 0,
+			.bind_size = (uint32_t)bb.size,
+			.export_off = export_trie_size > 0 ? abs_export_off : 0,
+			.export_size = (uint32_t)export_trie_size,
+		};
+		wbuf(&wp, &dc, 48);
+	}
 
 	/* LC_SYMTAB */
 	{
 		symtab_command sc = {
 			.cmd = LC_SYMTAB,
 			.cmdsize = 24,
-			.symoff = 0,
-			.nsyms = 0,
-			.stroff = strtab_off,
-			.strsize = 1
+			.symoff = sb.nsyms > 0 ? abs_symtab_off : 0,
+			.nsyms = (uint32_t)sb.nsyms,
+			.stroff = abs_strtab_off,
+			.strsize = sb.strsz > 0 ? sb.strsz : 1
 		};
 		wbuf(&wp, &sc, 24);
 	}
@@ -1515,29 +1628,34 @@ main(int argc, char **argv)
 		memset(&dc, 0, sizeof(dc));
 		dc.cmd = LC_DYSYMTAB;
 		dc.cmdsize = 80;
+		dc.ilocalsym = 0;
+		dc.nlocalsym = 0;
+		dc.iextdefsym = sb.iext;
+		dc.nextdefsym = sb.next;
+		dc.iundefsym = sb.iundef;
+		dc.nundefsym = sb.nundef;
 		wbuf(&wp, &dc, 80);
 	}
 
-	/* LC_DYLD_EXPORTS_TRIE */
+	/* LC_DYLD_EXPORTS_TRIE (also points to the same trie data;
+	 * dyld may use either). */
 	{
 		linkedit_data_command lc = {
 			.cmd = LC_DYLD_EXPORTS_TRIE,
 			.cmdsize = 16,
-			.dataoff = exports_off,
-			.datasize = 2
+			.dataoff = export_trie_size > 0 ? abs_export_off : 0,
+			.datasize = (uint32_t)export_trie_size
 		};
 		wbuf(&wp, &lc, 16);
 	}
 
 	/* LC_CODE_SIGNATURE (placeholder, codesign fills it). */
 	{
-		uint32_t sig_off = strtab_off + 16;
-		sig_off = (uint32_t)ALIGN_UP(sig_off, 16);
 		linkedit_data_command lc = {
 			.cmd = LC_CODE_SIGNATURE,
 			.cmdsize = 16,
-			.dataoff = sig_off,
-			.datasize = (uint32_t)(total_sz - sig_off)
+			.dataoff = abs_codesig_off,
+			.datasize = (uint32_t)le_codesig_sz
 		};
 		wbuf(&wp, &lc, 16);
 	}
