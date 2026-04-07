@@ -92,6 +92,16 @@ patch_file(const char *path)
 
 	patched = 0;
 
+	/* Validate program-header table fits in the file. */
+	if (ehdr->e_phentsize < sizeof(Elf64_Phdr) ||
+	    ehdr->e_phoff > (uint64_t)st.st_size ||
+	    (uint64_t)ehdr->e_phnum * ehdr->e_phentsize >
+	    (uint64_t)st.st_size - ehdr->e_phoff) {
+		munmap(map, st.st_size);
+		close(fd);
+		return -1;
+	}
+
 	for (i = 0; i < ehdr->e_phnum; i++) {
 		uint32_t	*insns;
 		size_t		 count, j;
