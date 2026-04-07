@@ -34,6 +34,13 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Build AOT tools outside xcodebuild
+        run: |
+          mkdir -p /tmp/aot-tools
+          cc -O2 -o /tmp/aot-tools/elf2macho scripts/elf2macho.c
+          codesign --force --sign - /tmp/aot-tools/elf2macho 2>&1 || true
+          echo "ELF2MACHO_PREBUILT=/tmp/aot-tools/elf2macho" >> "$GITHUB_ENV"
+
       - name: Download rootfs
         run: ./rootfs/download_rootfs.sh
 
