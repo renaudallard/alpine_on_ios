@@ -56,7 +56,7 @@ targets:
               export ELF2MACHO_PREBUILT=/tmp/aot_tools/elf2macho
             fi
             export ELF2MACHO_PREBUILT
-            "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST"
+            "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST" "$ROOTFS"
             echo "Rootfs: $(du -sh "$DEST" | cut -f1)"
           else
             echo "warning: rootfs not found at $ROOTFS"
@@ -116,7 +116,7 @@ targets:
               export ELF2MACHO_PREBUILT=/tmp/aot_tools/elf2macho
             fi
             export ELF2MACHO_PREBUILT
-            "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST"
+            "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST" "$ROOTFS"
             echo "Rootfs: $(du -sh "$DEST" | cut -f1)"
           else
             echo "warning: rootfs not found at $ROOTFS"

@@ -1,16 +1,20 @@
 #!/bin/sh
 #
 # Patch all ELF aarch64 binaries in a rootfs for AOT execution.
-# Replaces SVC #0 with BRK #1, MSR/MRS TPIDR_EL0 with BRK traps.
+# Replaces SVC #0 with BRK #1, MSR/MRS TPIDR_EL0 with BRK traps,
+# converts each AOT-patched ELF to a Mach-O dylib companion, and
+# (optionally) mirrors relative symlinks from a source rootfs so
+# dyld can resolve LC_LOAD_DYLIB names like libc.musl-aarch64.so.1.
 #
-# Usage: patch_rootfs_aot.sh <rootfs_dir>
+# Usage: patch_rootfs_aot.sh <rootfs_dir> [<src_rootfs>]
 #
 
 set -e
 
 ROOTFS="$1"
+SRC_ROOTFS="$2"
 if [ -z "$ROOTFS" ] || [ ! -d "$ROOTFS" ]; then
-	echo "usage: $0 <rootfs_dir>" >&2
+	echo "usage: $0 <rootfs_dir> [<src_rootfs>]" >&2
 	exit 1
 fi
 
@@ -96,4 +100,61 @@ echo "AOT patching complete: $converted converted, $skipped skipped, $failed elf
 
 if [ "$failed" -gt 0 ] || [ "$errors" -gt 0 ]; then
 	exit 1
+fi
+
+# --------------------------------------------------------------------
+# Mirror relative symlinks from the source rootfs.
+#
+# rsync --no-links drops every symlink, but Alpine relies on a few
+# of them for dyld resolution: lib/libc.musl-aarch64.so.1 is a
+# relative symlink to ld-musl-aarch64.so.1 and busybox's
+# DT_NEEDED references the libc name, so the converted dylib has
+# LC_LOAD_DYLIB @rpath/libc.musl-aarch64.so.1.dylib.  Without the
+# symlink (and its .dylib counterpart) dyld fails with
+# "Library not loaded".
+#
+# For every relative symlink in $SRC_ROOTFS, recreate it in
+# $ROOTFS, and if the target's .dylib companion exists also
+# create a parallel <name>.dylib symlink.  Absolute symlinks are
+# left out because they would be broken inside the app bundle
+# anyway.
+# --------------------------------------------------------------------
+if [ -n "$SRC_ROOTFS" ] && [ -d "$SRC_ROOTFS" ]; then
+	echo "Mirroring symlinks from $SRC_ROOTFS..."
+	mirrored=0
+	dylib_mirrored=0
+	(cd "$SRC_ROOTFS" && find . -type l) | while IFS= read -r link; do
+		# Strip the leading "./".
+		rel="${link#./}"
+		tgt=$(readlink "$SRC_ROOTFS/$rel")
+		case "$tgt" in
+		/*)
+			# Absolute symlink — broken inside the bundle.
+			continue
+			;;
+		esac
+
+		dst="$ROOTFS/$rel"
+		dstdir=$(dirname "$dst")
+
+		# Recreate the original symlink if missing.
+		if [ ! -e "$dst" ] && [ ! -L "$dst" ]; then
+			mkdir -p "$dstdir"
+			ln -s "$tgt" "$dst"
+			mirrored=$((mirrored + 1))
+		fi
+
+		# If the target became a .dylib, mirror that too.
+		if [ -f "$dstdir/$tgt.dylib" ] && \
+		    [ ! -e "$dst.dylib" ] && [ ! -L "$dst.dylib" ]; then
+			ln -s "$tgt.dylib" "$dst.dylib"
+			dylib_mirrored=$((dylib_mirrored + 1))
+		fi
+		echo "$mirrored $dylib_mirrored" > "$COUNTERS.symlinks"
+	done
+	if [ -f "$COUNTERS.symlinks" ]; then
+		read mirrored dylib_mirrored < "$COUNTERS.symlinks"
+		rm -f "$COUNTERS.symlinks"
+		echo "Mirrored $mirrored relative symlinks ($dylib_mirrored .dylib companions)."
+	fi
 fi
