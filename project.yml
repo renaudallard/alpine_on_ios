@@ -151,7 +151,13 @@ schemes:
         - script: |
             set -e
             mkdir -p /tmp/aot_tools
-            cc -O2 -o /tmp/aot_tools/elf2macho \
+            # Scheme pre-actions inherit every *_DEPLOYMENT_TARGET
+            # env var from the scheme's target, which confuses
+            # clang into thinking we want a multi-platform host
+            # build.  Force a clean macOS host target instead.
+            env -i PATH="$PATH" HOME="$HOME" SRCROOT="$SRCROOT" \
+                xcrun clang -target arm64-apple-macos13 -O2 \
+                -o /tmp/aot_tools/elf2macho \
                 "${SRCROOT}/scripts/elf2macho.c"
             /usr/bin/codesign --force --sign - \
                 /tmp/aot_tools/elf2macho 2>/dev/null || true
@@ -165,7 +171,9 @@ schemes:
         - script: |
             set -e
             mkdir -p /tmp/aot_tools
-            cc -O2 -o /tmp/aot_tools/elf2macho \
+            env -i PATH="$PATH" HOME="$HOME" SRCROOT="$SRCROOT" \
+                xcrun clang -target arm64-apple-macos13 -O2 \
+                -o /tmp/aot_tools/elf2macho \
                 "${SRCROOT}/scripts/elf2macho.c"
             /usr/bin/codesign --force --sign - \
                 /tmp/aot_tools/elf2macho 2>/dev/null || true
