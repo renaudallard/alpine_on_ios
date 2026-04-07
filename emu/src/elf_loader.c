@@ -653,33 +653,33 @@ elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
 	sp &= ~(uint64_t)15;
 
 	uint64_t	pos;
+	int		failed = 0;
 
 	pos = sp;
 
+#define PUT64(val) do {						\
+	if (mem_write64(mem, pos, (uint64_t)(val)) != 0)	\
+		failed = 1;					\
+	pos += 8;						\
+} while (0)
+
 	/* argc */
-	mem_write64(mem, pos, (uint64_t)argc);
-	pos += 8;
+	PUT64(argc);
 
 	/* argv pointers */
-	for (i = 0; i < argc; i++) {
-		mem_write64(mem, pos, argv_addrs[i]);
-		pos += 8;
-	}
-	mem_write64(mem, pos, 0);	/* NULL terminator */
-	pos += 8;
+	for (i = 0; i < argc; i++)
+		PUT64(argv_addrs[i]);
+	PUT64(0);	/* NULL terminator */
 
 	/* envp pointers */
-	for (i = 0; i < envc; i++) {
-		mem_write64(mem, pos, envp_addrs[i]);
-		pos += 8;
-	}
-	mem_write64(mem, pos, 0);	/* NULL terminator */
-	pos += 8;
+	for (i = 0; i < envc; i++)
+		PUT64(envp_addrs[i]);
+	PUT64(0);	/* NULL terminator */
 
 	/* Auxiliary vector */
-#define AUXV(type, val) do {					\
-	mem_write64(mem, pos, (uint64_t)(type)); pos += 8;	\
-	mem_write64(mem, pos, (uint64_t)(val));  pos += 8;	\
+#define AUXV(type, val) do {	\
+	PUT64(type);		\
+	PUT64(val);		\
 } while (0)
 
 	AUXV(AT_PHDR, info->phdr);
@@ -699,9 +699,15 @@ elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
 	AUXV(AT_NULL, 0);
 
 #undef AUXV
+#undef PUT64
 
 	free(argv_addrs);
 	free(envp_addrs);
+
+	if (failed) {
+		LOG_ERR("elf_setup_stack: stack write failed");
+		return 0;
+	}
 
 	LOG_DBG("elf_setup_stack: sp=0x%llx argc=%d envc=%d",
 	    (unsigned long long)sp, argc, envc);
