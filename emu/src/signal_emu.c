@@ -99,7 +99,10 @@ sig_send(emu_process_t *proc, int sig)
 int
 sig_pending(emu_process_t *proc, uint64_t *set)
 {
-	*set = proc->sig_pending & ~proc->sig_blocked;
+	uint64_t	pending;
+
+	pending = __atomic_load_n(&proc->sig_pending, __ATOMIC_SEQ_CST);
+	*set = pending & ~proc->sig_blocked;
 	return (0);
 }
 
