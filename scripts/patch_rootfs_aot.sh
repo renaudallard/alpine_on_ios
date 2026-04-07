@@ -19,33 +19,25 @@ AOT_PATCH="$SCRIPT_DIR/aot_patch.py"
 
 # aot_patch is a Python script so it needs no build step.
 #
-# elf2macho is a compiled C tool.  On macOS 26 the kernel kills
-# freshly-compiled binaries that live inside Xcode's build tree
-# (Killed: 9) even after ad-hoc codesign.  Work around it by
-# building to a path outside the source tree, stripping any
-# quarantine xattr, and ad-hoc signing before use.
-ELF2MACHO_DIR="$(mktemp -d 2>/dev/null || echo /tmp/elf2macho.$$)"
-mkdir -p "$ELF2MACHO_DIR"
-ELF2MACHO="$ELF2MACHO_DIR/elf2macho"
-
-if [ ! -x "$ELF2MACHO" ]; then
+# elf2macho is a compiled C tool.  Xcode's post-build script
+# environment kills freshly compiled binaries even after they
+# are ad-hoc signed (diagnostic: hello world exits 137 inside
+# xcodebuild but exit 0 in a plain shell).  Accept a pre-built
+# binary via $ELF2MACHO_PREBUILT so a CI step or a local dev
+# can build the tool outside xcodebuild and point the script
+# at it.  Fall back to an in-script build for standalone use.
+if [ -n "$ELF2MACHO_PREBUILT" ] && [ -x "$ELF2MACHO_PREBUILT" ]; then
+	ELF2MACHO="$ELF2MACHO_PREBUILT"
+	ELF2MACHO_DIR=""
+else
+	ELF2MACHO_DIR="$(mktemp -d 2>/dev/null || echo /tmp/elf2macho.$$)"
+	mkdir -p "$ELF2MACHO_DIR"
+	ELF2MACHO="$ELF2MACHO_DIR/elf2macho"
 	echo "Building elf2macho tool in $ELF2MACHO_DIR..."
-	# Diagnostic: can we run any cc-built binary at all?
-	cat > "$ELF2MACHO_DIR/hello.c" <<'HELLO_EOF'
-#include <stdio.h>
-int main(int argc, char **argv) { (void)argv; printf("hello %d\n", argc); return 0; }
-HELLO_EOF
-	cc -O2 -o "$ELF2MACHO_DIR/hello" "$ELF2MACHO_DIR/hello.c"
-	if command -v codesign >/dev/null 2>&1; then
-		codesign --force --sign - "$ELF2MACHO_DIR/hello" 2>/dev/null || true
-	fi
-	echo "hello test: $("$ELF2MACHO_DIR/hello" a b 2>&1 || echo EXIT=$?)"
-
 	cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
 	if command -v codesign >/dev/null 2>&1; then
 		codesign --force --sign - "$ELF2MACHO" 2>/dev/null || true
 	fi
-	echo "elf2macho test: $("$ELF2MACHO" 2>&1 || echo EXIT=$?)"
 fi
 
 echo "Scanning $ROOTFS for ELF aarch64 binaries..."
@@ -53,7 +45,7 @@ echo "Scanning $ROOTFS for ELF aarch64 binaries..."
 # Counters live in a temp file so the piped subshell can update them
 # and the parent can read them after the loop finishes.
 COUNTERS=$(mktemp)
-trap 'rm -f "$COUNTERS"; rm -rf "$ELF2MACHO_DIR"' EXIT
+trap 'rm -f "$COUNTERS"; [ -n "$ELF2MACHO_DIR" ] && rm -rf "$ELF2MACHO_DIR"' EXIT
 echo "0 0 0 0" > "$COUNTERS"
 
 # Find all regular files and check for ELF magic.

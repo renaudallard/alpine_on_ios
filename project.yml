@@ -46,6 +46,10 @@ targets:
             rm -rf "$DEST"
             rsync -a --no-links "$ROOTFS/" "$DEST/"
             echo "AOT-patching ELF binaries..."
+            # ELF2MACHO_PREBUILT may be set by CI to point at a
+            # binary built outside of xcodebuild (Xcode's script
+            # phase environment kills freshly-compiled binaries).
+            export ELF2MACHO_PREBUILT
             "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST"
             echo "Rootfs: $(du -sh "$DEST" | cut -f1)"
           else
