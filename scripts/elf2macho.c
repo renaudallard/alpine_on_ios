@@ -448,6 +448,158 @@ free_symtab(struct symtab_builder *sb)
 	memset(sb, 0, sizeof(*sb));
 }
 
+/* ---- Bind opcode generation ---- */
+
+struct bind_builder {
+	uint8_t		*buf;
+	size_t		 size;
+	size_t		 cap;
+};
+
+static void
+bind_grow(struct bind_builder *bb, size_t need)
+{
+	if (bb->size + need > bb->cap) {
+		bb->cap = (bb->cap + need + 256) * 2;
+		bb->buf = realloc(bb->buf, bb->cap);
+	}
+}
+
+static void
+bind_byte(struct bind_builder *bb, uint8_t b)
+{
+	bind_grow(bb, 1);
+	bb->buf[bb->size++] = b;
+}
+
+static void
+bind_uleb(struct bind_builder *bb, uint64_t v)
+{
+	bind_grow(bb, 10);
+	bb->size += write_uleb(bb->buf + bb->size, v);
+}
+
+static void
+bind_str(struct bind_builder *bb, const char *s)
+{
+	size_t len = strlen(s) + 1;
+	bind_grow(bb, len);
+	memcpy(bb->buf + bb->size, s, len);
+	bb->size += len;
+}
+
+/*
+ * Find the index of an undefined symbol in the symtab by ELF symbol idx.
+ * Returns -1 if not found.
+ */
+static int
+find_undef_by_elf_sym(struct dynamic_info *dyn, struct symtab_builder *sb,
+    uint64_t elf_sym_idx)
+{
+	const char *name;
+	int i;
+
+	if (elf_sym_idx == 0 || elf_sym_idx >= dyn->nsyms)
+		return -1;
+	if (dyn->symtab[elf_sym_idx].st_name >= dyn->strsz)
+		return -1;
+	name = dyn->strtab + dyn->symtab[elf_sym_idx].st_name;
+	if (name[0] == '\0')
+		return -1;
+
+	/* Linear search in undefined section. */
+	for (i = sb->iundef; i < sb->iundef + sb->nundef; i++) {
+		if (strcmp(sb->syms[i].name, name) == 0)
+			return i;
+	}
+	return -1;
+}
+
+/*
+ * Build bind opcodes for R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT,
+ * and R_AARCH64_ABS64 relocations.  Each binds an undefined symbol
+ * to its loaded address by writing into the data segment.
+ *
+ * data_seg_idx: 0-based segment index of __DATA in the load commands
+ *               (typically 1 if __TEXT is segment 0)
+ * data_seg_vmaddr: vmaddr of __DATA segment (used to compute offset)
+ */
+static int
+build_binds(struct dynamic_info *dyn, struct symtab_builder *sb,
+    struct bind_builder *bb, int data_seg_idx, uint64_t data_seg_vmaddr,
+    uint64_t shift)
+{
+	uint64_t i, n;
+	Elf64_Rela *rels[2];
+	uint64_t nrels[2];
+
+	memset(bb, 0, sizeof(*bb));
+
+	rels[0] = dyn->rela;
+	nrels[0] = dyn->relasz / sizeof(Elf64_Rela);
+	rels[1] = dyn->jmprel;
+	nrels[1] = dyn->pltrelsz / sizeof(Elf64_Rela);
+
+	/* Set type once for all binds. */
+	bind_byte(bb, BIND_OPCODE_SET_TYPE_IMM | BIND_TYPE_POINTER);
+	/* Set library ordinal: 1 = first LC_LOAD_DYLIB. */
+	bind_byte(bb, BIND_OPCODE_SET_DYLIB_ORDINAL_IMM | 1);
+
+	for (int r = 0; r < 2; r++) {
+		for (i = 0, n = nrels[r]; i < n; i++) {
+			Elf64_Rela *rl = &rels[r][i];
+			uint32_t type = ELF64_R_TYPE(rl->r_info);
+			uint64_t sym = ELF64_R_SYM(rl->r_info);
+			int undef_idx;
+			uint64_t target_vaddr, seg_off;
+
+			if (type != R_AARCH64_GLOB_DAT &&
+			    type != R_AARCH64_JUMP_SLOT &&
+			    type != R_AARCH64_ABS64)
+				continue;
+
+			undef_idx = find_undef_by_elf_sym(dyn, sb, sym);
+			if (undef_idx < 0)
+				continue;
+
+			/* Target address (in shifted dylib coordinates). */
+			target_vaddr = rl->r_offset + shift;
+			if (target_vaddr < data_seg_vmaddr)
+				continue;
+			seg_off = target_vaddr - data_seg_vmaddr;
+
+			/* Symbol with leading underscore. */
+			{
+				char buf[256];
+				const char *name = sb->syms[undef_idx].name;
+				size_t len = strlen(name);
+				if (len > sizeof(buf) - 2) len = sizeof(buf) - 2;
+				buf[0] = '_';
+				memcpy(buf + 1, name, len);
+				buf[len + 1] = '\0';
+				bind_byte(bb,
+				    BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM | 0);
+				bind_str(bb, buf);
+			}
+			bind_byte(bb,
+			    BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB |
+			    (data_seg_idx & 0xf));
+			bind_uleb(bb, seg_off);
+			bind_byte(bb, BIND_OPCODE_DO_BIND);
+		}
+	}
+
+	bind_byte(bb, BIND_OPCODE_DONE);
+	return 0;
+}
+
+static void
+free_binds(struct bind_builder *bb)
+{
+	free(bb->buf);
+	memset(bb, 0, sizeof(*bb));
+}
+
 /*
  * Parse PT_DYNAMIC segment and fill struct dynamic_info.
  * Returns 0 on success, -1 if no dynamic section found.
@@ -586,6 +738,7 @@ main(int argc, char **argv)
 	int		 i;
 	struct dynamic_info dyn;
 	struct symtab_builder sb;
+	struct bind_builder bb;
 	int		 has_dyn;
 
 	/* Output layout offsets */
@@ -749,6 +902,13 @@ main(int argc, char **argv)
 
 	text_off = shift + text_vaddr;
 	data_off = data_seg_fileoff + (shift + data_vaddr - data_seg_vmaddr);
+
+	/* Build bind opcodes now that we know the layout. */
+	memset(&bb, 0, sizeof(bb));
+	if (has_dyn && has_data) {
+		build_binds(&dyn, &sb, &bb, /*data_seg_idx=*/1,
+		    data_seg_vmaddr, shift);
+	}
 
 	/* Allocate output. */
 	out = calloc(1, (size_t)total_sz);
@@ -994,6 +1154,7 @@ main(int argc, char **argv)
 			    dyn.needed[i] : "(null)");
 		printf("symtab: nsyms=%d (ext=%d undef=%d) strsz=%u\n",
 		    sb.nsyms, sb.next, sb.nundef, sb.strsz);
+		printf("binds: %zu bytes\n", bb.size);
 	}
 
 	/* Print metadata for diagnosis. */
@@ -1005,6 +1166,7 @@ main(int argc, char **argv)
 	    (unsigned long long)(data_seg_vmaddr + data_seg_vmsize));
 
 	free_symtab(&sb);
+	free_binds(&bb);
 	free(out);
 	free(elf);
 	return 0;
