@@ -17,6 +17,10 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#endif
+
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
@@ -358,7 +362,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
     const char **envp)
 {
 	char		host_path[PATH_MAX];
-	elf_info_t	info, interp_info;
+	elf_info_t	info, interp_info = { 0 };
 	mem_space_t	*newmem;
 	uint64_t	sp, entry, interp_base, stack_top, bin_base;
 	int		ret;
@@ -486,9 +490,17 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		return (-ENOMEM);
 	}
 
-	/* Replace old memory space. */
+	/* Replace old memory space and dylib handles. */
 	mem_space_destroy(proc->mem);
 	proc->mem = newmem;
+#if defined(__APPLE__)
+	if (proc->dl_binary != NULL)
+		dlclose(proc->dl_binary);
+	if (proc->dl_interp != NULL)
+		dlclose(proc->dl_interp);
+	proc->dl_binary = info.dl_handle;
+	proc->dl_interp = interp_info.dl_handle;
+#endif
 
 	/* Reset CPU. */
 	cpu_init(&proc->cpu);
@@ -535,6 +547,12 @@ proc_destroy(emu_process_t *proc)
 		mem_space_destroy(proc->mem);
 	if (proc->fds != NULL)
 		fd_table_release(proc->fds);
+#if defined(__APPLE__)
+	if (proc->dl_binary != NULL)
+		dlclose(proc->dl_binary);
+	if (proc->dl_interp != NULL)
+		dlclose(proc->dl_interp);
+#endif
 
 	pthread_mutex_destroy(&proc->lock);
 	pthread_cond_destroy(&proc->wait_cond);

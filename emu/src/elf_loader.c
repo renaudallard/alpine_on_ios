@@ -238,6 +238,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				    dylib_path, dlerror());
 				goto fail;
 			}
+			info->dl_handle = dl;
 
 			/*
 			 * Find where dyld loaded it.  The dylib's
@@ -323,8 +324,13 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				ssize = ALIGN_UP(phdrs[i].p_memsz, PAGE_SIZE);
 				sprot = elf_pflags_to_prot(phdrs[i].p_flags);
 
-				mem_mmap_host(mem, saddr, ssize, sprot,
-				    (uint8_t *)saddr);
+				if (mem_mmap_host(mem, saddr, ssize, sprot,
+				    (uint8_t *)saddr) == (uint64_t)-1) {
+					emu_set_error("elf: register seg %d "
+					    "addr=0x%lx", i,
+					    (unsigned long)saddr);
+					goto fail;
+				}
 			}
 
 			info->entry = base + ehdr.e_entry;
@@ -341,11 +347,18 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				if (phdrs[i].p_type == PT_INTERP &&
 				    phdrs[i].p_filesz > 0 &&
 				    phdrs[i].p_filesz < sizeof(info->interp)) {
-					lseek(fd, phdrs[i].p_offset, SEEK_SET);
+					if (lseek(fd, phdrs[i].p_offset,
+					    SEEK_SET) < 0) {
+						emu_set_error("elf: lseek interp");
+						goto fail;
+					}
 					n = read(fd, info->interp,
 					    phdrs[i].p_filesz);
-					if (n > 0)
-						info->interp[n] = '\0';
+					if (n != (ssize_t)phdrs[i].p_filesz) {
+						emu_set_error("elf: short read interp");
+						goto fail;
+					}
+					info->interp[n] = '\0';
 				}
 			}
 

@@ -22,6 +22,7 @@ typedef struct elf_info {
 	uint64_t	interp_base;	/* Interpreter load base (0 if static) */
 	uint64_t	interp_entry;	/* Interpreter entry point */
 	char		interp[256];	/* Interpreter path (empty if static) */
+	void		*dl_handle;	/* dlopen handle (AOT mode), or NULL */
 } elf_info_t;
 
 /*

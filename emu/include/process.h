@@ -72,6 +72,10 @@ typedef struct emu_process {
 	fd_table_t	*fds;
 	vfs_t		*vfs;
 
+	/* Mach-O dylibs loaded for AOT execution.  Closed at proc_destroy. */
+	void		*dl_binary;
+	void		*dl_interp;
+
 	char		cwd[PATH_MAX];
 
 	/* Signal state */
