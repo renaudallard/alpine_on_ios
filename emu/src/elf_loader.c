@@ -288,26 +288,23 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				}
 
 				/*
-				 * The converter shifts all sections up by
-				 * (PAGE_SZ - text_vaddr_page) so the header
-				 * fits at file offset 0.  Code is at
-				 * img_addr + shift + text_vaddr.
-				 * Match the converter's calculation.
+				 * The converter (elf2macho) uses iOS arm64
+				 * page size (16K) regardless of host.  Match
+				 * its calculation: shift = 16K - text_vaddr_page.
 				 */
 				{
-					long hpg = sysconf(_SC_PAGESIZE);
+					const uint64_t IOS_PAGE = 0x4000;
 					uint64_t tvp = 0, shift;
 					int k;
-					if (hpg <= 0) hpg = 4096;
 					for (k = 0; k < ehdr.e_phnum; k++) {
 						if (phdrs[k].p_type == PT_LOAD &&
 						    (phdrs[k].p_flags & PF_X)) {
 							tvp = phdrs[k].p_vaddr &
-							    ~((uint64_t)hpg - 1);
+							    ~(IOS_PAGE - 1);
 							break;
 						}
 					}
-					shift = (uint64_t)hpg - tvp;
+					shift = IOS_PAGE - tvp;
 					base = img_addr + shift;
 				}
 			}
@@ -315,7 +312,8 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			LOG_INFO("elf_load: AOT dylib %s at 0x%llx",
 			    dylib_path, (unsigned long long)base);
 
-			/* Register each segment with mem_space. */
+			/* Register each segment with mem_space.  Use 16K
+			 * alignment to match what dyld actually mapped. */
 			for (i = 0; i < ehdr.e_phnum; i++) {
 				uint64_t	saddr, ssize;
 				int		sprot;
@@ -324,7 +322,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 					continue;
 
 				saddr = base + phdrs[i].p_vaddr;
-				ssize = ALIGN_UP(phdrs[i].p_memsz, PAGE_SIZE);
+				ssize = ALIGN_UP(phdrs[i].p_memsz, 0x4000);
 				sprot = elf_pflags_to_prot(phdrs[i].p_flags);
 
 				if (mem_mmap_host(mem, saddr, ssize, sprot,
@@ -338,11 +336,21 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 			info->entry = base + ehdr.e_entry;
 			info->base = base;
+			info->phent = sizeof(Elf64_Phdr);
+			info->phnum = ehdr.e_phnum;
+			/*
+			 * AT_PHDR: musl's libc-start uses phdrs to find
+			 * its own entry point. The shifted layout means
+			 * file offset ehdr.e_phoff is at host address
+			 * base + ehdr.e_phoff.  The dylib contains the
+			 * original ELF header bytes at file offset 0
+			 * (no it doesn't - file offset 0 is the Mach-O
+			 * header).  Set phdr to 0 - musl falls back to
+			 * walking _DYNAMIC if AT_PHDR is null.
+			 */
+			info->phdr = 0;
 			{
-				long bpg = sysconf(_SC_PAGESIZE);
-				if (bpg <= 0) bpg = PAGE_SIZE;
-				info->brk = (base + vmax + (uint64_t)bpg - 1) &
-				    ~((uint64_t)bpg - 1);
+				info->brk = ALIGN_UP(base + vmax, 0x4000);
 			}
 
 			/* Check for interpreter. */
