@@ -259,6 +259,82 @@ translate_open_flags(int linux_flags)
 	return flags;
 }
 
+/*
+ * Recover the guest path of a directory held open by a host fd.  We
+ * ask the host kernel for the real path (via F_GETPATH on Darwin,
+ * /proc/self/fd/N on Linux) and then strip the rootfs prefix so the
+ * result is expressed in the guest namespace.  Returns 0 on success.
+ */
+static int
+fd_dir_guest_path(vfs_t *vfs, int host_fd, char *out, size_t outsize)
+{
+	char		hp[PATH_MAX];
+	size_t		rootlen;
+	const char	*rel;
+
+#ifdef __APPLE__
+	if (fcntl(host_fd, F_GETPATH, hp) < 0)
+		return (-1);
+#else
+	{
+		char		proc_fd[64];
+		ssize_t		n;
+
+		snprintf(proc_fd, sizeof(proc_fd), "/proc/self/fd/%d",
+		    host_fd);
+		n = readlink(proc_fd, hp, sizeof(hp) - 1);
+		if (n < 0)
+			return (-1);
+		hp[n] = '\0';
+	}
+#endif
+
+	rootlen = strlen(vfs->rootfs);
+	while (rootlen > 1 && vfs->rootfs[rootlen - 1] == '/')
+		rootlen--;
+	if (strncmp(hp, vfs->rootfs, rootlen) != 0)
+		return (-1);
+	rel = hp + rootlen;
+	if (*rel == '\0')
+		rel = "/";
+	if (strlen(rel) >= outsize)
+		return (-1);
+	snprintf(out, outsize, "%s", rel);
+	return (0);
+}
+
+/*
+ * Produce the normalized absolute guest path for a (dirfd, relative)
+ * pair.  Used by both read and write path resolvers.
+ */
+static int
+build_guest_abs_path(emu_process_t *proc, int dirfd, const char *guest_path,
+    char *out, size_t outsize)
+{
+	char		base[PATH_MAX];
+	fd_entry_t	*fde;
+
+	if (guest_path[0] == '/') {
+		vfs_normalize_path("/", guest_path, out, outsize);
+		return (0);
+	}
+	if (dirfd == LINUX_AT_FDCWD) {
+		vfs_normalize_path(proc->cwd, guest_path, out, outsize);
+		return (0);
+	}
+	fde = fd_get(proc->fds, dirfd);
+	if (fde == NULL || fde->real_fd < 0)
+		return (-LINUX_EBADF);
+	if (fd_dir_guest_path(proc->vfs, fde->real_fd, base,
+	    sizeof(base)) != 0) {
+		/* Not a path we can recover; fall back to cwd. */
+		vfs_normalize_path(proc->cwd, guest_path, out, outsize);
+		return (0);
+	}
+	vfs_normalize_path(base, guest_path, out, outsize);
+	return (0);
+}
+
 /* Resolve a guest path using the VFS. */
 static int
 resolve_path(emu_process_t *proc, int dirfd, uint64_t path_addr,
@@ -266,25 +342,16 @@ resolve_path(emu_process_t *proc, int dirfd, uint64_t path_addr,
 {
 	char	guest_path[PATH_MAX];
 	char	abs_path[PATH_MAX];
+	int	rc;
 
 	if (mem_read_str(proc->mem, path_addr, guest_path,
 	    sizeof(guest_path)) != 0)
 		return -LINUX_EFAULT;
 
-	/* Make path absolute relative to cwd. */
-	if (guest_path[0] != '/') {
-		if (dirfd == LINUX_AT_FDCWD) {
-			vfs_normalize_path(proc->cwd, guest_path,
-			    abs_path, sizeof(abs_path));
-		} else {
-			/* dirfd-relative: not fully supported, use cwd. */
-			vfs_normalize_path(proc->cwd, guest_path,
-			    abs_path, sizeof(abs_path));
-		}
-	} else {
-		vfs_normalize_path("/", guest_path, abs_path,
-		    sizeof(abs_path));
-	}
+	rc = build_guest_abs_path(proc, dirfd, guest_path,
+	    abs_path, sizeof(abs_path));
+	if (rc != 0)
+		return (rc);
 
 	return vfs_resolve(proc->vfs, abs_path, host_path, host_path_size);
 }
@@ -296,20 +363,16 @@ resolve_path_write(emu_process_t *proc, int dirfd, uint64_t path_addr,
 {
 	char	guest_path[PATH_MAX];
 	char	abs_path[PATH_MAX];
-
-	(void)dirfd;
+	int	rc;
 
 	if (mem_read_str(proc->mem, path_addr, guest_path,
 	    sizeof(guest_path)) != 0)
 		return -LINUX_EFAULT;
 
-	if (guest_path[0] != '/') {
-		vfs_normalize_path(proc->cwd, guest_path,
-		    abs_path, sizeof(abs_path));
-	} else {
-		vfs_normalize_path("/", guest_path, abs_path,
-		    sizeof(abs_path));
-	}
+	rc = build_guest_abs_path(proc, dirfd, guest_path,
+	    abs_path, sizeof(abs_path));
+	if (rc != 0)
+		return (rc);
 
 	return vfs_resolve_rw(proc->vfs, abs_path, host_path,
 	    host_path_size, VFS_RESOLVE_WRITE);
