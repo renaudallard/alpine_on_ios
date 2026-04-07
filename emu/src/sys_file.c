@@ -1056,12 +1056,24 @@ do_pipe2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 {
 	int		pipefd[2], efd0, efd1;
 	fd_entry_t	*fde;
-	int		is_cloexec;
+	int		is_cloexec, is_nonblock;
 
 	if (pipe(pipefd) < 0)
 		return neg_errno(errno);
 
 	is_cloexec = (a1 & LINUX_O_CLOEXEC) ? 1 : 0;
+	is_nonblock = (a1 & LINUX_O_NONBLOCK) ? 1 : 0;
+
+	if (is_nonblock) {
+		int	fl;
+
+		fl = fcntl(pipefd[0], F_GETFL);
+		if (fl >= 0)
+			(void)fcntl(pipefd[0], F_SETFL, fl | O_NONBLOCK);
+		fl = fcntl(pipefd[1], F_GETFL);
+		if (fl >= 0)
+			(void)fcntl(pipefd[1], F_SETFL, fl | O_NONBLOCK);
+	}
 
 	efd0 = fd_alloc(proc->fds, 0);
 	if (efd0 < 0) {
@@ -1073,6 +1085,8 @@ do_pipe2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	fde->type = FD_PIPE;
 	fde->real_fd = pipefd[0];
 	fde->cloexec = is_cloexec;
+	if (is_nonblock)
+		fde->flags |= LINUX_O_NONBLOCK;
 
 	efd1 = fd_alloc(proc->fds, 0);
 	if (efd1 < 0) {
@@ -1084,6 +1098,8 @@ do_pipe2(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	fde->type = FD_PIPE;
 	fde->real_fd = pipefd[1];
 	fde->cloexec = is_cloexec;
+	if (is_nonblock)
+		fde->flags |= LINUX_O_NONBLOCK;
 
 	/* Write the two fds to guest memory. */
 	int32_t	fds[2];
