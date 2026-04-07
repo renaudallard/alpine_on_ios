@@ -90,7 +90,6 @@ do_socket(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 {
 	int		domain, type, protocol;
 	int		hfd, efd, is_cloexec, is_nonblock;
-	fd_entry_t	*fde;
 
 	domain = (int)a0;
 	type = (int)a1;
@@ -121,7 +120,6 @@ do_socket(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		close(hfd);
 		return -LINUX_EMFILE;
 	}
-	(void)fde;
 
 	return efd;
 }

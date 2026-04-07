@@ -62,6 +62,7 @@ uint64_t	g_native_base;
 		if (info.dl_handle != NULL) dlclose(info.dl_handle); \
 		if (interp_info.dl_handle != NULL) \
 			dlclose(interp_info.dl_handle); \
+		sighand_release(newsighand); \
 		mem_space_destroy(newmem); \
 		return (rc); \
 	} while (0)
@@ -69,6 +70,7 @@ uint64_t	g_native_base;
 #define EXECVE_FAIL(rc) do { \
 		free(info.phdr_data); \
 		free(interp_info.phdr_data); \
+		sighand_release(newsighand); \
 		mem_space_destroy(newmem); \
 		return (rc); \
 	} while (0)
@@ -155,6 +157,7 @@ proc_create(emu_process_t *parent)
 	p->mem = mem_space_create();
 	if (p->mem == NULL) {
 		fd_table_release(p->fds);
+		sighand_release(p->sighand);
 		free(p);
 		return (NULL);
 	}
@@ -399,6 +402,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	char		host_path[PATH_MAX];
 	elf_info_t	info, interp_info = { 0 };
 	mem_space_t	*newmem;
+	sighand_t	*newsighand;
 	uint64_t	sp, entry, interp_base, stack_top, bin_base;
 	int		ret;
 
@@ -409,10 +413,20 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		return (-ENOENT);
 	}
 
+	/*
+	 * Allocate the new sighand table up front so a failure here
+	 * can be reported cleanly before we touch proc->mem.
+	 */
+	newsighand = sighand_create();
+	if (newsighand == NULL)
+		return (-ENOMEM);
+
 	/* Create new memory space. */
 	newmem = mem_space_create();
-	if (newmem == NULL)
+	if (newmem == NULL) {
+		sighand_release(newsighand);
 		return (-ENOMEM);
+	}
 
 	/* AOT is required - no interpreter fallback. */
 	if (!emu_aot_enabled()) {
@@ -555,24 +569,25 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	 * ignored ones keep SIG_IGN, and (per POSIX) the sighand
 	 * table is un-shared so the new image does not continue
 	 * to share sigactions with other threads of the old group.
+	 * newsighand was allocated at function entry so failure has
+	 * already been surfaced by now.
 	 */
 	{
-		sighand_t	*h, *old;
+		sighand_t	*old = proc->sighand;
 
-		old = proc->sighand;
-		h = sighand_create();
-		if (h != NULL && old != NULL) {
+		if (old != NULL) {
 			int	i;
 
 			pthread_mutex_lock(&old->lock);
 			for (i = 0; i < EMU_NSIG; i++) {
 				if (old->actions[i].handler == EMU_SIG_IGN)
-					h->actions[i].handler = EMU_SIG_IGN;
+					newsighand->actions[i].handler =
+					    EMU_SIG_IGN;
 				/* everything else starts as zeroed (SIG_DFL) */
 			}
 			pthread_mutex_unlock(&old->lock);
 		}
-		proc->sighand = h;
+		proc->sighand = newsighand;
 		sighand_release(old);
 	}
 

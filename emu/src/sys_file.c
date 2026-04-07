@@ -462,7 +462,6 @@ do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 {
 	int		dirfd, linux_flags, mode, host_flags, hfd, efd;
 	char		host_path[PATH_MAX];
-	fd_entry_t	*fde;
 	int		is_cloexec;
 	int		fd_type;
 
@@ -487,7 +486,6 @@ do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 			close(hfd);
 			return -LINUX_EMFILE;
 		}
-		(void)fde;	/* no separate post-alloc write needed */
 		LOG_TRACE("openat(vfs): type=%d -> efd=%d hfd=%d",
 		    fd_type, efd, hfd);
 		return efd;
