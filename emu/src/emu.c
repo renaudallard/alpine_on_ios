@@ -45,7 +45,6 @@
 static vfs_t		*g_vfs;
 static int		 g_initialized;
 static int		 g_aot_enabled;
-static int		 g_jit_available;
 static pthread_mutex_t	 g_lock = PTHREAD_MUTEX_INITIALIZER;
 extern uint64_t		 g_native_base;
 static char		 g_last_error[512];
@@ -96,37 +95,31 @@ emu_init(const char *rootfs_path)
 	}
 
 	/*
-	 * AOT native execution: ELF segments are loaded via
-	 * file-backed mmap(PROT_EXEC) from the signed app bundle.
-	 * The base address is determined at ELF load time by
-	 * reserving the total span and letting the kernel choose.
-	 * g_native_base is set to 1 as a flag; the actual base
-	 * is determined per-ELF in elf_load.
+	 * AOT native execution: dylib companions loaded via dlopen.
+	 * Require native_available and successful native_init (SIGTRAP
+	 * handler).  If either fails, emu_init fails - we never run in
+	 * interpreter mode.
 	 */
 	g_native_base = 0;
-	g_jit_available = 0;
 
-	/* Test if MAP_JIT works (iOS needs JIT entitlement + enabled). */
-	{
-		void *tp = mmap(NULL, 4096,
-		    PROT_READ | PROT_WRITE | PROT_EXEC,
-		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT,
-		    -1, 0);
-		if (tp != MAP_FAILED) {
-			g_jit_available = 1;
-			munmap(tp, 4096);
-			LOG_INFO("emu: MAP_JIT available");
-		} else {
-			LOG_WARN("emu: MAP_JIT not available (errno=%d)",
-			    errno);
-		}
+	if (!native_available()) {
+		set_error("AOT not available: not aarch64");
+		vfs_destroy(g_vfs);
+		g_vfs = NULL;
+		pthread_mutex_unlock(&g_lock);
+		return (-1);
+	}
+	if (native_init() != 0) {
+		set_error("AOT not available: native_init failed");
+		vfs_destroy(g_vfs);
+		g_vfs = NULL;
+		pthread_mutex_unlock(&g_lock);
+		return (-1);
 	}
 
-	if (native_available() && native_init() == 0 && g_jit_available) {
-		g_aot_enabled = 1;
-		g_native_base = 1;	/* flag: AOT enabled */
-		LOG_INFO("emu: AOT enabled");
-	}
+	g_aot_enabled = 1;
+	g_native_base = 1;	/* flag: AOT enabled */
+	LOG_INFO("emu: AOT enabled");
 
 	g_initialized = 1;
 	pthread_mutex_unlock(&g_lock);
@@ -295,13 +288,9 @@ emu_aot_enabled(void)
 const char *
 emu_mode_info(void)
 {
-	static char	buf[256];
+	static char	buf[64];
 
-	snprintf(buf, sizeof(buf),
-	    "aot=%d jit=%d native=%d",
-	    g_aot_enabled,
-	    g_jit_available,
-	    native_available());
+	snprintf(buf, sizeof(buf), "aot=%d", g_aot_enabled);
 	return (buf);
 }
 

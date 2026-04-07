@@ -53,8 +53,6 @@ uint64_t	g_native_base;
 #define AOT_STACK_SIZE		(8ULL * 1024 * 1024)	/* 8 MB */
 
 /* Interpreter base addresses */
-#define INTERP_INTERP_BASE	0x7f00000000ULL
-#define INTERP_STACK_TOP	0x7fffffe000ULL
 
 /* WNOHANG from Linux. */
 #define LINUX_WNOHANG	1
@@ -383,21 +381,16 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	if (newmem == NULL)
 		return (-ENOMEM);
 
-	/* Determine execution mode. */
-	if (emu_aot_enabled()) {
-		/*
-		 * AOT via dlopen: each ELF gets its own address
-		 * from dyld, so forked children work too.
-		 */
-		newmem->aot_mode = 1;
-		bin_base = 0;	/* kernel chooses via dlopen */
-		interp_base = 0;
-		stack_top = 0;	/* determined after loading */
-	} else {
-		bin_base = 0;
-		interp_base = INTERP_INTERP_BASE;
-		stack_top = INTERP_STACK_TOP;
+	/* AOT is required - no interpreter fallback. */
+	if (!emu_aot_enabled()) {
+		emu_set_error("execve: AOT not enabled");
+		mem_space_destroy(newmem);
+		return (-ENOEXEC);
 	}
+	newmem->aot_mode = 1;
+	bin_base = 0;	/* kernel chooses via dlopen */
+	interp_base = 0;
+	stack_top = 0;	/* determined after loading */
 
 	/* Load ELF. */
 	memset(&info, 0, sizeof(info));

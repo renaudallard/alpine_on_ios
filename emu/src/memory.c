@@ -174,16 +174,14 @@ mem_space_clone(mem_space_t *src)
 	pthread_rwlock_init(&dst->lock, NULL);
 
 	/*
-	 * Clone always produces an interpreter-mode copy.
-	 * In AOT mode the parent's host addresses ARE the guest
-	 * addresses, and both parent and child are threads in the
-	 * same host process.  Using MAP_FIXED at the same address
-	 * would destroy the parent's mappings.  The interpreter
-	 * fallback is safe because fork is almost always followed
-	 * by execve, which creates a fresh AOT address space.
+	 * AOT fork: share the parent's region list read-only.
+	 * The child is expected to call execve immediately, which
+	 * creates a fresh AOT address space.  We reference the
+	 * parent's host memory via MEM_MAP_EXTERNAL so the child
+	 * cleanup doesn't free it.
 	 */
-	dst->aot_mode = 0;
-	dst->mmap_next = MMAP_START;
+	dst->aot_mode = src->aot_mode;
+	dst->mmap_next = src->mmap_next;
 
 	pp = &dst->regions;
 	for (r = src->regions; r != NULL; r = r->next) {
@@ -194,14 +192,9 @@ mem_space_clone(mem_space_t *src)
 		nr->base = r->base;
 		nr->size = r->size;
 		nr->prot = r->prot;
-		nr->flags = (r->flags & ~(MEM_MAP_EXTERNAL | MEM_MAP_CALLOC));
-
-		nr->host = calloc(1, r->size);
-		if (nr->host == NULL) {
-			free(nr);
-			goto fail;
-		}
-		memcpy(nr->host, r->host, r->size);
+		/* Mark as external so child doesn't free parent's memory. */
+		nr->flags = r->flags | MEM_MAP_EXTERNAL;
+		nr->host = r->host;
 
 		nr->next = NULL;
 		*pp = nr;
