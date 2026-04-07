@@ -30,14 +30,36 @@ ELF2MACHO="$ELF2MACHO_DIR/elf2macho"
 
 if [ ! -x "$ELF2MACHO" ]; then
 	echo "Building elf2macho tool in $ELF2MACHO_DIR..."
-	cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
+	# Diagnostic: can we even run a hello-world binary?
+	cat > "$ELF2MACHO_DIR/hello.c" <<'HELLO_EOF'
+#include <stdio.h>
+int main(int argc, char **argv){ (void)argv; printf("hello %d\n", argc); return 0; }
+HELLO_EOF
+	cc -O2 -o "$ELF2MACHO_DIR/hello" "$ELF2MACHO_DIR/hello.c" || true
+	echo "=== hello world diagnostic ==="
+	file "$ELF2MACHO_DIR/hello" 2>&1 || true
+	if command -v codesign >/dev/null 2>&1; then
+		codesign -dvvv "$ELF2MACHO_DIR/hello" 2>&1 || true
+	fi
+	"$ELF2MACHO_DIR/hello" a b c 2>&1 || echo "hello invocation exit=$?"
+	echo "=== end diagnostic ==="
+
+	# Try xcrun clang first (picks up SDK), fall back to cc.
+	if command -v xcrun >/dev/null 2>&1; then
+		xcrun clang -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
+	else
+		cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
+	fi
 	if command -v xattr >/dev/null 2>&1; then
 		xattr -cr "$ELF2MACHO" 2>/dev/null || true
 	fi
 	if command -v codesign >/dev/null 2>&1; then
-		codesign --remove-signature "$ELF2MACHO" 2>/dev/null || true
 		codesign --force --sign - --timestamp=none \
-		    "$ELF2MACHO" 2>/dev/null || true
+		    --identifier com.alpineonios.elf2macho \
+		    "$ELF2MACHO" 2>&1 || true
+		echo "=== elf2macho signature ==="
+		codesign -dvvv "$ELF2MACHO" 2>&1 || true
+		echo "=== end signature ==="
 	fi
 fi
 
