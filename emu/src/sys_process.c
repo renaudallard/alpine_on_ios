@@ -152,6 +152,7 @@ do_clone(emu_process_t *proc, uint64_t flags, uint64_t newsp,
 
 		pthread_mutex_init(&child->lock, NULL);
 		pthread_cond_init(&child->wait_cond, NULL);
+		pthread_cond_init(&child->reap_cond, NULL);
 
 		/* Handle CLONE_CHILD_SETTID. */
 		if ((flags & LINUX_CLONE_CHILD_SETTID) &&
