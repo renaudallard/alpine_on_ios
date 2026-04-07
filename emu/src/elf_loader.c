@@ -318,31 +318,44 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			LOG_INFO("elf_load: AOT dylib %s at 0x%llx",
 			    dylib_path, (unsigned long long)base);
 
-			/* Register each segment with mem_space.  Use 16K
-			 * alignment to match what dyld actually mapped. */
+			/*
+			 * Register each PT_LOAD segment with mem_space.
+			 * ELF segments are not required to start on a page
+			 * boundary; the kernel maps from
+			 *   page_align_down(p_vaddr)
+			 * for
+			 *   ((p_vaddr & (page-1)) + p_memsz)
+			 * bytes.  Mirror that here so the registered range
+			 * actually covers every byte the guest can address
+			 * inside the segment, and so mem_mmap_host (which
+			 * insists on a page-aligned start) sees an address
+			 * it can accept verbatim.
+			 */
 			for (i = 0; i < ehdr.e_phnum; i++) {
 				uint64_t	saddr, ssize, got;
+				uint64_t	pa_addr, pa_size, skew;
 				int		sprot;
 
 				if (phdrs[i].p_type != PT_LOAD)
 					continue;
 
 				saddr = base + phdrs[i].p_vaddr;
-				ssize = ALIGN_UP(phdrs[i].p_memsz, 0x4000);
+				ssize = phdrs[i].p_memsz;
 				sprot = elf_pflags_to_prot(phdrs[i].p_flags);
 
-				/*
-				 * mem_mmap_host will silently relocate on
-				 * conflict; in AOT mode the guest VA must
-				 * equal the host VA dyld picked, so refuse
-				 * any mismatch instead of papering over it.
-				 */
-				got = mem_mmap_host(mem, saddr, ssize, sprot,
-				    (uint8_t *)saddr);
-				if (got == (uint64_t)-1 || got != saddr) {
+				/* Round saddr DOWN to a 16K boundary, grow
+				 * the size by the resulting skew and round
+				 * the total UP to 16K. */
+				pa_addr = saddr & ~(uint64_t)0x3FFF;
+				skew = saddr - pa_addr;
+				pa_size = ALIGN_UP(skew + ssize, 0x4000);
+
+				got = mem_mmap_host(mem, pa_addr, pa_size,
+				    sprot, (uint8_t *)pa_addr);
+				if (got == (uint64_t)-1 || got != pa_addr) {
 					emu_set_error("elf: register seg %d "
 					    "wanted 0x%lx got 0x%lx", i,
-					    (unsigned long)saddr,
+					    (unsigned long)pa_addr,
 					    (unsigned long)got);
 					goto fail;
 				}
