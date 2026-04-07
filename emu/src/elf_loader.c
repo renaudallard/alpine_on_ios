@@ -284,6 +284,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 					emu_set_error("elf: cannot find dylib "
 					    "in loaded images");
 					dlclose(dl);
+					info->dl_handle = NULL;
 					goto fail;
 				}
 
