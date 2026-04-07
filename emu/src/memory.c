@@ -860,24 +860,14 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 				r->size += grow;
 			} else if (r != NULL && NATIVE_MODE(ms)) {
 				/*
-				 * Extend heap: allocate new region via
-				 * mmap(NULL), copy old data, replace.
+				 * Heap pre-allocated at execve time.  Just
+				 * advance brk_current within the region.
 				 */
-				uint8_t	*newhost;
-				newhost = mmap(NULL, r->size + grow,
-				    PROT_READ | PROT_WRITE,
-				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-				if (newhost == MAP_FAILED) {
+				if (new_brk > r->base + r->size) {
 					pthread_rwlock_unlock(&ms->lock);
 					return ms->brk_current;
 				}
-				memcpy(newhost, r->host, r->size);
-				memset(newhost + r->size, 0, grow);
-				munmap(r->host, r->size);
-				r->host = newhost;
-				r->base = (uint64_t)newhost;
-				r->size += grow;
-				ms->brk_base = r->base;
+				/* No actual work needed; brk_current moves. */
 			} else {
 				r = calloc(1, sizeof(*r));
 				if (r == NULL) {
@@ -886,17 +876,11 @@ mem_brk(mem_space_t *ms, uint64_t addr)
 				}
 				new_size = new_brk - ms->brk_base;
 				if (NATIVE_MODE(ms)) {
-					r->host = mmap(NULL, new_size,
-					    PROT_READ | PROT_WRITE,
-					    MAP_PRIVATE | MAP_ANONYMOUS,
-					    -1, 0);
-					if (r->host == MAP_FAILED) {
-						free(r);
-						pthread_rwlock_unlock(
-						    &ms->lock);
-						return ms->brk_current;
-					}
-					ms->brk_base = (uint64_t)r->host;
+					/* Should not reach here in AOT -
+					 * heap pre-allocated in execve. */
+					free(r);
+					pthread_rwlock_unlock(&ms->lock);
+					return ms->brk_current;
 				} else {
 					r->host = calloc(1, new_size);
 					if (r->host == NULL) {

@@ -222,9 +222,6 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			 */
 			char dylib_path[PATH_MAX];
 			void *dl;
-			Dl_info dli;
-			uint64_t slide;
-			uint64_t text_vaddr_page;
 
 			snprintf(dylib_path, sizeof(dylib_path),
 			    "%s.dylib", host_path);
@@ -242,25 +239,21 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			 * load address.  Use dladdr on the handle
 			 * to find the base.
 			 */
-			text_vaddr_page = vmin & ~(uint64_t)(PAGE_SIZE - 1);
 
 			/* Get the Mach-O header address from dyld. */
 			{
-				extern void *_dyld_get_image_header_by_name(
-				    const char *);
 				/*
 				 * Walk loaded images to find our dylib.
-				 * The header address minus __TEXT.vmaddr (0)
-				 * gives us the ASLR slide.
+				 * The header address is the ASLR slide base.
 				 */
-				uint32_t img_count;
-				const char *img_name;
 				uint64_t img_addr = 0;
 
 #ifdef __APPLE__
 				extern uint32_t _dyld_image_count(void);
 				extern const char *_dyld_get_image_name(uint32_t);
 				extern const void *_dyld_get_image_header(uint32_t);
+				uint32_t img_count;
+				const char *img_name;
 
 				img_count = _dyld_image_count();
 				for (uint32_t j = img_count; j > 0; j--) {

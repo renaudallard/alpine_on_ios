@@ -365,7 +365,7 @@ main(int argc, char **argv)
 			.vmaddr = vm_data,
 			.vmsize = vm_data_size,
 			.fileoff = ALIGN_UP(text_sz, PAGE_SZ),
-			.filesize = has_data ? ALIGN_UP(data_filesz, PAGE_SZ) : 0,
+			.filesize = data_sz,
 			.maxprot = VM_PROT_READ | VM_PROT_WRITE,
 			.initprot = VM_PROT_READ | VM_PROT_WRITE,
 			.nsects = 1,

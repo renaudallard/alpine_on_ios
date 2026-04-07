@@ -384,15 +384,13 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		return (-ENOMEM);
 
 	/* Determine execution mode. */
-	if (emu_aot_enabled() && proc->ppid == 0) {
+	if (emu_aot_enabled()) {
 		/*
-		 * AOT only for the initial process (ppid==0, not
-		 * forked).  Forked children can't use MAP_FIXED at
-		 * the same addresses as the parent since both are
-		 * threads in the same host process.
+		 * AOT via dlopen: each ELF gets its own address
+		 * from dyld, so forked children work too.
 		 */
 		newmem->aot_mode = 1;
-		bin_base = 0;	/* kernel chooses via mmap(NULL) */
+		bin_base = 0;	/* kernel chooses via dlopen */
 		interp_base = 0;
 		stack_top = 0;	/* determined after loading */
 	} else {
@@ -441,6 +439,29 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	/* Set initial brk to end of loaded binary. */
 	newmem->brk_base = info.brk;
 	newmem->brk_current = info.brk;
+
+	/* AOT: pre-allocate heap so brk() doesn't need to relocate. */
+	if (newmem->aot_mode) {
+		uint64_t heap_size = 256ULL * 1024 * 1024; /* 256 MB */
+		void *heap = mmap(NULL, heap_size,
+		    PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (heap == MAP_FAILED) {
+			LOG_ERR("execve: AOT heap mmap failed");
+			mem_space_destroy(newmem);
+			return (-ENOMEM);
+		}
+		newmem->brk_base = (uint64_t)heap;
+		newmem->brk_current = (uint64_t)heap;
+		if (mem_mmap_host(newmem, (uint64_t)heap, heap_size,
+		    MEM_PROT_READ | MEM_PROT_WRITE,
+		    (uint8_t *)heap) == (uint64_t)-1) {
+			LOG_ERR("execve: AOT heap register failed");
+			munmap(heap, heap_size);
+			mem_space_destroy(newmem);
+			return (-ENOMEM);
+		}
+	}
 
 	/* AOT: allocate stack via mmap so host addr == guest addr. */
 	if (newmem->aot_mode && stack_top == 0) {
