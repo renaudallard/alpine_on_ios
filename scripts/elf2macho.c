@@ -1595,19 +1595,40 @@ main(int argc, char **argv)
 		}
 	}
 
-	/* LC_RPATH for finding dependencies (only if we have any). */
-	const char *rpath_str = "@loader_path";
-	uint32_t rpath_len = (uint32_t)strlen(rpath_str) + 1;
-	uint32_t rpath_cmdsize = ALIGN_UP(12 + rpath_len, 8);
+	/*
+	 * LC_RPATH search path.  We emit several so dyld can find
+	 * libraries regardless of whether the loading binary lives in
+	 *   /alpine/bin/         (busybox itself, sees ../lib)
+	 *   /alpine/sbin/        (sees ../lib)
+	 *   /alpine/usr/bin/     (sees ../lib and ../../lib)
+	 *   /alpine/usr/sbin/    (sees ../lib and ../../lib)
+	 *   /alpine/usr/lib/foo/ (sees ../, ../../lib)
+	 * etc.
+	 *
+	 * Each entry is 4-byte aligned including its trailing NUL,
+	 * but the cmdsize itself must be 8-byte aligned.
+	 */
+	static const char *rpath_strs[] = {
+		"@loader_path",
+		"@loader_path/../lib",
+		"@loader_path/../../lib",
+		"@loader_path/../usr/lib",
+		"@loader_path/../../usr/lib",
+	};
+	const int n_rpath = (int)(sizeof(rpath_strs) / sizeof(rpath_strs[0]));
+	uint32_t rpath_cmdsizes[5];
+	for (int j = 0; j < n_rpath; j++)
+		rpath_cmdsizes[j] = (uint32_t)ALIGN_UP(
+		    12 + strlen(rpath_strs[j]) + 1, 8);
 	int has_rpath = (n_load_dylib > 0);
 
 	/* Count load commands. */
 	uint32_t ncmds = 1 + (has_data ? 1 : 0) + 1 + 8 + n_load_dylib +
-	    (has_rpath ? 1 : 0);
+	    (has_rpath ? n_rpath : 0);
 	/* segments + LC_ID_DYLIB + LC_BUILD_VERSION + LC_UUID
 	 * + LC_DYLD_INFO_ONLY + LC_SYMTAB + LC_DYSYMTAB
 	 * + LC_DYLD_EXPORTS_TRIE + LC_CODE_SIGNATURE + n_load_dylib
-	 * + (LC_RPATH) */
+	 * + n_rpath * LC_RPATH */
 
 	uint32_t sizeofcmds =
 	    (72 + 80) +				/* __TEXT + 1 section */
@@ -1623,8 +1644,10 @@ main(int argc, char **argv)
 	    16;					/* LC_CODE_SIGNATURE */
 	for (int j = 0; j < n_load_dylib; j++)
 		sizeofcmds += load_dylib_cmdsizes[j];
-	if (has_rpath)
-		sizeofcmds += rpath_cmdsize;
+	if (has_rpath) {
+		for (int j = 0; j < n_rpath; j++)
+			sizeofcmds += rpath_cmdsizes[j];
+	}
 
 	/* mach_header_64 */
 	mach_header_64 mh = {
@@ -1771,17 +1794,20 @@ main(int argc, char **argv)
 		wpad(&wp, load_dylib_cmdsizes[j] - 24 - l);
 	}
 
-	/* LC_RPATH (@loader_path) so dependencies are found
-	 * relative to where this dylib was loaded from. */
+	/* LC_RPATH entries so dependencies are found relative to
+	 * where this dylib was loaded from. */
 	if (has_rpath) {
-		rpath_command rc = {
-			.cmd = LC_RPATH,
-			.cmdsize = rpath_cmdsize,
-			.path_offset = 12
-		};
-		wbuf(&wp, &rc, 12);
-		wbuf(&wp, rpath_str, rpath_len);
-		wpad(&wp, rpath_cmdsize - 12 - rpath_len);
+		for (int j = 0; j < n_rpath; j++) {
+			uint32_t l = (uint32_t)strlen(rpath_strs[j]) + 1;
+			rpath_command rc = {
+				.cmd = LC_RPATH,
+				.cmdsize = rpath_cmdsizes[j],
+				.path_offset = 12
+			};
+			wbuf(&wp, &rc, 12);
+			wbuf(&wp, rpath_strs[j], l);
+			wpad(&wp, rpath_cmdsizes[j] - 12 - l);
+		}
 	}
 
 	/*
