@@ -1689,7 +1689,8 @@ do_sendfile(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 
 		if (mem_read64(proc->mem, a2, (uint64_t *)&off) != 0)
 			return -LINUX_EFAULT;
-		lseek(in_fde->real_fd, (off_t)off, SEEK_SET);
+		if (lseek(in_fde->real_fd, (off_t)off, SEEK_SET) == (off_t)-1)
+			return neg_errno(errno);
 	}
 
 	done = 0;
