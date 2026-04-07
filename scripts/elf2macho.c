@@ -249,6 +249,175 @@ write_uleb(uint8_t *p, uint64_t v)
 	return n;
 }
 
+/* ---- ELF dynamic section parsing ---- */
+
+#define MAX_NEEDED	16
+
+struct dynamic_info {
+	/* DT_NEEDED entries (library names) */
+	const char	*needed[MAX_NEEDED];
+	int		 n_needed;
+
+	/* String table */
+	const char	*strtab;	/* points into elf buffer */
+	uint64_t	 strsz;
+
+	/* Symbol table */
+	Elf64_Sym	*symtab;	/* points into elf buffer */
+	uint64_t	 nsyms;		/* count derived from PLTGOT/RELA */
+	uint64_t	 syment;	/* sizeof entry, should be 24 */
+
+	/* RELA: regular dynamic relocations */
+	Elf64_Rela	*rela;
+	uint64_t	 relasz;	/* in bytes */
+
+	/* JMPREL: PLT relocations */
+	Elf64_Rela	*jmprel;
+	uint64_t	 pltrelsz;	/* in bytes */
+	int		 pltrel_type;	/* DT_RELA or DT_REL (we expect RELA) */
+
+	/* RELR: compact relative relocations */
+	uint64_t	*relr;
+	uint64_t	 relrsz;	/* in bytes */
+
+	/* PLTGOT: address of GOT for PLT entries */
+	uint64_t	 pltgot;
+};
+
+/*
+ * Convert an ELF vaddr to a pointer in the loaded ELF buffer.
+ * Walks PT_LOAD segments to find which one contains vaddr.
+ */
+static void *
+elf_vaddr_to_ptr(uint8_t *elf, Elf64_Phdr *phdrs, int phnum, uint64_t vaddr)
+{
+	int i;
+	for (i = 0; i < phnum; i++) {
+		if (phdrs[i].p_type != PT_LOAD)
+			continue;
+		if (vaddr >= phdrs[i].p_vaddr &&
+		    vaddr < phdrs[i].p_vaddr + phdrs[i].p_filesz) {
+			return elf + phdrs[i].p_offset +
+			    (vaddr - phdrs[i].p_vaddr);
+		}
+	}
+	return NULL;
+}
+
+/*
+ * Parse PT_DYNAMIC segment and fill struct dynamic_info.
+ * Returns 0 on success, -1 if no dynamic section found.
+ */
+static int
+parse_dynamic(uint8_t *elf, Elf64_Phdr *phdrs, int phnum,
+    struct dynamic_info *dyn)
+{
+	int i;
+	Elf64_Phdr *pdyn = NULL;
+	Elf64_Dyn *d;
+	uint64_t needed_off[MAX_NEEDED];
+	int n_needed = 0;
+
+	memset(dyn, 0, sizeof(*dyn));
+
+	for (i = 0; i < phnum; i++) {
+		if (phdrs[i].p_type == PT_DYNAMIC) {
+			pdyn = &phdrs[i];
+			break;
+		}
+	}
+	if (pdyn == NULL)
+		return -1;
+
+	d = (Elf64_Dyn *)(elf + pdyn->p_offset);
+	for (; d->d_tag != DT_NULL; d++) {
+		switch (d->d_tag) {
+		case DT_NEEDED:
+			if (n_needed < MAX_NEEDED)
+				needed_off[n_needed++] = d->d_val;
+			break;
+		case DT_STRTAB:
+			dyn->strtab = (const char *)elf_vaddr_to_ptr(
+			    elf, phdrs, phnum, d->d_val);
+			break;
+		case DT_STRSZ:
+			dyn->strsz = d->d_val;
+			break;
+		case DT_SYMTAB:
+			dyn->symtab = (Elf64_Sym *)elf_vaddr_to_ptr(
+			    elf, phdrs, phnum, d->d_val);
+			break;
+		case DT_SYMENT:
+			dyn->syment = d->d_val;
+			break;
+		case DT_RELA:
+			dyn->rela = (Elf64_Rela *)elf_vaddr_to_ptr(
+			    elf, phdrs, phnum, d->d_val);
+			break;
+		case DT_RELASZ:
+			dyn->relasz = d->d_val;
+			break;
+		case DT_JMPREL:
+			dyn->jmprel = (Elf64_Rela *)elf_vaddr_to_ptr(
+			    elf, phdrs, phnum, d->d_val);
+			break;
+		case DT_PLTRELSZ:
+			dyn->pltrelsz = d->d_val;
+			break;
+		case DT_PLTREL:
+			dyn->pltrel_type = (int)d->d_val;
+			break;
+		case DT_RELR:
+			dyn->relr = (uint64_t *)elf_vaddr_to_ptr(
+			    elf, phdrs, phnum, d->d_val);
+			break;
+		case DT_RELRSZ:
+			dyn->relrsz = d->d_val;
+			break;
+		case DT_PLTGOT:
+			dyn->pltgot = d->d_val;
+			break;
+		}
+	}
+
+	/* Resolve DT_NEEDED string offsets to names. */
+	dyn->n_needed = n_needed;
+	for (i = 0; i < n_needed; i++) {
+		if (dyn->strtab != NULL)
+			dyn->needed[i] = dyn->strtab + needed_off[i];
+		else
+			dyn->needed[i] = NULL;
+	}
+
+	/*
+	 * Compute approximate symbol count.  We don't have DT_HASH
+	 * size readily available; estimate from RELA + JMPREL highest
+	 * symbol index used.
+	 */
+	{
+		uint64_t max_sym = 0;
+		uint64_t n;
+
+		if (dyn->rela != NULL) {
+			n = dyn->relasz / sizeof(Elf64_Rela);
+			for (uint64_t k = 0; k < n; k++) {
+				uint64_t s = ELF64_R_SYM(dyn->rela[k].r_info);
+				if (s > max_sym) max_sym = s;
+			}
+		}
+		if (dyn->jmprel != NULL) {
+			n = dyn->pltrelsz / sizeof(Elf64_Rela);
+			for (uint64_t k = 0; k < n; k++) {
+				uint64_t s = ELF64_R_SYM(dyn->jmprel[k].r_info);
+				if (s > max_sym) max_sym = s;
+			}
+		}
+		dyn->nsyms = max_sym + 1;
+	}
+
+	return 0;
+}
+
 /* ---- Helpers ---- */
 
 static void
@@ -271,6 +440,8 @@ main(int argc, char **argv)
 	uint64_t	 entry;
 	int		 has_text, has_data;
 	int		 i;
+	struct dynamic_info dyn;
+	int		 has_dyn;
 
 	/* Output layout offsets */
 	uint64_t	 hdr_size, text_off;
@@ -345,6 +516,9 @@ main(int argc, char **argv)
 		fprintf(stderr, "%s: no executable PT_LOAD segment\n", argv[1]);
 		free(elf); return 1;
 	}
+
+	/* Parse dynamic section. */
+	has_dyn = (parse_dynamic(elf, phdrs, ehdr->e_phnum, &dyn) == 0);
 
 	entry = ehdr->e_entry;
 
@@ -652,6 +826,21 @@ main(int argc, char **argv)
 		close(fd); free(out); free(elf); return 1;
 	}
 	close(fd);
+
+	if (has_dyn) {
+		uint64_t nrela = dyn.relasz / sizeof(Elf64_Rela);
+		uint64_t njmprel = dyn.pltrelsz / sizeof(Elf64_Rela);
+		uint64_t nrelr = dyn.relrsz / sizeof(uint64_t);
+		printf("dyn: needed=%d syms=%llu rela=%llu jmprel=%llu relr=%llu\n",
+		    dyn.n_needed,
+		    (unsigned long long)dyn.nsyms,
+		    (unsigned long long)nrela,
+		    (unsigned long long)njmprel,
+		    (unsigned long long)nrelr);
+		for (i = 0; i < dyn.n_needed; i++)
+			printf("  needed: %s\n", dyn.needed[i] ?
+			    dyn.needed[i] : "(null)");
+	}
 
 	/* Print metadata for diagnosis. */
 	printf("entry=0x%llx text=0x%llx-0x%llx data=0x%llx-0x%llx\n",
