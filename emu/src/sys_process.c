@@ -63,7 +63,12 @@ do_exit(emu_process_t *proc, uint64_t a0)
 	int	status;
 
 	status = (int)a0;
-	proc->exit_status = (status & 0xff) << 8;
+	/*
+	 * Encode for wait4 (WIFEXITED) and stash on the CPU state so
+	 * native_run returns it to proc_run -> proc_run_exit -> proc_exit,
+	 * which is what the parent's wait4 will read.
+	 */
+	proc->cpu.exit_code = (status & 0xff) << 8;
 	proc->cpu.running = 0;
 
 	LOG_DBG("exit: pid=%d status=%d", proc->pid, status);
