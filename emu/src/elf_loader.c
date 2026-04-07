@@ -234,7 +234,12 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 			dl = dlopen(dylib_path, RTLD_NOW | RTLD_LOCAL);
 			if (dl == NULL) {
-				emu_set_error("elf: dlopen %s: %s",
+				/*
+				 * The file is a Mach-O dylib companion at
+				 * this point, not an ELF.  Use a label that
+				 * matches what the user actually loaded.
+				 */
+				emu_set_error("dlopen %s: %s",
 				    dylib_path, dlerror());
 				goto fail;
 			}

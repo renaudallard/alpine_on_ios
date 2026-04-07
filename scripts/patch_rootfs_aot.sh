@@ -103,24 +103,28 @@ if [ "$failed" -gt 0 ] || [ "$errors" -gt 0 ]; then
 fi
 
 # --------------------------------------------------------------------
-# Mirror relative symlinks from the source rootfs.
+# Materialise relative symlinks from the source rootfs as real
+# file copies.
 #
 # rsync --no-links drops every symlink, but Alpine relies on a few
 # of them for dyld resolution: lib/libc.musl-aarch64.so.1 is a
 # relative symlink to ld-musl-aarch64.so.1 and busybox's
 # DT_NEEDED references the libc name, so the converted dylib has
-# LC_LOAD_DYLIB @rpath/libc.musl-aarch64.so.1.dylib.  Without the
-# symlink (and its .dylib counterpart) dyld fails with
-# "Library not loaded".
+# LC_LOAD_DYLIB @rpath/libc.musl-aarch64.so.1.dylib.
 #
-# For every relative symlink in $SRC_ROOTFS, recreate it in
-# $ROOTFS, and if the target's .dylib companion exists also
-# create a parallel <name>.dylib symlink.  Absolute symlinks are
-# left out because they would be broken inside the app bundle
-# anyway.
+# We CANNOT just recreate the symlinks because iOS installd
+# strips symbolic links from .app bundles when it unpacks the
+# IPA on the device.  The IPA still has them, but the installed
+# bundle does not, and dyld fails with "Library not loaded".
+# So instead we copy the resolved file content under the
+# symlink's name (and its .dylib companion).  Bytes are
+# duplicated, but the bundle works on iOS.
+#
+# Absolute symlinks are skipped because they would be broken
+# inside the app bundle anyway.
 # --------------------------------------------------------------------
 if [ -n "$SRC_ROOTFS" ] && [ -d "$SRC_ROOTFS" ]; then
-	echo "Mirroring symlinks from $SRC_ROOTFS..."
+	echo "Materialising symlinks from $SRC_ROOTFS..."
 	mirrored=0
 	dylib_mirrored=0
 	(cd "$SRC_ROOTFS" && find . -type l) | while IFS= read -r link; do
@@ -136,18 +140,22 @@ if [ -n "$SRC_ROOTFS" ] && [ -d "$SRC_ROOTFS" ]; then
 
 		dst="$ROOTFS/$rel"
 		dstdir=$(dirname "$dst")
+		mkdir -p "$dstdir"
 
-		# Recreate the original symlink if missing.
-		if [ ! -e "$dst" ] && [ ! -L "$dst" ]; then
-			mkdir -p "$dstdir"
-			ln -s "$tgt" "$dst"
+		# Materialise the original file if its target exists.
+		# Use cp -L to follow any chain of symlinks back to a
+		# real file.  Skip if the destination already exists.
+		if [ ! -e "$dst" ] && [ ! -L "$dst" ] && \
+		    [ -f "$dstdir/$tgt" ]; then
+			cp -L "$dstdir/$tgt" "$dst"
 			mirrored=$((mirrored + 1))
 		fi
 
-		# If the target became a .dylib, mirror that too.
+		# If the target became a .dylib, copy that too so dyld
+		# can resolve LC_LOAD_DYLIB by the symlinked name.
 		if [ -f "$dstdir/$tgt.dylib" ] && \
 		    [ ! -e "$dst.dylib" ] && [ ! -L "$dst.dylib" ]; then
-			ln -s "$tgt.dylib" "$dst.dylib"
+			cp -L "$dstdir/$tgt.dylib" "$dst.dylib"
 			dylib_mirrored=$((dylib_mirrored + 1))
 		fi
 		echo "$mirrored $dylib_mirrored" > "$COUNTERS.symlinks"
@@ -155,6 +163,6 @@ if [ -n "$SRC_ROOTFS" ] && [ -d "$SRC_ROOTFS" ]; then
 	if [ -f "$COUNTERS.symlinks" ]; then
 		read mirrored dylib_mirrored < "$COUNTERS.symlinks"
 		rm -f "$COUNTERS.symlinks"
-		echo "Mirrored $mirrored relative symlinks ($dylib_mirrored .dylib companions)."
+		echo "Materialised $mirrored relative symlinks ($dylib_mirrored .dylib companions)."
 	fi
 fi
