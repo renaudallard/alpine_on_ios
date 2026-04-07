@@ -126,6 +126,7 @@ typedef struct {
 #define LC_CODE_SIGNATURE	0x1D
 #define LC_DYLD_INFO_ONLY	0x80000022
 #define LC_DYLD_EXPORTS_TRIE	0x80000033
+#define LC_RPATH		0x8000001C
 
 /* nlist_64 type flags */
 #define N_UNDF		0x0
@@ -188,6 +189,11 @@ typedef struct {
 	uint32_t name_offset, timestamp;
 	uint32_t current_version, compat_version;
 } dylib_command;
+
+typedef struct {
+	uint32_t cmd, cmdsize;
+	uint32_t path_offset;
+} rpath_command;
 
 typedef struct {
 	uint32_t cmd, cmdsize;
@@ -1411,11 +1417,19 @@ main(int argc, char **argv)
 		}
 	}
 
+	/* LC_RPATH for finding dependencies (only if we have any). */
+	const char *rpath_str = "@loader_path";
+	uint32_t rpath_len = (uint32_t)strlen(rpath_str) + 1;
+	uint32_t rpath_cmdsize = ALIGN_UP(12 + rpath_len, 8);
+	int has_rpath = (n_load_dylib > 0);
+
 	/* Count load commands. */
-	uint32_t ncmds = 1 + (has_data ? 1 : 0) + 1 + 8 + n_load_dylib;
+	uint32_t ncmds = 1 + (has_data ? 1 : 0) + 1 + 8 + n_load_dylib +
+	    (has_rpath ? 1 : 0);
 	/* segments + LC_ID_DYLIB + LC_BUILD_VERSION + LC_UUID
 	 * + LC_DYLD_INFO_ONLY + LC_SYMTAB + LC_DYSYMTAB
-	 * + LC_DYLD_EXPORTS_TRIE + LC_CODE_SIGNATURE + n_load_dylib */
+	 * + LC_DYLD_EXPORTS_TRIE + LC_CODE_SIGNATURE + n_load_dylib
+	 * + (LC_RPATH) */
 
 	uint32_t sizeofcmds =
 	    (72 + 80) +				/* __TEXT + 1 section */
@@ -1431,6 +1445,8 @@ main(int argc, char **argv)
 	    16;					/* LC_CODE_SIGNATURE */
 	for (int j = 0; j < n_load_dylib; j++)
 		sizeofcmds += load_dylib_cmdsizes[j];
+	if (has_rpath)
+		sizeofcmds += rpath_cmdsize;
 
 	/* mach_header_64 */
 	mach_header_64 mh = {
@@ -1575,6 +1591,19 @@ main(int argc, char **argv)
 		uint32_t l = (uint32_t)strlen(load_dylib_names[j]) + 1;
 		wbuf(&wp, load_dylib_names[j], l);
 		wpad(&wp, load_dylib_cmdsizes[j] - 24 - l);
+	}
+
+	/* LC_RPATH (@loader_path) so dependencies are found
+	 * relative to where this dylib was loaded from. */
+	if (has_rpath) {
+		rpath_command rc = {
+			.cmd = LC_RPATH,
+			.cmdsize = rpath_cmdsize,
+			.path_offset = 12
+		};
+		wbuf(&wp, &rc, 12);
+		wbuf(&wp, rpath_str, rpath_len);
+		wpad(&wp, rpath_cmdsize - 12 - rpath_len);
 	}
 
 	/*
