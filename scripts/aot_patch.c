@@ -7,6 +7,7 @@
  * Usage: aot_patch <file> [<file> ...]
  */
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -63,31 +64,44 @@ patch_file(const char *path)
 	int		 i;
 
 	fd = open(path, O_RDWR);
-	if (fd < 0)
+	if (fd < 0) {
+		fprintf(stderr, "aot_patch: open(%s): %s\n",
+		    path, strerror(errno));
 		return -1;
+	}
 
-	if (fstat(fd, &st) < 0 || st.st_size < (off_t)sizeof(Elf64_Ehdr)) {
+	if (fstat(fd, &st) < 0) {
+		fprintf(stderr, "aot_patch: fstat(%s): %s\n",
+		    path, strerror(errno));
 		close(fd);
 		return -1;
+	}
+	if (st.st_size < (off_t)sizeof(Elf64_Ehdr)) {
+		/* Not an ELF at all - skip silently, not an error. */
+		close(fd);
+		return 0;
 	}
 
 	map = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE,
 	    MAP_SHARED, fd, 0);
 	if (map == MAP_FAILED) {
+		fprintf(stderr, "aot_patch: mmap(%s): %s\n",
+		    path, strerror(errno));
 		close(fd);
 		return -1;
 	}
 
 	ehdr = (Elf64_Ehdr *)map;
 
-	/* Validate ELF aarch64. */
+	/* Validate ELF aarch64.  A non-aarch64 or non-ELF file is
+	 * not an error; the script may feed us any regular file. */
 	if (memcmp(ehdr->e_ident, ELFMAG, 4) != 0 ||
 	    ehdr->e_ident[4] != ELFCLASS64 ||
 	    ehdr->e_ident[5] != ELFDATA2LSB ||
 	    ehdr->e_machine != EM_AARCH64) {
 		munmap(map, st.st_size);
 		close(fd);
-		return -1;
+		return 0;
 	}
 
 	patched = 0;
@@ -97,6 +111,11 @@ patch_file(const char *path)
 	    ehdr->e_phoff > (uint64_t)st.st_size ||
 	    (uint64_t)ehdr->e_phnum * ehdr->e_phentsize >
 	    (uint64_t)st.st_size - ehdr->e_phoff) {
+		fprintf(stderr, "aot_patch: %s malformed phdr table "
+		    "(phoff=%llu phnum=%u phentsize=%u size=%lld)\n",
+		    path, (unsigned long long)ehdr->e_phoff,
+		    ehdr->e_phnum, ehdr->e_phentsize,
+		    (long long)st.st_size);
 		munmap(map, st.st_size);
 		close(fd);
 		return -1;
