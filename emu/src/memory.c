@@ -262,7 +262,13 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 			tail->base = end;
 			tail->size = tail_size;
 			tail->prot = r->prot;
-			tail->flags = r->flags;
+			/*
+			 * The tail gets its own backing buffer below, so it
+			 * is no longer externally owned even if the parent
+			 * region was.  Strip the flag so region_free_host
+			 * actually frees it.
+			 */
+			tail->flags = r->flags & ~MEM_MAP_EXTERNAL;
 
 			if (NATIVE_MODE(ms)) {
 				int	mflags, mprot;
@@ -305,8 +311,16 @@ unmap_range(mem_space_t *ms, uint64_t addr, uint64_t size)
 
 			trim = end - r->base;
 			if (r->flags & MEM_MAP_EXTERNAL) {
-				/* Cannot modify externally-owned memory.
-				 * Skip the trim - parent retains ownership. */
+				/*
+				 * Cannot free externally-owned memory but we
+				 * must still hide the unmapped prefix from
+				 * subsequent translations.  Adjust base/size
+				 * and advance the host pointer; the parent
+				 * still owns the underlying buffer.
+				 */
+				r->base = end;
+				r->size -= trim;
+				r->host = r->host + trim;
 				continue;
 			}
 			if (!NATIVE_MODE(ms)) {
