@@ -66,6 +66,23 @@ struct emu_sigaction {
 	uint64_t	mask;		/* Blocked signals during handler */
 };
 
+/*
+ * Reference-counted signal handler table shared between threads of
+ * the same thread group (CLONE_SIGHAND).  A plain fork (no
+ * CLONE_SIGHAND) gets a fresh copy via sighand_clone().
+ */
+#include <pthread.h>
+typedef struct sighand {
+	struct emu_sigaction	actions[EMU_NSIG];
+	int			refcount;
+	pthread_mutex_t		lock;	/* protects actions + refcount */
+} sighand_t;
+
+sighand_t	*sighand_create(void);
+sighand_t	*sighand_clone(sighand_t *src);
+sighand_t	*sighand_ref(sighand_t *h);
+void		 sighand_release(sighand_t *h);
+
 /* Forward declaration */
 typedef struct emu_process emu_process_t;
 

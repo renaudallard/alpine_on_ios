@@ -16,6 +16,7 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cpu.h"
@@ -35,22 +36,90 @@
 /* Signals that cannot be caught or blocked. */
 #define UNCATCHABLE	(SIGMASK(EMU_SIGKILL) | SIGMASK(EMU_SIGSTOP))
 
+/* --- Reference-counted sigaction table ----------------------------- */
+
+sighand_t *
+sighand_create(void)
+{
+	sighand_t	*h;
+
+	h = calloc(1, sizeof(*h));
+	if (h == NULL)
+		return (NULL);
+	h->refcount = 1;
+	pthread_mutex_init(&h->lock, NULL);
+	return (h);
+}
+
+sighand_t *
+sighand_clone(sighand_t *src)
+{
+	sighand_t	*h;
+
+	h = sighand_create();
+	if (h == NULL)
+		return (NULL);
+	if (src != NULL) {
+		pthread_mutex_lock(&src->lock);
+		memcpy(h->actions, src->actions, sizeof(h->actions));
+		pthread_mutex_unlock(&src->lock);
+	}
+	return (h);
+}
+
+sighand_t *
+sighand_ref(sighand_t *h)
+{
+	if (h == NULL)
+		return (NULL);
+	pthread_mutex_lock(&h->lock);
+	h->refcount++;
+	pthread_mutex_unlock(&h->lock);
+	return (h);
+}
+
+void
+sighand_release(sighand_t *h)
+{
+	int	last;
+
+	if (h == NULL)
+		return;
+	pthread_mutex_lock(&h->lock);
+	last = (--h->refcount == 0);
+	pthread_mutex_unlock(&h->lock);
+	if (last) {
+		pthread_mutex_destroy(&h->lock);
+		free(h);
+	}
+}
+
 int
 sig_action(emu_process_t *proc, int sig,
     const struct emu_sigaction *act, struct emu_sigaction *oldact)
 {
+	sighand_t	*h;
+
 	if (sig < 1 || sig >= EMU_NSIG)
 		return (-EINVAL);
 
+	h = proc->sighand;
+	if (h == NULL)
+		return (-EINVAL);
+
+	pthread_mutex_lock(&h->lock);
 	if (oldact != NULL)
-		memcpy(oldact, &proc->sigactions[sig], sizeof(*oldact));
+		memcpy(oldact, &h->actions[sig], sizeof(*oldact));
 
 	if (act != NULL) {
 		/* Cannot change handler for SIGKILL or SIGSTOP. */
-		if (sig == EMU_SIGKILL || sig == EMU_SIGSTOP)
+		if (sig == EMU_SIGKILL || sig == EMU_SIGSTOP) {
+			pthread_mutex_unlock(&h->lock);
 			return (-EINVAL);
-		memcpy(&proc->sigactions[sig], act, sizeof(*act));
+		}
+		memcpy(&h->actions[sig], act, sizeof(*act));
 	}
+	pthread_mutex_unlock(&h->lock);
 
 	return (0);
 }
@@ -163,7 +232,19 @@ sig_deliver(emu_process_t *proc)
 	__atomic_and_fetch(&proc->sig_pending, ~SIGMASK(sig),
 	    __ATOMIC_SEQ_CST);
 
-	sa = &proc->sigactions[sig];
+	/*
+	 * Snapshot the sigaction under the sighand lock so we do not
+	 * race with a concurrent sigaction() on another thread in the
+	 * same group.  Everything below operates on the local copy.
+	 */
+	struct emu_sigaction	sa_local;
+
+	if (proc->sighand == NULL)
+		return;
+	pthread_mutex_lock(&proc->sighand->lock);
+	sa_local = proc->sighand->actions[sig];
+	pthread_mutex_unlock(&proc->sighand->lock);
+	sa = &sa_local;
 
 	if (sa->handler == EMU_SIG_IGN)
 		return;
@@ -263,9 +344,13 @@ sig_deliver(emu_process_t *proc)
 		proc->sig_blocked |= SIGMASK(sig);
 	proc->sig_blocked &= ~UNCATCHABLE;
 
-	/* SA_RESETHAND: reset to default after delivery. */
-	if (sa->flags & EMU_SA_RESETHAND)
-		sa->handler = EMU_SIG_DFL;
+	/* SA_RESETHAND: reset to default after delivery.  Write back
+	 * to the shared sighand table under its lock. */
+	if (sa->flags & EMU_SA_RESETHAND) {
+		pthread_mutex_lock(&proc->sighand->lock);
+		proc->sighand->actions[sig].handler = EMU_SIG_DFL;
+		pthread_mutex_unlock(&proc->sighand->lock);
+	}
 
 #undef SIGFRAME_SIZE
 }

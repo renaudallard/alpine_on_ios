@@ -113,8 +113,21 @@ do_clone(emu_process_t *proc, uint64_t flags, uint64_t newsp,
 		child->state = PROC_RUNNING;
 		child->vfs = proc->vfs;
 		snprintf(child->cwd, sizeof(child->cwd), "%s", proc->cwd);
-		memcpy(child->sigactions, proc->sigactions,
-		    sizeof(child->sigactions));
+
+		/*
+		 * Signal mask is inherited across clone regardless of
+		 * CLONE_SIGHAND (POSIX).  The sighand *table* is either
+		 * shared (CLONE_SIGHAND) or cloned.
+		 */
+		child->sig_blocked = proc->sig_blocked;
+		if (flags & LINUX_CLONE_SIGHAND)
+			child->sighand = sighand_ref(proc->sighand);
+		else
+			child->sighand = sighand_clone(proc->sighand);
+		if (child->sighand == NULL) {
+			free(child);
+			return -LINUX_ENOMEM;
+		}
 
 		/* Share memory space (increment refcount). */
 		child->mem = proc->mem;
@@ -129,6 +142,7 @@ do_clone(emu_process_t *proc, uint64_t flags, uint64_t newsp,
 		} else {
 			child->fds = fd_table_clone(proc->fds);
 			if (child->fds == NULL) {
+				sighand_release(child->sighand);
 				mem_space_destroy(child->mem);
 				free(child);
 				return -LINUX_ENOMEM;

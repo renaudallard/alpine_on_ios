@@ -78,8 +78,12 @@ typedef struct emu_process {
 
 	char		cwd[PATH_MAX];
 
-	/* Signal state */
-	struct emu_sigaction	sigactions[EMU_NSIG];
+	/*
+	 * Signal state.  sighand is refcounted and shared between
+	 * threads of the same thread group (CLONE_SIGHAND); a plain
+	 * fork gets its own copy via sighand_clone.
+	 */
+	sighand_t		*sighand;
 	uint64_t		sig_pending;
 	uint64_t		sig_blocked;
 	void			*sig_altstack;

@@ -129,18 +129,24 @@ proc_create(emu_process_t *parent)
 		p->egid = parent->egid;
 		p->umask_val = parent->umask_val;
 		snprintf(p->cwd, sizeof(p->cwd), "%s", parent->cwd);
-		memcpy(p->sigactions, parent->sigactions,
-		    sizeof(p->sigactions));
+		/* fork semantics: child gets its own copy of the
+		 * sighand table, independent of the parent's. */
+		p->sighand = sighand_clone(parent->sighand);
+		p->sig_blocked = parent->sig_blocked;
 		p->vfs = parent->vfs;
 		p->fds = fd_table_clone(parent->fds);
 	} else {
 		p->pgid = p->pid;
 		p->sid = p->pid;
 		snprintf(p->cwd, sizeof(p->cwd), "/");
+		p->sighand = sighand_create();
 		p->fds = fd_table_create();
 	}
 
-	if (p->fds == NULL) {
+	if (p->fds == NULL || p->sighand == NULL) {
+		sighand_release(p->sighand);
+		if (p->fds != NULL)
+			fd_table_release(p->fds);
 		free(p);
 		return (NULL);
 	}
@@ -544,12 +550,30 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	/* Close cloexec file descriptors. */
 	fd_close_cloexec(proc->fds);
 
-	/* Reset signal handlers to defaults. */
-	for (int i = 0; i < EMU_NSIG; i++) {
-		if (proc->sigactions[i].handler != EMU_SIG_IGN)
-			proc->sigactions[i].handler = EMU_SIG_DFL;
-		proc->sigactions[i].flags = 0;
-		proc->sigactions[i].mask = 0;
+	/*
+	 * execve semantics: caught handlers revert to SIG_DFL,
+	 * ignored ones keep SIG_IGN, and (per POSIX) the sighand
+	 * table is un-shared so the new image does not continue
+	 * to share sigactions with other threads of the old group.
+	 */
+	{
+		sighand_t	*h, *old;
+
+		old = proc->sighand;
+		h = sighand_create();
+		if (h != NULL && old != NULL) {
+			int	i;
+
+			pthread_mutex_lock(&old->lock);
+			for (i = 0; i < EMU_NSIG; i++) {
+				if (old->actions[i].handler == EMU_SIG_IGN)
+					h->actions[i].handler = EMU_SIG_IGN;
+				/* everything else starts as zeroed (SIG_DFL) */
+			}
+			pthread_mutex_unlock(&old->lock);
+		}
+		proc->sighand = h;
+		sighand_release(old);
 	}
 
 	LOG_INFO("proc: execve pid %d: %s entry=0x%lx sp=0x%lx",
@@ -579,6 +603,8 @@ proc_destroy(emu_process_t *proc)
 		mem_space_destroy(proc->mem);
 	if (proc->fds != NULL)
 		fd_table_release(proc->fds);
+	sighand_release(proc->sighand);
+	proc->sighand = NULL;
 #if defined(__APPLE__)
 	if (proc->dl_binary != NULL)
 		dlclose(proc->dl_binary);
