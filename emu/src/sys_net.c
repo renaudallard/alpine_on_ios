@@ -253,9 +253,15 @@ do_accept(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 
 		if (sslen > sizeof(ss))
 			sslen = sizeof(ss);
-		mem_copy_to(proc->mem, a1, &ss, sslen);
+		if (mem_copy_to(proc->mem, a1, &ss, sslen) != 0) {
+			fd_close(proc->fds, efd);
+			return -LINUX_EFAULT;
+		}
 		len = (uint32_t)sslen;
-		mem_copy_to(proc->mem, a2, &len, sizeof(len));
+		if (mem_copy_to(proc->mem, a2, &len, sizeof(len)) != 0) {
+			fd_close(proc->fds, efd);
+			return -LINUX_EFAULT;
+		}
 	}
 
 	return efd;
@@ -303,9 +309,11 @@ do_getsockname(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return neg_errno_net(errno);
 
 	if (a1 != 0) {
-		mem_copy_to(proc->mem, a1, &ss, sslen);
+		if (mem_copy_to(proc->mem, a1, &ss, sslen) != 0)
+			return -LINUX_EFAULT;
 		len = (uint32_t)sslen;
-		mem_copy_to(proc->mem, a2, &len, sizeof(len));
+		if (mem_copy_to(proc->mem, a2, &len, sizeof(len)) != 0)
+			return -LINUX_EFAULT;
 	}
 	return 0;
 }
@@ -329,9 +337,11 @@ do_getpeername(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return neg_errno_net(errno);
 
 	if (a1 != 0) {
-		mem_copy_to(proc->mem, a1, &ss, sslen);
+		if (mem_copy_to(proc->mem, a1, &ss, sslen) != 0)
+			return -LINUX_EFAULT;
 		len = (uint32_t)sslen;
-		mem_copy_to(proc->mem, a2, &len, sizeof(len));
+		if (mem_copy_to(proc->mem, a2, &len, sizeof(len)) != 0)
+			return -LINUX_EFAULT;
 	}
 	return 0;
 }
@@ -403,9 +413,11 @@ do_recvfrom(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	if (a4 != 0 && a5 != 0) {
 		uint32_t	len;
 
-		mem_copy_to(proc->mem, a4, &ss, sslen);
+		if (mem_copy_to(proc->mem, a4, &ss, sslen) != 0)
+			return -LINUX_EFAULT;
 		len = (uint32_t)sslen;
-		mem_copy_to(proc->mem, a5, &len, sizeof(len));
+		if (mem_copy_to(proc->mem, a5, &len, sizeof(len)) != 0)
+			return -LINUX_EFAULT;
 	}
 
 	return n;
@@ -610,9 +622,19 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		hmsg.msg_iovlen = (size_t)iov_count;
 
 		/* Read msg_name pointer from guest msghdr. */
-		mem_read64(proc->mem, a1, &msg_name);
+		if (mem_read64(proc->mem, a1, &msg_name) != 0) {
+			free(hiov);
+			free(hbufs);
+			return -LINUX_EFAULT;
+		}
+		msg_namelen_val = 0;
 		if (msg_name != 0) {
-			mem_read64(proc->mem, a1 + 8, &msg_namelen_val);
+			if (mem_read64(proc->mem, a1 + 8,
+			    &msg_namelen_val) != 0) {
+				free(hiov);
+				free(hbufs);
+				return -LINUX_EFAULT;
+			}
 			hmsg.msg_name = &ss;
 			hmsg.msg_namelen = sizeof(ss);
 		}
@@ -630,14 +652,20 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 			if (wlen > (uint32_t)msg_namelen_val)
 				wlen = (uint32_t)msg_namelen_val;
 			if (wlen > 0 && mem_translate(proc->mem, msg_name,
-			    wlen, MEM_PROT_WRITE) != NULL)
-				mem_copy_to(proc->mem, msg_name, &ss, wlen);
-			mem_write32(proc->mem, a1 + 8, hmsg.msg_namelen);
+			    wlen, MEM_PROT_WRITE) != NULL) {
+				if (mem_copy_to(proc->mem, msg_name,
+				    &ss, wlen) != 0)
+					return -LINUX_EFAULT;
+			}
+			if (mem_write32(proc->mem, a1 + 8,
+			    hmsg.msg_namelen) != 0)
+				return -LINUX_EFAULT;
 		}
 
 		/* Write back msg_flags. */
-		mem_write32(proc->mem, a1 + 48,
-		    (uint32_t)hmsg.msg_flags);
+		if (mem_write32(proc->mem, a1 + 48,
+		    (uint32_t)hmsg.msg_flags) != 0)
+			return -LINUX_EFAULT;
 
 		return n;
 	}
