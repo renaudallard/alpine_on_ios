@@ -565,6 +565,8 @@ do_readv(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	ssize_t		total;
 
 	fd = (int)a0;
+	if ((int64_t)a2 < 0 || a2 > 1024)	/* Linux IOV_MAX */
+		return -LINUX_EINVAL;
 	iovcnt = (int)a2;
 	fde = fd_get(proc->fds, fd);
 	if (fde == NULL || fde->type == FD_NONE)
@@ -607,6 +609,8 @@ do_writev(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	ssize_t		total;
 
 	fd = (int)a0;
+	if ((int64_t)a2 < 0 || a2 > 1024)	/* Linux IOV_MAX */
+		return -LINUX_EINVAL;
 	iovcnt = (int)a2;
 	fde = fd_get(proc->fds, fd);
 	if (fde == NULL || fde->type == FD_NONE)
