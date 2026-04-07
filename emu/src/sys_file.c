@@ -933,7 +933,8 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 			if (esz > 0 && esz <= 256) {
 				uint8_t buf[256];
 				memset(buf, 0, esz);
-				mem_copy_to(proc->mem, a2, buf, esz);
+				if (mem_copy_to(proc->mem, a2, buf, esz) != 0)
+					return -LINUX_EFAULT;
 			}
 			return 0;
 		}
