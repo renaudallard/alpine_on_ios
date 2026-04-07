@@ -1212,12 +1212,15 @@ do_getdents64(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 			else if (de->d_type == DT_SOCK) dtype = LINUX_DT_SOCK;
 #endif
 
-			mem_write64(proc->mem, pos, de->d_ino);
-			mem_write64(proc->mem, pos + 8, 0);	/* d_off */
-			mem_write16(proc->mem, pos + 16, reclen);
-			mem_write8(proc->mem, pos + 18, dtype);
-			mem_copy_to(proc->mem, pos + 19, de->d_name,
-			    namelen + 1);
+			if (mem_write64(proc->mem, pos, de->d_ino) != 0 ||
+			    mem_write64(proc->mem, pos + 8, 0) != 0 ||
+			    mem_write16(proc->mem, pos + 16, reclen) != 0 ||
+			    mem_write8(proc->mem, pos + 18, dtype) != 0 ||
+			    mem_copy_to(proc->mem, pos + 19, de->d_name,
+			    namelen + 1) != 0) {
+				closedir(dp);
+				return -LINUX_EFAULT;
+			}
 
 			pos += reclen;
 		}
@@ -2509,7 +2512,8 @@ do_pselect6(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 			    FD_ISSET(fde->real_fd, &rfds))
 				bits_buf[i / 8] |= (uint8_t)(1 << (i % 8));
 		}
-		mem_copy_to(proc->mem, a1, bits_buf, 128);
+		if (mem_copy_to(proc->mem, a1, bits_buf, 128) != 0)
+			return -LINUX_EFAULT;
 	}
 
 	if (a2 != 0) {
@@ -2523,7 +2527,8 @@ do_pselect6(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 			    FD_ISSET(fde->real_fd, &wfds))
 				bits_buf[i / 8] |= (uint8_t)(1 << (i % 8));
 		}
-		mem_copy_to(proc->mem, a2, bits_buf, 128);
+		if (mem_copy_to(proc->mem, a2, bits_buf, 128) != 0)
+			return -LINUX_EFAULT;
 	}
 
 	if (a3 != 0) {
@@ -2537,7 +2542,8 @@ do_pselect6(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 			    FD_ISSET(fde->real_fd, &efds))
 				bits_buf[i / 8] |= (uint8_t)(1 << (i % 8));
 		}
-		mem_copy_to(proc->mem, a3, bits_buf, 128);
+		if (mem_copy_to(proc->mem, a3, bits_buf, 128) != 0)
+			return -LINUX_EFAULT;
 	}
 
 	return n;
@@ -2700,10 +2706,12 @@ sys_file(emu_process_t *proc, int nr, uint64_t a0, uint64_t a1,
 			total += w;
 			remain -= (uint64_t)w;
 		}
-		if (has_off_in)
-			mem_write64(proc->mem, a1, off_in);
-		if (has_off_out)
-			mem_write64(proc->mem, a3, off_out);
+		if (has_off_in &&
+		    mem_write64(proc->mem, a1, off_in) != 0)
+			return total > 0 ? total : -LINUX_EFAULT;
+		if (has_off_out &&
+		    mem_write64(proc->mem, a3, off_out) != 0)
+			return total > 0 ? total : -LINUX_EFAULT;
 		return total > 0 ? total : (total == 0 && a4 > 0 ?
 		    neg_errno(errno) : 0);
 	}
