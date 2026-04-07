@@ -400,10 +400,14 @@ do_getrandom(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	}
 
 	n = read(fd, buf, (size_t)a1);
-	close(fd);
-
-	if (n < 0)
+	if (n < 0) {
+		int saved_errno = errno;
+		close(fd);
+		if (saved_errno == EINTR)
+			return -LINUX_EINTR;
 		return -LINUX_EINVAL;
+	}
+	close(fd);
 	return n;
 }
 
