@@ -130,12 +130,18 @@ vfs_dev_open(void *ctx, const char *path, int flags, int mode)
 	}
 
 	/* /dev/stdin, /dev/stdout, /dev/stderr: dup the fd. */
-	if (strcmp(path, "/stdin") == 0)
-		return (dup(STDIN_FILENO));
-	if (strcmp(path, "/stdout") == 0)
-		return (dup(STDOUT_FILENO));
-	if (strcmp(path, "/stderr") == 0)
-		return (dup(STDERR_FILENO));
+	if (strcmp(path, "/stdin") == 0) {
+		fd = dup(STDIN_FILENO);
+		return (fd < 0 ? -errno : fd);
+	}
+	if (strcmp(path, "/stdout") == 0) {
+		fd = dup(STDOUT_FILENO);
+		return (fd < 0 ? -errno : fd);
+	}
+	if (strcmp(path, "/stderr") == 0) {
+		fd = dup(STDERR_FILENO);
+		return (fd < 0 ? -errno : fd);
+	}
 
 	/* /dev/fd/N: dup the specified fd. */
 	if (strncmp(path, "/fd/", 4) == 0) {
