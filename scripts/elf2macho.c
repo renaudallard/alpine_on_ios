@@ -304,6 +304,150 @@ elf_vaddr_to_ptr(uint8_t *elf, Elf64_Phdr *phdrs, int phnum, uint64_t vaddr)
 	return NULL;
 }
 
+/* ---- Mach-O symbol table builder ---- */
+
+#define MAX_SYMS 4096
+
+struct mach_symbol {
+	const char	*name;		/* without leading underscore */
+	uint64_t	 vaddr;		/* unshifted, ELF vaddr */
+	uint8_t		 type;		/* nlist_64.n_type */
+	uint8_t		 sect;		/* nlist_64.n_sect (1-based) */
+	uint16_t	 desc;		/* library ordinal in low 8 bits */
+	uint32_t	 strx;		/* string table offset (set by build) */
+};
+
+struct symtab_builder {
+	struct mach_symbol *syms;	/* sorted: locals, exts, undefs */
+	int		 nsyms;
+	int		 ilocal, nlocal;
+	int		 iext, next;
+	int		 iundef, nundef;
+	uint8_t		*strtab;
+	uint32_t	 strsz;
+	uint32_t	 strcap;
+};
+
+static uint32_t
+strtab_add(struct symtab_builder *sb, const char *name)
+{
+	size_t len = strlen(name) + 1;
+	if (sb->strsz + len > sb->strcap) {
+		sb->strcap = (sb->strcap + len + 4096) * 2;
+		sb->strtab = realloc(sb->strtab, sb->strcap);
+	}
+	uint32_t off = sb->strsz;
+	memcpy(sb->strtab + off, name, len);
+	sb->strsz += len;
+	return off;
+}
+
+/*
+ * Build Mach-O symbol table from ELF dynamic symbols.
+ * - Defined globals → external defs (exported)
+ * - Undefined globals → undefs (imported, will be bound)
+ * - Locals are skipped (Mach-O doesn't need them for dyld)
+ */
+static int
+build_symtab(struct dynamic_info *dyn, struct symtab_builder *sb)
+{
+	uint64_t i;
+	int idx = 0;
+
+	memset(sb, 0, sizeof(*sb));
+	if (dyn->symtab == NULL || dyn->strtab == NULL || dyn->nsyms == 0)
+		return 0;
+
+	sb->syms = calloc(dyn->nsyms + 1, sizeof(*sb->syms));
+	if (sb->syms == NULL) return -1;
+
+	/* Initialize string table with leading null. */
+	sb->strcap = 4096;
+	sb->strtab = calloc(1, sb->strcap);
+	if (sb->strtab == NULL) { free(sb->syms); return -1; }
+	sb->strsz = 1;	/* index 0 is empty string */
+
+	/* First pass: external defined symbols. */
+	sb->iext = idx;
+	for (i = 1; i < dyn->nsyms; i++) {
+		Elf64_Sym *s = &dyn->symtab[i];
+		int bind = ELF64_ST_BIND(s->st_info);
+		int type = ELF64_ST_TYPE(s->st_info);
+		const char *name;
+
+		if (bind != STB_GLOBAL && bind != STB_WEAK)
+			continue;
+		if (s->st_shndx == 0)	/* SHN_UNDEF */
+			continue;
+		if (type == STT_SECTION || type == STT_FILE)
+			continue;
+		if (s->st_name >= dyn->strsz)
+			continue;
+		name = dyn->strtab + s->st_name;
+		if (name[0] == '\0')
+			continue;
+
+		sb->syms[idx].name = name;
+		sb->syms[idx].vaddr = s->st_value;
+		sb->syms[idx].type = N_SECT | N_EXT;
+		/* Section number: 1=__text, 2=__data (Mach-O 1-based). */
+		sb->syms[idx].sect = (type == STT_FUNC) ? 1 : 2;
+		sb->syms[idx].desc = 0;
+		idx++;
+	}
+	sb->next = idx - sb->iext;
+
+	/* Second pass: undefined symbols (imports). */
+	sb->iundef = idx;
+	for (i = 1; i < dyn->nsyms; i++) {
+		Elf64_Sym *s = &dyn->symtab[i];
+		int bind = ELF64_ST_BIND(s->st_info);
+		const char *name;
+
+		if (bind != STB_GLOBAL && bind != STB_WEAK)
+			continue;
+		if (s->st_shndx != 0)	/* not SHN_UNDEF */
+			continue;
+		if (s->st_name >= dyn->strsz)
+			continue;
+		name = dyn->strtab + s->st_name;
+		if (name[0] == '\0')
+			continue;
+
+		sb->syms[idx].name = name;
+		sb->syms[idx].vaddr = 0;
+		sb->syms[idx].type = N_UNDF | N_EXT;
+		sb->syms[idx].sect = 0;
+		/* Library ordinal 1 = first LC_LOAD_DYLIB */
+		sb->syms[idx].desc = 0x0100;
+		idx++;
+	}
+	sb->nundef = idx - sb->iundef;
+	sb->nsyms = idx;
+
+	/* Build string table: each symbol gets an underscore prefix. */
+	for (i = 0; i < (uint64_t)sb->nsyms; i++) {
+		char buf[256];
+		const char *name = sb->syms[i].name;
+		size_t len = strlen(name);
+		if (len > sizeof(buf) - 2) len = sizeof(buf) - 2;
+		buf[0] = '_';
+		memcpy(buf + 1, name, len);
+		buf[len + 1] = '\0';
+		sb->syms[i].strx = strtab_add(sb, buf);
+	}
+
+	return 0;
+}
+
+static void
+free_symtab(struct symtab_builder *sb)
+{
+	free(sb->syms);
+	free(sb->strtab);
+	memset(sb, 0, sizeof(*sb));
+}
+
 /*
  * Parse PT_DYNAMIC segment and fill struct dynamic_info.
  * Returns 0 on success, -1 if no dynamic section found.
@@ -441,6 +585,7 @@ main(int argc, char **argv)
 	int		 has_text, has_data;
 	int		 i;
 	struct dynamic_info dyn;
+	struct symtab_builder sb;
 	int		 has_dyn;
 
 	/* Output layout offsets */
@@ -519,6 +664,13 @@ main(int argc, char **argv)
 
 	/* Parse dynamic section. */
 	has_dyn = (parse_dynamic(elf, phdrs, ehdr->e_phnum, &dyn) == 0);
+	memset(&sb, 0, sizeof(sb));
+	if (has_dyn) {
+		if (build_symtab(&dyn, &sb) != 0) {
+			fprintf(stderr, "%s: build_symtab failed\n", argv[1]);
+			free(elf); return 1;
+		}
+	}
 
 	entry = ehdr->e_entry;
 
@@ -840,6 +992,8 @@ main(int argc, char **argv)
 		for (i = 0; i < dyn.n_needed; i++)
 			printf("  needed: %s\n", dyn.needed[i] ?
 			    dyn.needed[i] : "(null)");
+		printf("symtab: nsyms=%d (ext=%d undef=%d) strsz=%u\n",
+		    sb.nsyms, sb.next, sb.nundef, sb.strsz);
 	}
 
 	/* Print metadata for diagnosis. */
@@ -850,6 +1004,7 @@ main(int argc, char **argv)
 	    (unsigned long long)data_seg_vmaddr,
 	    (unsigned long long)(data_seg_vmaddr + data_seg_vmsize));
 
+	free_symtab(&sb);
 	free(out);
 	free(elf);
 	return 0;
