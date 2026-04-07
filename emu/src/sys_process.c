@@ -159,23 +159,27 @@ do_clone(emu_process_t *proc, uint64_t flags, uint64_t newsp,
 		pthread_cond_init(&child->wait_cond, NULL);
 		pthread_cond_init(&child->reap_cond, NULL);
 
-		/* Handle CLONE_CHILD_SETTID. */
+		/*
+		 * Handle CLONE_CHILD_SETTID and CLONE_PARENT_SETTID.
+		 * The clone has already committed at this point so we
+		 * cannot meaningfully fail it on a bad tid pointer; the
+		 * Linux kernel itself only does a best-effort put_user
+		 * here.  Cast to (void) to record the intent.
+		 */
 		if ((flags & LINUX_CLONE_CHILD_SETTID) &&
 		    child_tidptr != 0) {
-			mem_write32(child->mem, child_tidptr,
+			(void)mem_write32(child->mem, child_tidptr,
 			    (uint32_t)child->tid);
 		}
 
-		/* Handle CLONE_CHILD_CLEARTID. */
 		if ((flags & LINUX_CLONE_CHILD_CLEARTID) &&
 		    child_tidptr != 0) {
 			child->clear_child_tid = child_tidptr;
 		}
 
-		/* Handle CLONE_PARENT_SETTID. */
 		if ((flags & LINUX_CLONE_PARENT_SETTID) &&
 		    parent_tidptr != 0) {
-			mem_write32(proc->mem, parent_tidptr,
+			(void)mem_write32(proc->mem, parent_tidptr,
 			    (uint32_t)child->tid);
 		}
 
@@ -216,17 +220,17 @@ do_clone(emu_process_t *proc, uint64_t flags, uint64_t newsp,
 	if (flags & LINUX_CLONE_SETTLS)
 		child->cpu.tpidr_el0 = tls;
 
-	/* Handle CLONE_CHILD_SETTID. */
+	/* See the CLONE_VM path above for why these are best-effort. */
 	if ((flags & LINUX_CLONE_CHILD_SETTID) && child_tidptr != 0)
-		mem_write32(child->mem, child_tidptr, (uint32_t)child->tid);
+		(void)mem_write32(child->mem, child_tidptr,
+		    (uint32_t)child->tid);
 
-	/* Handle CLONE_CHILD_CLEARTID. */
 	if ((flags & LINUX_CLONE_CHILD_CLEARTID) && child_tidptr != 0)
 		child->clear_child_tid = child_tidptr;
 
-	/* Handle CLONE_PARENT_SETTID. */
 	if ((flags & LINUX_CLONE_PARENT_SETTID) && parent_tidptr != 0)
-		mem_write32(proc->mem, parent_tidptr, (uint32_t)child->tid);
+		(void)mem_write32(proc->mem, parent_tidptr,
+		    (uint32_t)child->tid);
 
 	LOG_DBG("clone: fork parent=%d child=%d flags=0x%llx",
 	    proc->pid, child->pid, (unsigned long long)flags);
