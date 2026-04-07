@@ -34,6 +34,7 @@
 
 /* Linux errno */
 #define LINUX_ENOENT	2
+#define LINUX_EINTR	4
 #define LINUX_EBADF	9
 #define LINUX_ENOMEM	12
 #define LINUX_EFAULT	14
@@ -288,6 +289,7 @@ static int64_t
 do_nanosleep(emu_process_t *proc, uint64_t a0, uint64_t a1)
 {
 	struct timespec	req, rem;
+	int		ret;
 
 	if (a0 != 0) {
 		uint64_t	sec, nsec;
@@ -302,11 +304,27 @@ do_nanosleep(emu_process_t *proc, uint64_t a0, uint64_t a1)
 		return -LINUX_EINVAL;
 	}
 
-	nanosleep(&req, &rem);
+	memset(&rem, 0, sizeof(rem));
+	ret = nanosleep(&req, &rem);
+
+	/*
+	 * On EINTR write the remaining time back so the guest can
+	 * resume the sleep, and surface the error so libc restarts.
+	 */
+	if (ret < 0) {
+		int saved_errno = errno;
+		if (a1 != 0) {
+			mem_write64(proc->mem, a1, (uint64_t)rem.tv_sec);
+			mem_write64(proc->mem, a1 + 8, (uint64_t)rem.tv_nsec);
+		}
+		if (saved_errno == EINTR)
+			return -LINUX_EINTR;
+		return -LINUX_EINVAL;
+	}
 
 	if (a1 != 0) {
-		mem_write64(proc->mem, a1, (uint64_t)rem.tv_sec);
-		mem_write64(proc->mem, a1 + 8, (uint64_t)rem.tv_nsec);
+		mem_write64(proc->mem, a1, 0);
+		mem_write64(proc->mem, a1 + 8, 0);
 	}
 
 	return 0;
