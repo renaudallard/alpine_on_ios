@@ -192,12 +192,15 @@ do_sigaltstack(emu_process_t *proc, uint64_t a0, uint64_t a1)
 	/* Write old stack if requested. */
 	if (a1 != 0) {
 		/* struct sigaltstack: ss_sp(8), ss_flags(4), pad(4), ss_size(8) */
-		mem_write64(proc->mem, a1,
-		    (uint64_t)(uintptr_t)proc->sig_altstack);
-		mem_write32(proc->mem, a1 + 8,
-		    proc->sig_altstack != NULL ? 0 : 2);	/* SS_DISABLE=2 */
-		mem_write64(proc->mem, a1 + 16,
-		    (uint64_t)proc->sig_altstack_size);
+		if (mem_write64(proc->mem, a1,
+		    (uint64_t)(uintptr_t)proc->sig_altstack) != 0)
+			return -LINUX_EFAULT;
+		if (mem_write32(proc->mem, a1 + 8,
+		    proc->sig_altstack != NULL ? 0 : 2) != 0)	/* SS_DISABLE=2 */
+			return -LINUX_EFAULT;
+		if (mem_write64(proc->mem, a1 + 16,
+		    (uint64_t)proc->sig_altstack_size) != 0)
+			return -LINUX_EFAULT;
 	}
 
 	/* Set new stack if provided. */
