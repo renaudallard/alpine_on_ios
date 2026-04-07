@@ -22,3 +22,4 @@ tmp/
 *.swp
 *~
 scripts/.aot_patch
+scripts/.elf2macho
