@@ -405,9 +405,17 @@ struct mach_symbol {
 	uint64_t	 vaddr;		/* unshifted, ELF vaddr */
 	uint8_t		 type;		/* nlist_64.n_type */
 	uint8_t		 sect;		/* nlist_64.n_sect (1-based) */
-	uint16_t	 desc;		/* library ordinal in low 8 bits */
+	uint16_t	 desc;		/* library ordinal << 8 | flags */
 	uint32_t	 strx;		/* string table offset (set by build) */
+	int		 weak;		/* 1 if STB_WEAK undef */
 };
+
+/* nlist_64 n_desc flags (see <mach-o/nlist.h>). */
+#define N_WEAK_REF	0x0040
+#define N_WEAK_DEF	0x0080
+
+/* BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM imm bits. */
+#define BIND_SYMBOL_FLAGS_WEAK_IMPORT	0x1
 
 struct symtab_builder {
 	struct mach_symbol *syms;	/* sorted: locals, exts, undefs */
@@ -527,8 +535,17 @@ build_symtab(struct dynamic_info *dyn, struct symtab_builder *sb,
 		sb->syms[idx].vaddr = 0;
 		sb->syms[idx].type = N_UNDF | N_EXT;
 		sb->syms[idx].sect = 0;
-		/* Library ordinal 1 = first LC_LOAD_DYLIB */
+		/*
+		 * desc: library ordinal in the high byte (1 = first
+		 * LC_LOAD_DYLIB) and flags in the low byte.  Mark
+		 * STB_WEAK undefs with N_WEAK_REF so dyld treats them
+		 * as weak imports and accepts them remaining unresolved
+		 * (NULL) at load time, matching ELF semantics.
+		 */
 		sb->syms[idx].desc = 0x0100;
+		sb->syms[idx].weak = (bind == STB_WEAK);
+		if (sb->syms[idx].weak)
+			sb->syms[idx].desc |= N_WEAK_REF;
 		idx++;
 	}
 	sb->nundef = idx - sb->iundef;
@@ -701,12 +718,22 @@ build_binds(struct dynamic_info *dyn, struct symtab_builder *sb,
 				char buf[256];
 				const char *name = sb->syms[undef_idx].name;
 				size_t len = strlen(name);
+				uint8_t flags = 0;
 				if (len > sizeof(buf) - 2) len = sizeof(buf) - 2;
 				buf[0] = '_';
 				memcpy(buf + 1, name, len);
 				buf[len + 1] = '\0';
+				/*
+				 * Weak undef in the ELF -> weak import in
+				 * Mach-O.  dyld will leave it as NULL if
+				 * the symbol is not exported by any loaded
+				 * dylib instead of failing the load.
+				 */
+				if (sb->syms[undef_idx].weak)
+					flags |= BIND_SYMBOL_FLAGS_WEAK_IMPORT;
 				bind_byte(bb,
-				    BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM | 0);
+				    BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM |
+				    flags);
 				bind_str(bb, buf);
 			}
 			bind_byte(bb,
