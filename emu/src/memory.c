@@ -38,19 +38,6 @@
 /* True when guest addr == host addr (AOT native mode). */
 #define NATIVE_MODE(ms)	((ms)->aot_mode)
 
-/* Host page size (may differ from guest 4K on macOS 16K). */
-static uint64_t
-host_page_size(void)
-{
-	static uint64_t	cached;
-
-	if (cached == 0) {
-		long sz = sysconf(_SC_PAGESIZE);
-		cached = (sz > 0) ? (uint64_t)sz : PAGE_SIZE;
-	}
-	return cached;
-}
-
 static uint64_t
 page_align_down(uint64_t addr)
 {
