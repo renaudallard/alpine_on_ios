@@ -26,10 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Build AOT tools
-        run: |
-          cc -O2 -o scripts/.aot_patch scripts/aot_patch.c
-          cc -O2 -o scripts/.elf2macho scripts/elf2macho.c
+      # aot_patch is now a Python script (scripts/aot_patch.py),
+      # nothing to compile.  build_aot_repo.sh builds and ad-hoc
+      # codesigns elf2macho on first use.  This workflow runs
+      # OUTSIDE xcodebuild so it is not affected by the script
+      # phase sandbox kill that hit the iOS build.
 
       - name: Restore previous repository from branch
         run: |
