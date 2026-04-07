@@ -15,18 +15,13 @@ if [ -z "$ROOTFS" ] || [ ! -d "$ROOTFS" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-AOT_PATCH="$SCRIPT_DIR/.aot_patch"
+AOT_PATCH="$SCRIPT_DIR/aot_patch.py"
 ELF2MACHO="$SCRIPT_DIR/.elf2macho"
 
-# Build tools if not present.  macOS 26 SIGKILLs freshly-compiled
-# unsigned binaries, so ad-hoc codesign each tool after building.
-if [ ! -x "$AOT_PATCH" ]; then
-	echo "Building aot_patch tool..."
-	cc -O2 -o "$AOT_PATCH" "$SCRIPT_DIR/aot_patch.c"
-	if command -v codesign >/dev/null 2>&1; then
-		codesign --force --sign - "$AOT_PATCH" 2>/dev/null || true
-	fi
-fi
+# aot_patch is a Python script so it needs no build step.
+# elf2macho is still C; macOS 26 SIGKILLs freshly-compiled
+# unsigned binaries, but elf2macho runs for much longer than
+# aot_patch so ad-hoc signing it is enough to satisfy the kernel.
 if [ ! -x "$ELF2MACHO" ]; then
 	echo "Building elf2macho tool..."
 	cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"

@@ -17,7 +17,7 @@ shift 3 2>/dev/null || true
 MIRROR="http://dl-cdn.alpinelinux.org/alpine"
 REPOS="main community"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-AOT_PATCH="$SCRIPT_DIR/.aot_patch"
+AOT_PATCH="$SCRIPT_DIR/aot_patch.py"
 WORKDIR="$(mktemp -d)"
 OUTDIR="$(mkdir -p "$OUTDIR" && cd "$OUTDIR" && pwd)"
 
@@ -44,15 +44,14 @@ if [ $# -eq 0 ]; then
 	    networkmanager bash coreutils
 fi
 
-# Build tools.
-if [ ! -x "$AOT_PATCH" ]; then
-	echo "Building aot_patch tool..."
-	cc -O2 -o "$AOT_PATCH" "$SCRIPT_DIR/aot_patch.c"
-fi
+# aot_patch is a Python script (no build needed).
 ELF2MACHO="$SCRIPT_DIR/.elf2macho"
 if [ ! -x "$ELF2MACHO" ]; then
 	echo "Building elf2macho tool..."
 	cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
+	if command -v codesign >/dev/null 2>&1; then
+		codesign --force --sign - "$ELF2MACHO" 2>/dev/null || true
+	fi
 fi
 
 # Step 1: Resolve all dependencies using Alpine's package database.
