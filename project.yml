@@ -46,9 +46,15 @@ targets:
             rm -rf "$DEST"
             rsync -a --no-links "$ROOTFS/" "$DEST/"
             echo "AOT-patching ELF binaries..."
-            # ELF2MACHO_PREBUILT may be set by CI to point at a
-            # binary built outside of xcodebuild (Xcode's script
-            # phase environment kills freshly-compiled binaries).
+            # Xcode's build-phase script sandbox on macOS 26
+            # SIGKILLs freshly-compiled cc binaries.  Accept a
+            # pre-built elf2macho from either $ELF2MACHO_PREBUILT
+            # (CI env var) or the fixed path the scheme preAction
+            # writes to.
+            if [ -z "$ELF2MACHO_PREBUILT" ] && \
+               [ -x /tmp/aot_tools/elf2macho ]; then
+              export ELF2MACHO_PREBUILT=/tmp/aot_tools/elf2macho
+            fi
             export ELF2MACHO_PREBUILT
             "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST"
             echo "Rootfs: $(du -sh "$DEST" | cut -f1)"
@@ -105,6 +111,11 @@ targets:
             mkdir -p "$(dirname "$DEST")"
             rsync -a --no-links "$ROOTFS/" "$DEST/"
             echo "AOT-patching ELF binaries..."
+            if [ -z "$ELF2MACHO_PREBUILT" ] && \
+               [ -x /tmp/aot_tools/elf2macho ]; then
+              export ELF2MACHO_PREBUILT=/tmp/aot_tools/elf2macho
+            fi
+            export ELF2MACHO_PREBUILT
             "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST"
             echo "Rootfs: $(du -sh "$DEST" | cut -f1)"
           else
@@ -124,3 +135,39 @@ targets:
         GCC_PREPROCESSOR_DEFINITIONS:
           - "$(inherited)"
           - "_GNU_SOURCE=1"
+
+# Scheme pre-actions run OUTSIDE of xcodebuild's build-phase
+# script sandbox and are therefore allowed to compile a fresh
+# binary and run it later.  We use them to build elf2macho to a
+# fixed path that the post-build script picks up via
+# ELF2MACHO_PREBUILT.  This makes a plain "Build" in Xcode.app
+# work the same as the CI pre-build step.
+schemes:
+  AlpineOnIOS:
+    build:
+      targets:
+        AlpineOnIOS: all
+      preActions:
+        - script: |
+            set -e
+            mkdir -p /tmp/aot_tools
+            cc -O2 -o /tmp/aot_tools/elf2macho \
+                "${SRCROOT}/scripts/elf2macho.c"
+            /usr/bin/codesign --force --sign - \
+                /tmp/aot_tools/elf2macho 2>/dev/null || true
+          name: Build elf2macho outside sandbox
+          settingsTarget: AlpineOnIOS
+  AlpineOnMac:
+    build:
+      targets:
+        AlpineOnMac: all
+      preActions:
+        - script: |
+            set -e
+            mkdir -p /tmp/aot_tools
+            cc -O2 -o /tmp/aot_tools/elf2macho \
+                "${SRCROOT}/scripts/elf2macho.c"
+            /usr/bin/codesign --force --sign - \
+                /tmp/aot_tools/elf2macho 2>/dev/null || true
+          name: Build elf2macho outside sandbox
+          settingsTarget: AlpineOnMac
