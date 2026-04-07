@@ -288,15 +288,17 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				}
 
 				/*
-				 * The converter (elf2macho) offsets all vaddrs
-				 * by text_vaddr_page (16K-aligned vaddr of the
-				 * first executable segment).  Find it.
+				 * The converter shifts all sections up by
+				 * (PAGE_SZ - text_vaddr_page) so the header
+				 * fits at file offset 0.  Code is at
+				 * img_addr + shift + text_vaddr.
+				 * Match the converter's calculation.
 				 */
 				{
-					uint64_t tvp = 0;
 					long hpg = sysconf(_SC_PAGESIZE);
+					uint64_t tvp = 0, shift;
 					int k;
-					if (hpg <= 0) hpg = PAGE_SIZE;
+					if (hpg <= 0) hpg = 4096;
 					for (k = 0; k < ehdr.e_phnum; k++) {
 						if (phdrs[k].p_type == PT_LOAD &&
 						    (phdrs[k].p_flags & PF_X)) {
@@ -305,7 +307,8 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 							break;
 						}
 					}
-					base = img_addr - tvp;
+					shift = (uint64_t)hpg - tvp;
+					base = img_addr + shift;
 				}
 			}
 

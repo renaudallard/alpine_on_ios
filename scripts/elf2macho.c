@@ -161,8 +161,8 @@ main(int argc, char **argv)
 	int		 i;
 
 	/* Output layout offsets */
-	uint64_t	 hdr_size, text_off, text_sz;
-	uint64_t	 data_off, data_sz;
+	uint64_t	 hdr_size, text_off;
+	uint64_t	 data_off;
 	uint64_t	 linkedit_off, linkedit_sz;
 	uint64_t	 total_sz;
 
@@ -237,47 +237,86 @@ main(int argc, char **argv)
 	entry = ehdr->e_entry;
 
 	/*
-	 * Layout the Mach-O.  The __TEXT segment starts at file offset 0
-	 * and includes the Mach-O header + load commands + the ELF code.
-	 * __DATA follows at the correct relative offset.
-	 * All segment boundaries are 16K-aligned.
+	 * Mach-O layout strategy: shift the entire ELF up by one page
+	 * so the header has room.  All sections use file offsets that
+	 * equal their VM addresses (section.addr/.offset invariant).
 	 *
-	 * VM layout preserves ELF vaddr offsets:
-	 *   __TEXT.vmaddr = 0
-	 *   __DATA.vmaddr = data_vaddr - text_vaddr_page
+	 * Layout:
+	 *   File 0:                 mach_header + load commands
+	 *   File PAGE_SZ:           code (originally at text_vaddr)
+	 *   File data_vaddr+SHIFT:  data
+	 *
+	 * SHIFT = PAGE_SZ - text_vaddr_page_aligned (so text_off is
+	 * 16K-aligned in the file).  Runtime loader uses
+	 * base = img_addr + SHIFT to find segments.
 	 */
+	uint64_t shift, text_seg_fileoff, text_seg_vmaddr;
+	uint64_t text_seg_filesize, text_seg_vmsize;
+	uint64_t data_seg_fileoff, data_seg_vmaddr;
+	uint64_t data_seg_filesize, data_seg_vmsize;
 	uint64_t text_vaddr_page = text_vaddr & ~(uint64_t)(PAGE_SZ - 1);
 
-	/* Header + load commands go at the start of __TEXT. */
-	hdr_size = ALIGN_UP(32 + 1200, PAGE_SZ); /* generous space */
+	/* Shift up so code starts at page boundary >= one full page. */
+	shift = PAGE_SZ - text_vaddr_page;
 
-	/* Text content: place at the file offset that preserves the
-	 * intra-page offset of text_vaddr. */
-	text_off = hdr_size + (text_vaddr - text_vaddr_page);
-	text_sz = ALIGN_UP(text_off + text_filesz, PAGE_SZ);
+	text_seg_fileoff = 0;
+	text_seg_vmaddr = 0;
+	text_seg_filesize = ALIGN_UP(shift + text_vaddr + text_filesz, PAGE_SZ);
+	text_seg_vmsize = ALIGN_UP(shift + text_vaddr + text_memsz, PAGE_SZ);
+	if (text_seg_vmsize < text_seg_filesize)
+		text_seg_vmsize = text_seg_filesize;
 
-	/* Data content. */
 	if (has_data) {
-		data_off = ALIGN_UP(text_sz, PAGE_SZ) +
-		    (data_vaddr & (PAGE_SZ - 1));
-		data_sz = ALIGN_UP(data_off + data_filesz, PAGE_SZ) -
-		    ALIGN_UP(text_sz, PAGE_SZ);
+		uint64_t data_pos = shift + data_vaddr;
+		data_seg_vmaddr = data_pos & ~(uint64_t)(PAGE_SZ - 1);
+		data_seg_fileoff = data_seg_vmaddr;
+		if (data_seg_fileoff < text_seg_filesize) {
+			fprintf(stderr,
+			    "%s: data overlaps text segment\n", argv[1]);
+			free(elf); return 1;
+		}
+		data_seg_filesize = ALIGN_UP(
+		    (data_pos - data_seg_vmaddr) + data_filesz, PAGE_SZ);
+		data_seg_vmsize = ALIGN_UP(
+		    (data_pos - data_seg_vmaddr) + data_memsz, PAGE_SZ);
+		if (data_seg_vmsize < data_seg_filesize)
+			data_seg_vmsize = data_seg_filesize;
 	} else {
-		data_off = text_sz;
-		data_sz = 0;
+		data_seg_fileoff = text_seg_filesize;
+		data_seg_vmaddr = text_seg_vmsize;
+		data_seg_filesize = 0;
+		data_seg_vmsize = 0;
 	}
 
-	/* LINKEDIT: exports trie (2 bytes) + strtab (1 byte) + codesig space. */
-	linkedit_off = ALIGN_UP(text_sz + data_sz, PAGE_SZ);
-	linkedit_sz = PAGE_SZ; /* one page is plenty */
+	/* LINKEDIT after __DATA. */
+	linkedit_off = data_seg_fileoff + data_seg_filesize;
+	if (linkedit_off < text_seg_filesize)
+		linkedit_off = text_seg_filesize;
+	linkedit_off = ALIGN_UP(linkedit_off, PAGE_SZ);
+	linkedit_sz = PAGE_SZ;
 
 	total_sz = linkedit_off + linkedit_sz;
+
+	/* Header sanity: must fit before code at file offset PAGE_SZ. */
+	hdr_size = 32 + (size_t)(72 + 80) +
+	    (has_data ? (72 + 80) : 0) +
+	    72 +
+	    24 + 32 +
+	    24 + 24 + 24 + 80 + 16 + 16;
+	if (hdr_size > PAGE_SZ) {
+		fprintf(stderr, "%s: header too large (%zu > %d)\n",
+		    argv[1], hdr_size, PAGE_SZ);
+		free(elf); return 1;
+	}
+
+	text_off = shift + text_vaddr;
+	data_off = data_seg_fileoff + (shift + data_vaddr - data_seg_vmaddr);
 
 	/* Allocate output. */
 	out = calloc(1, (size_t)total_sz);
 	if (!out) { perror("calloc"); free(elf); return 1; }
 
-	/* Copy code segment. */
+	/* Copy code segment to text_off (== text_vaddr). */
 	if (text_fileoff_elf + text_filesz <= (uint64_t)st.st_size)
 		memcpy(out + text_off, elf + text_fileoff_elf, text_filesz);
 
@@ -290,27 +329,17 @@ main(int argc, char **argv)
 	 */
 	wp = out;
 
-	/* VM addresses: __TEXT at 0, preserving relative offsets. */
-	uint64_t vm_text = 0;
-	uint64_t vm_text_size = ALIGN_UP(text_vaddr - text_vaddr_page +
-	    text_memsz, PAGE_SZ);
-	uint64_t vm_data = data_vaddr - text_vaddr_page;
-	uint64_t vm_data_size = has_data ?
-	    ALIGN_UP(data_memsz, PAGE_SZ) : 0;
-	uint64_t vm_linkedit = ALIGN_UP(vm_text_size +
-	    (has_data ? vm_data_size : 0), PAGE_SZ);
-
 	/* Install name. */
 	const char *install_name = "@rpath/guest.dylib";
 	uint32_t name_len = (uint32_t)strlen(install_name) + 1;
 	uint32_t id_cmdsize = ALIGN_UP(24 + name_len, 8);
 
 	/* Count load commands. */
-	uint32_t ncmds = 3 + 1 + 1 + 1 + 1 + 1 + 1 + 1; /* 10 */
-	if (!has_data) ncmds--;
+	uint32_t ncmds = 1 + (has_data ? 1 : 0) + 1 + 7;
+	/* __TEXT, optional __DATA, __LINKEDIT, then 7 other commands */
 
 	uint32_t sizeofcmds =
-	    (72 + 80) +			/* __TEXT + 1 section */
+	    (72 + 80) +				/* __TEXT + 1 section */
 	    (has_data ? (72 + 80) : 0) +	/* __DATA + 1 section */
 	    72 +				/* __LINKEDIT */
 	    id_cmdsize +			/* LC_ID_DYLIB */
@@ -339,10 +368,10 @@ main(int argc, char **argv)
 		segment_command_64 seg = {
 			.cmd = LC_SEGMENT_64,
 			.cmdsize = 72 + 80,
-			.vmaddr = vm_text,
-			.vmsize = vm_text_size,
-			.fileoff = 0,
-			.filesize = text_sz,
+			.vmaddr = text_seg_vmaddr,
+			.vmsize = text_seg_vmsize,
+			.fileoff = text_seg_fileoff,
+			.filesize = text_seg_filesize,
 			.maxprot = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC,
 			.initprot = VM_PROT_READ | VM_PROT_EXEC,
 			.nsects = 1,
@@ -352,10 +381,10 @@ main(int argc, char **argv)
 		wbuf(&wp, &seg, 72);
 
 		section_64 sect = {
-			.addr = text_vaddr - text_vaddr_page,
+			.addr = shift + text_vaddr,
 			.size = text_filesz,
-			.offset = (uint32_t)text_off,
-			.align = 2,	/* 4-byte aligned (ARM instructions) */
+			.offset = (uint32_t)(shift + text_vaddr),
+			.align = 2,
 		};
 		memcpy(sect.sectname, "__text", 7);
 		memcpy(sect.segname, "__TEXT", 6);
@@ -367,10 +396,10 @@ main(int argc, char **argv)
 		segment_command_64 seg = {
 			.cmd = LC_SEGMENT_64,
 			.cmdsize = 72 + 80,
-			.vmaddr = vm_data,
-			.vmsize = vm_data_size,
-			.fileoff = ALIGN_UP(text_sz, PAGE_SZ),
-			.filesize = data_sz,
+			.vmaddr = data_seg_vmaddr,
+			.vmsize = data_seg_vmsize,
+			.fileoff = data_seg_fileoff,
+			.filesize = data_seg_filesize,
 			.maxprot = VM_PROT_READ | VM_PROT_WRITE,
 			.initprot = VM_PROT_READ | VM_PROT_WRITE,
 			.nsects = 1,
@@ -380,10 +409,10 @@ main(int argc, char **argv)
 		wbuf(&wp, &seg, 72);
 
 		section_64 sect = {
-			.addr = vm_data,
+			.addr = shift + data_vaddr,
 			.size = data_filesz,
-			.offset = (uint32_t)data_off,
-			.align = 3,	/* 8-byte aligned */
+			.offset = (uint32_t)(shift + data_vaddr),
+			.align = 3,
 		};
 		memcpy(sect.sectname, "__data", 7);
 		memcpy(sect.segname, "__DATA", 7);
@@ -395,7 +424,7 @@ main(int argc, char **argv)
 		segment_command_64 seg = {
 			.cmd = LC_SEGMENT_64,
 			.cmdsize = 72,
-			.vmaddr = vm_linkedit,
+			.vmaddr = linkedit_off,	/* same as fileoff */
 			.vmsize = ALIGN_UP(linkedit_sz, PAGE_SZ),
 			.fileoff = linkedit_off,
 			.filesize = linkedit_sz,
@@ -512,11 +541,13 @@ main(int argc, char **argv)
 	}
 	close(fd);
 
-	/* Print metadata for the runtime loader. */
-	printf("entry=0x%llx text_vm=0x%llx data_vm=0x%llx\n",
-	    (unsigned long long)(entry - text_vaddr_page),
-	    (unsigned long long)vm_text,
-	    (unsigned long long)vm_data);
+	/* Print metadata for diagnosis. */
+	printf("entry=0x%llx text=0x%llx-0x%llx data=0x%llx-0x%llx\n",
+	    (unsigned long long)entry,
+	    (unsigned long long)text_seg_vmaddr,
+	    (unsigned long long)(text_seg_vmaddr + text_seg_vmsize),
+	    (unsigned long long)data_seg_vmaddr,
+	    (unsigned long long)(data_seg_vmaddr + data_seg_vmsize));
 
 	free(out);
 	free(elf);
