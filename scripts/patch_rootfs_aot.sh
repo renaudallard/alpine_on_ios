@@ -18,14 +18,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AOT_PATCH="$SCRIPT_DIR/.aot_patch"
 ELF2MACHO="$SCRIPT_DIR/.elf2macho"
 
-# Build tools if not present.
+# Build tools if not present.  macOS 26 SIGKILLs freshly-compiled
+# unsigned binaries, so ad-hoc codesign each tool after building.
 if [ ! -x "$AOT_PATCH" ]; then
 	echo "Building aot_patch tool..."
 	cc -O2 -o "$AOT_PATCH" "$SCRIPT_DIR/aot_patch.c"
+	if command -v codesign >/dev/null 2>&1; then
+		codesign --force --sign - "$AOT_PATCH" 2>/dev/null || true
+	fi
 fi
 if [ ! -x "$ELF2MACHO" ]; then
 	echo "Building elf2macho tool..."
 	cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
+	if command -v codesign >/dev/null 2>&1; then
+		codesign --force --sign - "$ELF2MACHO" 2>/dev/null || true
+	fi
 fi
 
 echo "Scanning $ROOTFS for ELF aarch64 binaries..."
