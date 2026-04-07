@@ -57,6 +57,8 @@ uint64_t	g_native_base;
  */
 #if defined(__APPLE__)
 #define EXECVE_FAIL(rc) do { \
+		free(info.phdr_data); \
+		free(interp_info.phdr_data); \
 		if (info.dl_handle != NULL) dlclose(info.dl_handle); \
 		if (interp_info.dl_handle != NULL) \
 			dlclose(interp_info.dl_handle); \
@@ -65,6 +67,8 @@ uint64_t	g_native_base;
 	} while (0)
 #else
 #define EXECVE_FAIL(rc) do { \
+		free(info.phdr_data); \
+		free(interp_info.phdr_data); \
 		mem_space_destroy(newmem); \
 		return (rc); \
 	} while (0)
@@ -420,8 +424,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	ret = elf_load(host_path, newmem, bin_base, &info);
 	if (ret != 0) {
 		LOG_ERR("execve: elf_load %s failed", host_path);
-		mem_space_destroy(newmem);
-		return (-ENOEXEC);
+		EXECVE_FAIL(-ENOEXEC);
 	}
 
 	entry = info.entry;
@@ -507,6 +510,17 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		LOG_ERR("execve: failed to set up stack");
 		EXECVE_FAIL(-ENOMEM);
 	}
+
+	/*
+	 * phdr_data has been copied onto the guest stack; the
+	 * host-side buffers can now be freed.
+	 */
+	free(info.phdr_data);
+	info.phdr_data = NULL;
+	info.phdr_size = 0;
+	free(interp_info.phdr_data);
+	interp_info.phdr_data = NULL;
+	interp_info.phdr_size = 0;
 
 	/* Replace old memory space and dylib handles. */
 	mem_space_destroy(proc->mem);

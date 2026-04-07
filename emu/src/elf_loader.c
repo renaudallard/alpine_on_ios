@@ -348,16 +348,25 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			info->phent = sizeof(Elf64_Phdr);
 			info->phnum = ehdr.e_phnum;
 			/*
-			 * AT_PHDR: musl's libc-start uses phdrs to find
-			 * its own entry point. The shifted layout means
-			 * file offset ehdr.e_phoff is at host address
-			 * base + ehdr.e_phoff.  The dylib contains the
-			 * original ELF header bytes at file offset 0
-			 * (no it doesn't - file offset 0 is the Mach-O
-			 * header).  Set phdr to 0 - musl falls back to
-			 * walking _DYNAMIC if AT_PHDR is null.
+			 * AT_PHDR: the Mach-O layout keeps the Mach-O
+			 * header at file offset 0, so the original ELF
+			 * phdrs do not live at base + e_phoff.  Ship a
+			 * copy of the raw phdr bytes in elf_info and let
+			 * elf_setup_stack push them onto the guest
+			 * stack, then set info->phdr to that guest
+			 * address.  musl's ld.so walks them from there
+			 * to find PT_TLS, PT_DYNAMIC, etc.
 			 */
 			info->phdr = 0;
+			info->phdr_size =
+			    (uint64_t)ehdr.e_phnum * sizeof(Elf64_Phdr);
+			info->phdr_data = malloc((size_t)info->phdr_size);
+			if (info->phdr_data == NULL) {
+				emu_set_error("elf: alloc phdr_data");
+				goto fail;
+			}
+			memcpy(info->phdr_data, phdrs,
+			    (size_t)info->phdr_size);
 			{
 				info->brk = ALIGN_UP(base + vmax, 0x4000);
 			}
@@ -529,6 +538,11 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 
 fail:
 	free(phdrs);
+	if (info != NULL && info->phdr_data != NULL) {
+		free(info->phdr_data);
+		info->phdr_data = NULL;
+		info->phdr_size = 0;
+	}
 	close(fd);
 	return -1;
 }
@@ -548,7 +562,7 @@ push_string(mem_space_t *mem, uint64_t *sp, const char *str)
 }
 
 uint64_t
-elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
+elf_setup_stack(mem_space_t *mem, elf_info_t *info,
     const char **argv, const char **envp, uint64_t stack_top)
 {
 	uint64_t	sp, stack_base;
@@ -598,6 +612,45 @@ elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
 		return 0;
 	}
 	random_addr = sp;
+
+	/*
+	 * Copy the raw program headers onto the guest stack and point
+	 * AT_PHDR at them.  musl's ld.so walks these to find PT_TLS,
+	 * PT_DYNAMIC, etc.  Align the region to 8 bytes.
+	 *
+	 * musl derives the load base from the phdrs via
+	 *   base = AT_PHDR - PT_PHDR.p_vaddr
+	 * and then resolves every other segment as base + p_vaddr.
+	 * Our phdrs live on the stack, not at their original ELF
+	 * offset, so rewrite the PT_PHDR entry's p_vaddr to
+	 * (sp - info->base) so musl's base calculation yields the
+	 * real info->base.  Segments keep their original p_vaddr
+	 * (0-based, relative to the load base).
+	 */
+	if (info->phdr_data != NULL && info->phdr_size > 0) {
+		Elf64_Phdr	*phc;
+		uint64_t	 nph, k;
+
+		sp -= info->phdr_size;
+		sp &= ~(uint64_t)7;
+
+		phc = info->phdr_data;
+		nph = info->phdr_size / sizeof(Elf64_Phdr);
+		for (k = 0; k < nph; k++) {
+			if (phc[k].p_type == PT_PHDR) {
+				phc[k].p_vaddr = sp - info->base;
+				phc[k].p_paddr = phc[k].p_vaddr;
+				break;
+			}
+		}
+
+		if (mem_copy_to(mem, sp, info->phdr_data,
+		    (size_t)info->phdr_size) != 0) {
+			LOG_ERR("elf_setup_stack: push phdrs failed");
+			return 0;
+		}
+		info->phdr = sp;
+	}
 
 	/* Environment strings. */
 	envp_addrs = NULL;
