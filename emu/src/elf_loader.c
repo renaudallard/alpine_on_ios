@@ -533,7 +533,8 @@ fail:
 	return -1;
 }
 
-/* Write a string to guest memory, return its guest address. */
+/* Write a string to guest memory, return its guest address.  Returns
+ * 0 on failure (which is never a valid stack address). */
 static uint64_t
 push_string(mem_space_t *mem, uint64_t *sp, const char *str)
 {
@@ -541,7 +542,8 @@ push_string(mem_space_t *mem, uint64_t *sp, const char *str)
 
 	len = strlen(str) + 1;
 	*sp -= len;
-	mem_copy_to(mem, *sp, str, len);
+	if (mem_copy_to(mem, *sp, str, len) != 0)
+		return 0;
 	return *sp;
 }
 
@@ -582,12 +584,19 @@ elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
 	/* Push strings onto the stack first (high addresses). */
 	/* Platform string. */
 	platform_addr = push_string(mem, &sp, "aarch64");
+	if (platform_addr == 0) {
+		LOG_ERR("elf_setup_stack: push platform failed");
+		return 0;
+	}
 
 	/* Random bytes (just use fixed pseudo-random for reproducibility). */
 	for (i = 0; i < 16; i++)
 		randbuf[i] = (uint8_t)(i * 17 + 53);
 	sp -= 16;
-	mem_copy_to(mem, sp, randbuf, 16);
+	if (mem_copy_to(mem, sp, randbuf, 16) != 0) {
+		LOG_ERR("elf_setup_stack: push randbuf failed");
+		return 0;
+	}
 	random_addr = sp;
 
 	/* Environment strings. */
@@ -599,8 +608,14 @@ elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
 			return 0;
 		}
 	}
-	for (i = envc - 1; i >= 0; i--)
+	for (i = envc - 1; i >= 0; i--) {
 		envp_addrs[i] = push_string(mem, &sp, envp[i]);
+		if (envp_addrs[i] == 0) {
+			LOG_ERR("elf_setup_stack: push envp[%d] failed", i);
+			free(envp_addrs);
+			return 0;
+		}
+	}
 
 	/* Argument strings. */
 	argv_addrs = NULL;
@@ -612,8 +627,15 @@ elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
 			return 0;
 		}
 	}
-	for (i = argc - 1; i >= 0; i--)
+	for (i = argc - 1; i >= 0; i--) {
 		argv_addrs[i] = push_string(mem, &sp, argv[i]);
+		if (argv_addrs[i] == 0) {
+			LOG_ERR("elf_setup_stack: push argv[%d] failed", i);
+			free(argv_addrs);
+			free(envp_addrs);
+			return 0;
+		}
+	}
 
 	/* Align to 16 bytes. */
 	sp &= ~(uint64_t)15;
