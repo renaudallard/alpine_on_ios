@@ -271,24 +271,45 @@ vfs_dev_readdir(void *ctx, const char *path, void *buf, size_t bufsiz,
 	idx = 0;
 
 	for (i = 0; dev_entries[i] != NULL; i++) {
+		const char	*name;
+		uint8_t		 d_type;
+
 		if (idx < *offset) {
 			idx++;
 			continue;
 		}
 
-		namelen = strlen(dev_entries[i]);
+		name = dev_entries[i];
+		namelen = strlen(name);
 		reclen = offsetof(struct emu_dirent64, d_name) + namelen + 1;
 		reclen = (reclen + 7) & ~(size_t)7;
 
 		if (written + reclen > bufsiz)
 			break;
 
+		/*
+		 * Match the type vfs_dev_stat reports for each entry.
+		 * pts/fd/shm/input are subdirectories; stdin/stdout/stderr
+		 * are symlinks; everything else is a character device.
+		 */
+		if (strcmp(name, "pts") == 0 ||
+		    strcmp(name, "fd") == 0 ||
+		    strcmp(name, "shm") == 0 ||
+		    strcmp(name, "input") == 0)
+			d_type = 4;	/* DT_DIR */
+		else if (strcmp(name, "stdin") == 0 ||
+		    strcmp(name, "stdout") == 0 ||
+		    strcmp(name, "stderr") == 0)
+			d_type = 10;	/* DT_LNK */
+		else
+			d_type = 2;	/* DT_CHR */
+
 		memset(&ent, 0, sizeof(ent));
 		ent.d_ino = (uint64_t)(i + 2);
 		ent.d_off = idx + 1;
 		ent.d_reclen = (uint16_t)reclen;
-		ent.d_type = 2;	/* DT_CHR */
-		snprintf(ent.d_name, sizeof(ent.d_name), "%s", dev_entries[i]);
+		ent.d_type = d_type;
+		snprintf(ent.d_name, sizeof(ent.d_name), "%s", name);
 
 		memcpy(out + written, &ent, reclen);
 		written += reclen;
