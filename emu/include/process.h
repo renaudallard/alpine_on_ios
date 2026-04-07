@@ -113,7 +113,7 @@ void		 proc_destroy(emu_process_t *proc);
 /* Futex subsystem */
 void		 futex_init(void);
 int		 futex_wait(uint64_t addr, uint32_t val, uint32_t bitset,
-		    const struct timespec *timeout);
+		    const struct timespec *timeout, int abs_time);
 int		 futex_wake(uint64_t addr, int count, uint32_t bitset);
 int		 futex_requeue(uint64_t from, uint64_t to, int wake_count,
 		    int requeue_limit);

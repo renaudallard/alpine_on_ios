@@ -400,7 +400,7 @@ futex_init(void)
 
 int
 futex_wait(uint64_t addr, uint32_t val, uint32_t bitset,
-    const struct timespec *timeout)
+    const struct timespec *timeout, int abs_time)
 {
 	futex_waiter_t	*w;
 	unsigned int	 h;
@@ -433,12 +433,21 @@ futex_wait(uint64_t addr, uint32_t val, uint32_t bitset,
 		if (timeout != NULL) {
 			struct timespec	ts;
 
-			clock_gettime(CLOCK_REALTIME, &ts);
-			ts.tv_sec += timeout->tv_sec;
-			ts.tv_nsec += timeout->tv_nsec;
-			if (ts.tv_nsec >= 1000000000L) {
-				ts.tv_sec++;
-				ts.tv_nsec -= 1000000000L;
+			if (abs_time) {
+				/*
+				 * FUTEX_WAIT_BITSET supplies an absolute
+				 * deadline; use it directly.
+				 */
+				ts = *timeout;
+			} else {
+				/* FUTEX_WAIT: relative timeout. */
+				clock_gettime(CLOCK_REALTIME, &ts);
+				ts.tv_sec += timeout->tv_sec;
+				ts.tv_nsec += timeout->tv_nsec;
+				if (ts.tv_nsec >= 1000000000L) {
+					ts.tv_sec++;
+					ts.tv_nsec -= 1000000000L;
+				}
 			}
 			if (pthread_cond_timedwait(&w->cond, &futex_lock,
 			    &ts) != 0) {
@@ -571,7 +580,7 @@ do_futex(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		}
 
 		return futex_wait(a0, (uint32_t)a2,
-		    LINUX_FUTEX_BITSET_MATCH_ANY, tsp);
+		    LINUX_FUTEX_BITSET_MATCH_ANY, tsp, 0);
 	}
 
 	case LINUX_FUTEX_WAKE:
@@ -605,7 +614,7 @@ do_futex(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 			tsp = &ts;
 		}
 
-		return futex_wait(a0, (uint32_t)a2, bitset, tsp);
+		return futex_wait(a0, (uint32_t)a2, bitset, tsp, 1);
 	}
 
 	case LINUX_FUTEX_WAKE_BITSET: {
