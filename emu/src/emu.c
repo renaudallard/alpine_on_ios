@@ -21,9 +21,6 @@
 #include <TargetConditionals.h>
 #endif
 
-#ifndef MAP_JIT
-#define MAP_JIT 0
-#endif
 
 #include <errno.h>
 #include <pthread.h>

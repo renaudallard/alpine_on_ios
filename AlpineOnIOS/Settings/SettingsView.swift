@@ -77,9 +77,9 @@ struct SettingsView: View {
                             "CFBundleShortVersionString"] as? String ?? "0.2.0")
                             .foregroundColor(.secondary)
                     }
-                    Text("Alpine on iOS runs Alpine Linux aarch64 using "
-                         + "an AArch64 CPU interpreter with Linux syscall "
-                         + "emulation.")
+                    Text("Alpine on iOS runs Alpine Linux aarch64 "
+                         + "natively via AOT conversion to Mach-O "
+                         + "with BRK-trapped Linux syscalls.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }

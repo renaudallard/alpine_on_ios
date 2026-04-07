@@ -25,24 +25,6 @@
 #include "process.h"
 #include "syscall.h"
 
-#if defined(__APPLE__) && defined(__MACH__)
-#include <dlfcn.h>
-
-/*
- * pthread_jit_write_protect_np is available at runtime on iOS 14.2+
- * and macOS 11+ but iOS SDK headers mark it __API_UNAVAILABLE(ios).
- * Resolve via dlsym to bypass the header restriction.
- */
-static void (*native_write_protect_fn)(int);
-
-void
-native_write_protect(int enabled)
-{
-	if (native_write_protect_fn != NULL)
-		native_write_protect_fn(enabled);
-}
-#endif
-
 #ifdef __aarch64__
 
 #include <signal.h>
@@ -102,9 +84,7 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		for (i = 0; i < 6; i++)
 			proc->cpu.x[i] = UC_REGS(uc)[i];
 
-		NATIVE_WRITE_ENABLE();
 		sys_handle(proc);
-		NATIVE_WRITE_DISABLE();
 
 		/* Write back return value */
 		UC_REGS(uc)[0] = proc->cpu.x[0];
@@ -131,7 +111,7 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		UC_REGS(uc)[rn] = proc->cpu.tpidr_el0;
 	} else {
 		/* Unknown BRK - don't use LOG_ERR (not signal-safe) */
-		static const char msg[] = "jit: unexpected BRK\n";
+		static const char msg[] = "native: unexpected BRK\n";
 		(void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
 		proc->cpu.running = 0;
 
@@ -154,27 +134,17 @@ native_init(void)
 {
 	struct sigaction	sa;
 
-#ifdef __APPLE__
-	/* Resolve pthread_jit_write_protect_np at runtime */
-	native_write_protect_fn = (void (*)(int))
-	    dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
-	if (native_write_protect_fn != NULL)
-		LOG_INFO("native: pthread_jit_write_protect_np available");
-	else
-		LOG_WARN("native: pthread_jit_write_protect_np not found");
-#endif
-
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_sigaction = native_sigtrap_handler;
 	sa.sa_flags = SA_SIGINFO;
 	sigfillset(&sa.sa_mask);
 
 	if (sigaction(SIGTRAP, &sa, NULL) != 0) {
-		LOG_ERR("jit: failed to install SIGTRAP handler");
+		LOG_ERR("native: failed to install SIGTRAP handler");
 		return (-1);
 	}
 
-	LOG_INFO("jit: initialized");
+	LOG_INFO("native: initialized");
 	return (0);
 }
 
@@ -188,13 +158,7 @@ int
 native_run(emu_process_t *proc)
 {
 	native_current_proc = proc;
-
-	/* Ensure this thread is in execute mode (W^X is per-thread;
-	 * the ELF loader ran on a different thread). */
-	NATIVE_WRITE_DISABLE();
-
 	native_enter(&proc->cpu, (void *)proc->cpu.pc);
-
 	/* Reached here via native_exit */
 	return (proc->cpu.exit_code);
 }
@@ -239,7 +203,7 @@ native_patch_code(void *code, size_t size)
 int
 native_init(void)
 {
-	LOG_INFO("jit: not available (not aarch64)");
+	LOG_INFO("native: not available (not aarch64)");
 	return (0);
 }
 
@@ -253,7 +217,7 @@ int
 native_run(emu_process_t *proc)
 {
 	(void)proc;
-	LOG_ERR("jit: cannot run on non-aarch64");
+	LOG_ERR("native: cannot run on non-aarch64");
 	return (-1);
 }
 

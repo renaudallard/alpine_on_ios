@@ -12,10 +12,11 @@
 #include "memory.h"
 
 /*
- * Software TLB for the interpreter.  Direct-mapped, indexed by
- * guest page number.  Each entry caches the host pointer for
- * one 4K guest page so mem_translate can skip the region walk
- * and lock on a hit.
+ * Software TLB for Linux unit tests (which exercise the
+ * interpreter path in cpu_exec_one).  Direct-mapped, indexed
+ * by guest page number.  Each entry caches the host pointer
+ * for one 4K guest page so mem_translate can skip the region
+ * walk and lock on a hit.  Not used on iOS (AOT native path).
  */
 #define TLB_BITS	4
 #define TLB_SIZE	(1 << TLB_BITS)
@@ -220,7 +221,7 @@ void	cpu_update_flags_nz64(cpu_state_t *, uint64_t);
 int	decode_bitmask_imm(int sf, int N, int immr, int imms, uint64_t *out);
 
 /*
- * TLB-accelerated memory access for the interpreter hot path.
+ * TLB-accelerated memory access (used by Linux unit tests).
  * Falls back to mem_translate (with rwlock) on TLB miss, then
  * populates the TLB entry for subsequent hits.
  */

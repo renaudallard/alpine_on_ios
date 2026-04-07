@@ -28,14 +28,12 @@
 ## Features
 
 - **Full Alpine Linux** with `apk` package manager and AOT package repository
-- **Near-native execution** on iOS via AOT precompilation (no entitlements needed)
-- **macOS support** (Apple Silicon, interpreter mode for ad-hoc signed apps)
+- **Native execution** on iOS via Mach-O conversion (no interpreter, no runtime JIT)
 - **Terminal emulator** with VT100/xterm-256color, ANSI colors, line editing, history
 - **Graphical display** via `/dev/fb0` framebuffer and Metal rendering at 60fps
 - **Touch input** mapped to Linux evdev mouse events
 - **Thread support** with full `clone()` and `futex()`
 - **100+ Linux syscalls** including epoll, eventfd, timerfd, copy_file_range
-- **Comprehensive SIMD/NEON** support (3600+ lines: vector, FP, permute, table, shifts)
 - **Networking** with DNS resolution (musl getaddrinfo) and HTTP (wget, curl)
 - **Virtual /proc and /dev** with stat, framebuffer, and evdev input devices
 - **Interactive shell** with Ctrl+C/Ctrl+Z signal support
@@ -44,20 +42,24 @@
 ## How It Works
 
 Since iOS devices use ARM64 and Alpine Linux provides aarch64 packages,
-guest code can run **natively** on the host CPU. At build time, `SVC`
-(syscall) instructions are replaced with `BRK` traps. At runtime, a
-`SIGTRAP` handler intercepts the traps and dispatches to emulated Linux
-syscalls. This gives near-native performance with no per-instruction
-overhead.
+guest code runs **natively** on the host CPU. At build time, each ELF
+binary is processed in two stages:
 
-On iOS, the pre-patched binaries are loaded via file-backed executable
-mappings from the signed app bundle. On macOS, anonymous executable
-mappings are used as fallback when file-backed exec fails. A full
-AArch64 instruction interpreter with TLB cache serves as last resort.
+1. **AOT patch**: `SVC #0` (Linux syscall) instructions are replaced
+   with `BRK #1` traps.
+2. **Mach-O conversion**: the patched ELF is wrapped into a Mach-O
+   dynamic library (`.dylib`) with the same code+data layout. The
+   dylib is codesigned as part of the app bundle.
+
+At runtime, `dlopen()` loads the dylib. iOS trusts it because it is
+signed Mach-O in the app bundle. A `SIGTRAP` handler intercepts the
+`BRK` traps and dispatches to emulated Linux syscalls. This gives
+near-native performance with no per-instruction overhead and no
+runtime JIT.
 
 ```
 +-----------------------+
-|  Terminal | Display   |   SwiftUI tabs (iOS + macOS)
+|  Terminal | Display   |   SwiftUI tabs
 +-----+-----+-----+----+
       |           |
 +-----+-----+----+-----+
@@ -69,8 +71,7 @@ AArch64 instruction interpreter with TLB cache serves as last resort.
       +-----+-----+
             |
       +-----+-----+
-      | AOT Native |         Pre-patched BRK traps + SIGTRAP handler
-      | / Interp   |         Interpreter fallback
+      | AOT native |        dlopen signed Mach-O + SIGTRAP handler
       +-----+-----+
             |
       +-----+-----+
@@ -100,15 +101,6 @@ and sideload it.
 
 After installing, trust the developer profile in
 **Settings > General > Device Management**.
-
-### macOS (Apple Silicon)
-
-Download the latest `.dmg` from
-[**Releases**](https://github.com/renaudallard/alpine_on_ios/releases/latest),
-open it, and drag **Alpine Terminal** to Applications.
-
-Note: if native execution fails on macOS, the app falls back to an
-interpreter (slower). Build from Xcode with your Apple ID for best results.
 
 ### First launch
 

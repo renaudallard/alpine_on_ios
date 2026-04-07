@@ -38,21 +38,15 @@
 #include "vfs.h"
 
 /*
- * AOT native mode address layout: 4GB range starting at a
- * dynamically probed base address.  The probe avoids GPU
- * carveouts and other reserved regions.
- *
- * Layout within the range:
- *   base + 0x00000000  binary
- *   base + 0x80000000  interpreter / dynamic linker
- *   base + 0xFFFFF0000 stack top
+ * AOT native mode: each ELF is loaded via dlopen() of its Mach-O
+ * dylib companion.  dyld picks addresses; mem_translate records them
+ * so guest addr == host addr for native execution.
+ * g_native_base == 1 flags AOT as enabled; not a real address.
  */
 uint64_t	g_native_base;
 
-/* AOT: base addresses are chosen by the kernel via mmap(NULL) in elf_load. */
 #define AOT_STACK_SIZE		(8ULL * 1024 * 1024)	/* 8 MB */
 
-/* Interpreter base addresses */
 
 /* WNOHANG from Linux. */
 #define LINUX_WNOHANG	1

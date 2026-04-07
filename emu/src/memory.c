@@ -510,8 +510,8 @@ mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
 
 /*
  * Map a file region into the guest address space at a fixed address.
- * Used by AOT mode to create file-backed executable mappings that
- * iOS allows without MAP_JIT (the file is in the signed app bundle).
+ * Used by Linux unit tests only; on iOS, AOT uses dlopen() of Mach-O
+ * dylibs instead.
  */
 uint64_t
 mem_mmap_file(mem_space_t *ms, uint64_t addr, uint64_t size,

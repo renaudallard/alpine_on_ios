@@ -74,8 +74,8 @@ void emu_run(void);
 void emu_shutdown(void);
 
 /*
- * Enable AOT mode. Pre-patched binaries in the rootfs are loaded
- * with file-backed executable mappings (no MAP_JIT needed).
+ * AOT mode: pre-patched binaries in the rootfs are loaded via
+ * dlopen() of their Mach-O dylib companions.
  */
 int emu_set_aot_enabled(int on);
 int emu_aot_enabled(void);
