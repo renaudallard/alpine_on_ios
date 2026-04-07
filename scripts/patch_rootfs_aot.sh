@@ -30,10 +30,22 @@ ELF2MACHO="$ELF2MACHO_DIR/elf2macho"
 
 if [ ! -x "$ELF2MACHO" ]; then
 	echo "Building elf2macho tool in $ELF2MACHO_DIR..."
+	# Diagnostic: can we run any cc-built binary at all?
+	cat > "$ELF2MACHO_DIR/hello.c" <<'HELLO_EOF'
+#include <stdio.h>
+int main(int argc, char **argv) { (void)argv; printf("hello %d\n", argc); return 0; }
+HELLO_EOF
+	cc -O2 -o "$ELF2MACHO_DIR/hello" "$ELF2MACHO_DIR/hello.c"
+	if command -v codesign >/dev/null 2>&1; then
+		codesign --force --sign - "$ELF2MACHO_DIR/hello" 2>/dev/null || true
+	fi
+	echo "hello test: $("$ELF2MACHO_DIR/hello" a b 2>&1 || echo EXIT=$?)"
+
 	cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
 	if command -v codesign >/dev/null 2>&1; then
 		codesign --force --sign - "$ELF2MACHO" 2>/dev/null || true
 	fi
+	echo "elf2macho test: $("$ELF2MACHO" 2>&1 || echo EXIT=$?)"
 fi
 
 echo "Scanning $ROOTFS for ELF aarch64 binaries..."
