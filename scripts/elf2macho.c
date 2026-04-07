@@ -367,9 +367,14 @@ strtab_add(struct symtab_builder *sb, const char *name)
  * - Defined globals → external defs (exported)
  * - Undefined globals → undefs (imported, will be bound)
  * - Locals are skipped (Mach-O doesn't need them for dyld)
+ *
+ * text_lo/hi and data_lo/hi are the original ELF vaddr ranges
+ * used to assign section numbers based on st_value.
  */
 static int
-build_symtab(struct dynamic_info *dyn, struct symtab_builder *sb)
+build_symtab(struct dynamic_info *dyn, struct symtab_builder *sb,
+    uint64_t text_lo, uint64_t text_hi,
+    uint64_t data_lo, uint64_t data_hi)
 {
 	uint64_t i;
 	int idx = 0;
@@ -414,8 +419,14 @@ build_symtab(struct dynamic_info *dyn, struct symtab_builder *sb)
 		sb->syms[idx].name = name;
 		sb->syms[idx].vaddr = s->st_value;
 		sb->syms[idx].type = N_SECT | N_EXT;
-		/* Section number: 1=__text, 2=__data (Mach-O 1-based). */
-		sb->syms[idx].sect = (type == STT_FUNC) ? 1 : 2;
+		/* Section number: 1=__text, 2=__data (Mach-O 1-based).
+		 * Determine by address, not symbol type. */
+		if (s->st_value >= text_lo && s->st_value < text_hi)
+			sb->syms[idx].sect = 1;
+		else if (s->st_value >= data_lo && s->st_value < data_hi)
+			sb->syms[idx].sect = 2;
+		else
+			sb->syms[idx].sect = (type == STT_FUNC) ? 1 : 2;
 		sb->syms[idx].desc = 0;
 		idx++;
 	}
@@ -924,6 +935,25 @@ uleb_size(uint64_t v)
 	return n;
 }
 
+/* Sort children alphabetically by edge string (dyld requires this). */
+static void
+trie_sort_children(struct trie_node *node)
+{
+	int i, j;
+	for (i = 0; i + 1 < node->n_children; i++) {
+		for (j = i + 1; j < node->n_children; j++) {
+			if (strcmp(node->children[j]->edge,
+			    node->children[i]->edge) < 0) {
+				struct trie_node *t = node->children[i];
+				node->children[i] = node->children[j];
+				node->children[j] = t;
+			}
+		}
+	}
+	for (i = 0; i < node->n_children; i++)
+		trie_sort_children(node->children[i]);
+}
+
 /* First pass: compute size of each node assuming current child offsets.
  * Returns total trie size.  May need multiple passes to converge. */
 static size_t
@@ -1003,6 +1033,9 @@ build_export_trie(struct symtab_builder *sb, size_t *out_size, uint64_t shift)
 		/* Symbol offset is the export's address (shifted). */
 		trie_insert(root, buf_name, sb->syms[i].vaddr + shift);
 	}
+
+	/* Sort children alphabetically (dyld requirement). */
+	trie_sort_children(root);
 
 	/* Iterate sizing to convergence (offsets affect sizes). */
 	total = trie_compute_sizes(root, 0);
@@ -1244,7 +1277,11 @@ main(int argc, char **argv)
 	has_dyn = (parse_dynamic(elf, phdrs, ehdr->e_phnum, &dyn) == 0);
 	memset(&sb, 0, sizeof(sb));
 	if (has_dyn) {
-		if (build_symtab(&dyn, &sb) != 0) {
+		uint64_t t_lo = text_vaddr;
+		uint64_t t_hi = text_vaddr + text_memsz;
+		uint64_t d_lo = has_data ? data_vaddr : 0;
+		uint64_t d_hi = has_data ? data_vaddr + data_memsz : 0;
+		if (build_symtab(&dyn, &sb, t_lo, t_hi, d_lo, d_hi) != 0) {
 			fprintf(stderr, "%s: build_symtab failed\n", argv[1]);
 			free(elf); return 1;
 		}
@@ -1331,11 +1368,14 @@ main(int argc, char **argv)
 	/* Build bind opcodes now that we know the layout. */
 	memset(&bb, 0, sizeof(bb));
 	memset(&rb, 0, sizeof(rb));
-	if (has_dyn && has_data) {
-		build_binds(&dyn, &sb, &bb, /*data_seg_idx=*/1,
-		    data_seg_vmaddr, shift);
-		build_rebases(&dyn, &rb, /*data_seg_idx=*/1,
-		    data_seg_vmaddr, shift, NULL);
+	if (has_dyn) {
+		/* Use __DATA seg if present, else __TEXT (binds rarely
+		 * target text but the Mach-O format requires a segment). */
+		int seg_idx = has_data ? 1 : 0;
+		uint64_t seg_vmaddr = has_data ? data_seg_vmaddr :
+		    text_seg_vmaddr;
+		build_binds(&dyn, &sb, &bb, seg_idx, seg_vmaddr, shift);
+		build_rebases(&dyn, &rb, seg_idx, seg_vmaddr, shift, NULL);
 	}
 
 	/* Build export trie for libraries (binaries have no exports). */
