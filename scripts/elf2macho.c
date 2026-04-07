@@ -9,6 +9,8 @@
  * Usage: elf2macho <input.elf> <output.dylib>
  */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -776,6 +778,228 @@ free_rebases(struct rebase_builder *rb)
 	memset(rb, 0, sizeof(*rb));
 }
 
+/* ---- Export trie generation ---- */
+
+/*
+ * The export trie is a compressed prefix tree. Each node:
+ *   terminal_size (uleb128)
+ *     if non-zero: flags (uleb128) + symbol_offset (uleb128)
+ *   n_children (1 byte)
+ *   for each child:
+ *     edge string (null-terminated)
+ *     child_offset (uleb128, absolute from trie start)
+ *
+ * Edges contain shared prefixes; the trie is built by inserting
+ * each symbol name and splitting edges as needed.
+ */
+
+struct trie_node {
+	char		*edge;		/* string from parent */
+	struct trie_node **children;
+	int		 n_children;
+	int		 cap_children;
+	int		 is_terminal;
+	uint64_t	 sym_offset;
+	uint64_t	 file_offset;	/* set during encoding */
+	size_t		 node_size;	/* set during sizing */
+};
+
+static struct trie_node *
+trie_new(const char *edge)
+{
+	struct trie_node *n = calloc(1, sizeof(*n));
+	if (n == NULL) return NULL;
+	if (edge != NULL) n->edge = strdup(edge);
+	return n;
+}
+
+static void
+trie_free(struct trie_node *n)
+{
+	int i;
+	if (n == NULL) return;
+	for (i = 0; i < n->n_children; i++)
+		trie_free(n->children[i]);
+	free(n->children);
+	free(n->edge);
+	free(n);
+}
+
+static void
+trie_add_child(struct trie_node *parent, struct trie_node *child)
+{
+	if (parent->n_children >= parent->cap_children) {
+		parent->cap_children = (parent->cap_children + 1) * 2;
+		parent->children = realloc(parent->children,
+		    parent->cap_children * sizeof(*parent->children));
+	}
+	parent->children[parent->n_children++] = child;
+}
+
+/* Insert a symbol into the trie. */
+static void
+trie_insert(struct trie_node *root, const char *name, uint64_t sym_off)
+{
+	struct trie_node *node = root;
+	const char *p = name;
+
+	while (*p != '\0') {
+		int i, found = 0;
+		for (i = 0; i < node->n_children; i++) {
+			struct trie_node *c = node->children[i];
+			const char *e = c->edge;
+			if (e[0] != p[0])
+				continue;
+
+			/* Find common prefix length. */
+			size_t common = 0;
+			while (e[common] != '\0' && p[common] != '\0' &&
+			    e[common] == p[common])
+				common++;
+
+			if (e[common] == '\0') {
+				/* Edge fully matched, descend. */
+				node = c;
+				p += common;
+			} else {
+				/* Edge partially matched: split. */
+				struct trie_node *split = trie_new(NULL);
+				split->edge = strndup(e, common);
+
+				/* Old child becomes a child of split. */
+				char *old_remainder = strdup(e + common);
+				free(c->edge);
+				c->edge = old_remainder;
+				trie_add_child(split, c);
+
+				/* Replace c in node->children with split. */
+				node->children[i] = split;
+
+				node = split;
+				p += common;
+			}
+			found = 1;
+			break;
+		}
+		if (!found) {
+			/* Add new child with remaining string as edge. */
+			struct trie_node *nc = trie_new(p);
+			trie_add_child(node, nc);
+			node = nc;
+			p += strlen(p);
+		}
+	}
+
+	node->is_terminal = 1;
+	node->sym_offset = sym_off;
+}
+
+static size_t
+uleb_size(uint64_t v)
+{
+	size_t n = 0;
+	do { n++; v >>= 7; } while (v != 0);
+	return n;
+}
+
+/* First pass: compute size of each node assuming current child offsets.
+ * Returns total trie size.  May need multiple passes to converge. */
+static size_t
+trie_compute_sizes(struct trie_node *node, size_t base_off)
+{
+	int i;
+	size_t off = base_off;
+	size_t self_size;
+
+	/* Self size. */
+	if (node->is_terminal) {
+		size_t info_size = uleb_size(0) /* flags */
+		    + uleb_size(node->sym_offset);
+		self_size = uleb_size(info_size) + info_size;
+	} else {
+		self_size = uleb_size(0);	/* terminal_size = 0 */
+	}
+	self_size += 1;	/* n_children */
+	for (i = 0; i < node->n_children; i++) {
+		self_size += strlen(node->children[i]->edge) + 1;
+		self_size += uleb_size(node->children[i]->file_offset);
+	}
+	node->node_size = self_size;
+	node->file_offset = off;
+	off += self_size;
+
+	for (i = 0; i < node->n_children; i++)
+		off = trie_compute_sizes(node->children[i], off);
+
+	return off;
+}
+
+static void
+trie_encode_node(struct trie_node *node, uint8_t *buf, size_t *pos)
+{
+	int i;
+	if (node->is_terminal) {
+		size_t info_size = uleb_size(0) + uleb_size(node->sym_offset);
+		*pos += write_uleb(buf + *pos, info_size);
+		*pos += write_uleb(buf + *pos, 0);	/* flags */
+		*pos += write_uleb(buf + *pos, node->sym_offset);
+	} else {
+		buf[(*pos)++] = 0;	/* terminal_size = 0 */
+	}
+	buf[(*pos)++] = (uint8_t)node->n_children;
+	for (i = 0; i < node->n_children; i++) {
+		struct trie_node *c = node->children[i];
+		size_t len = strlen(c->edge) + 1;
+		memcpy(buf + *pos, c->edge, len);
+		*pos += len;
+		*pos += write_uleb(buf + *pos, c->file_offset);
+	}
+	for (i = 0; i < node->n_children; i++)
+		trie_encode_node(node->children[i], buf, pos);
+}
+
+/*
+ * Build the export trie from defined external symbols.
+ * Returns malloc'd buffer; caller frees.
+ */
+static uint8_t *
+build_export_trie(struct symtab_builder *sb, size_t *out_size, uint64_t shift)
+{
+	struct trie_node *root = trie_new(NULL);
+	int i;
+	uint8_t *buf;
+	size_t total, prev_total;
+
+	for (i = sb->iext; i < sb->iext + sb->next; i++) {
+		char buf_name[256];
+		const char *name = sb->syms[i].name;
+		size_t len = strlen(name);
+		if (len > sizeof(buf_name) - 2) len = sizeof(buf_name) - 2;
+		buf_name[0] = '_';
+		memcpy(buf_name + 1, name, len);
+		buf_name[len + 1] = '\0';
+		/* Symbol offset is the export's address (shifted). */
+		trie_insert(root, buf_name, sb->syms[i].vaddr + shift);
+	}
+
+	/* Iterate sizing to convergence (offsets affect sizes). */
+	total = trie_compute_sizes(root, 0);
+	for (int iter = 0; iter < 10; iter++) {
+		prev_total = total;
+		total = trie_compute_sizes(root, 0);
+		if (total == prev_total) break;
+	}
+
+	buf = calloc(1, total + 16);
+	if (buf == NULL) { trie_free(root); return NULL; }
+	size_t pos = 0;
+	trie_encode_node(root, buf, &pos);
+	*out_size = pos;
+
+	trie_free(root);
+	return buf;
+}
+
 /*
  * Parse PT_DYNAMIC segment and fill struct dynamic_info.
  * Returns 0 on success, -1 if no dynamic section found.
@@ -916,6 +1140,8 @@ main(int argc, char **argv)
 	struct symtab_builder sb;
 	struct bind_builder bb;
 	struct rebase_builder rb;
+	uint8_t		*export_trie = NULL;
+	size_t		 export_trie_size = 0;
 	int		 has_dyn;
 
 	/* Output layout offsets */
@@ -1088,6 +1314,12 @@ main(int argc, char **argv)
 		    data_seg_vmaddr, shift);
 		build_rebases(&dyn, &rb, /*data_seg_idx=*/1,
 		    data_seg_vmaddr, shift, NULL);
+	}
+
+	/* Build export trie for libraries (binaries have no exports). */
+	if (has_dyn && sb.next > 0) {
+		export_trie = build_export_trie(&sb, &export_trie_size,
+		    shift);
 	}
 
 	/* Allocate output. */
@@ -1336,6 +1568,7 @@ main(int argc, char **argv)
 		    sb.nsyms, sb.next, sb.nundef, sb.strsz);
 		printf("binds: %zu bytes  rebases: %zu bytes\n",
 		    bb.size, rb.size);
+		printf("export trie: %zu bytes\n", export_trie_size);
 	}
 
 	/* Print metadata for diagnosis. */
@@ -1349,6 +1582,7 @@ main(int argc, char **argv)
 	free_symtab(&sb);
 	free_binds(&bb);
 	free_rebases(&rb);
+	free(export_trie);
 	free(out);
 	free(elf);
 	return 0;
