@@ -220,7 +220,11 @@ for apkfile in "$DLDIR"/*.apk; do
 		# Only ET_DYN (PIE) gets a dylib companion.
 		etype=$(od -A n -t u2 -N 2 -j 16 "$f" 2>/dev/null | tr -d ' ')
 		if [ "$etype" = "3" ]; then
-			"$ELF2MACHO" "$f" "${f}.dylib" >/dev/null 2>&1 || true
+			if "$ELF2MACHO" "$f" "${f}.dylib" >/dev/null 2>&1; then
+				# Ad-hoc codesign so iOS can load via dlopen.
+				codesign --force --sign - "${f}.dylib" \
+				    2>/dev/null || true
+			fi
 		fi
 	done
 
