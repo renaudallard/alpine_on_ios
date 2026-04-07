@@ -16,17 +16,28 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AOT_PATCH="$SCRIPT_DIR/aot_patch.py"
-ELF2MACHO="$SCRIPT_DIR/.elf2macho"
 
 # aot_patch is a Python script so it needs no build step.
-# elf2macho is still C; macOS 26 SIGKILLs freshly-compiled
-# unsigned binaries, but elf2macho runs for much longer than
-# aot_patch so ad-hoc signing it is enough to satisfy the kernel.
+#
+# elf2macho is a compiled C tool.  On macOS 26 the kernel kills
+# freshly-compiled binaries that live inside Xcode's build tree
+# (Killed: 9) even after ad-hoc codesign.  Work around it by
+# building to a path outside the source tree, stripping any
+# quarantine xattr, and ad-hoc signing before use.
+ELF2MACHO_DIR="$(mktemp -d 2>/dev/null || echo /tmp/elf2macho.$$)"
+mkdir -p "$ELF2MACHO_DIR"
+ELF2MACHO="$ELF2MACHO_DIR/elf2macho"
+
 if [ ! -x "$ELF2MACHO" ]; then
-	echo "Building elf2macho tool..."
+	echo "Building elf2macho tool in $ELF2MACHO_DIR..."
 	cc -O2 -o "$ELF2MACHO" "$SCRIPT_DIR/elf2macho.c"
+	if command -v xattr >/dev/null 2>&1; then
+		xattr -cr "$ELF2MACHO" 2>/dev/null || true
+	fi
 	if command -v codesign >/dev/null 2>&1; then
-		codesign --force --sign - "$ELF2MACHO" 2>/dev/null || true
+		codesign --remove-signature "$ELF2MACHO" 2>/dev/null || true
+		codesign --force --sign - --timestamp=none \
+		    "$ELF2MACHO" 2>/dev/null || true
 	fi
 fi
 
@@ -35,7 +46,7 @@ echo "Scanning $ROOTFS for ELF aarch64 binaries..."
 # Counters live in a temp file so the piped subshell can update them
 # and the parent can read them after the loop finishes.
 COUNTERS=$(mktemp)
-trap 'rm -f "$COUNTERS"' EXIT
+trap 'rm -f "$COUNTERS"; rm -rf "$ELF2MACHO_DIR"' EXIT
 echo "0 0 0 0" > "$COUNTERS"
 
 # Find all regular files and check for ELF magic.
