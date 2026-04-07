@@ -1,10 +1,55 @@
 /*
- * elf2macho: convert an AOT-patched AArch64 ELF to a Mach-O dylib.
+ * elf2macho: convert an AOT-patched AArch64 ELF to a Mach-O dylib
+ * that iOS dyld can load via dlopen().
  *
- * Produces a minimal arm64 dylib that iOS can dlopen().  Preserves
- * the relative offsets between code and data segments so ADRP
- * instructions remain correct.  The dylib is unsigned; run codesign
- * after generation.
+ * --- Why this exists ---
+ *
+ * iOS only executes code from properly signed Mach-O files.  ELF
+ * files cannot be made executable on iOS (PROT_EXEC is rejected).
+ * To run Linux binaries natively, we wrap each ELF in a Mach-O
+ * dylib at build time, codesign it, and let dyld load it at runtime.
+ *
+ * --- Layout strategy ---
+ *
+ * The Mach-O header must live at file offset 0.  The ELF code starts
+ * at vaddr 0 (typical for PIE binaries), so we cannot place code at
+ * file offset 0 without overwriting the header.  We "shift" all
+ * sections up by one PAGE_SZ (16K) so the header has room:
+ *
+ *   File offset 0..PAGE_SZ:  Mach-O header + load commands
+ *   File offset PAGE_SZ:     code (was at ELF vaddr 0)
+ *   File offset PAGE_SZ+V:   data (was at ELF vaddr V)
+ *
+ * Each section's file offset equals its VM address within the dylib
+ * (so the Mach-O invariant section.addr - segment.vmaddr ==
+ * section.offset - segment.fileoff holds with vmaddr = fileoff).
+ *
+ * --- Address resolution at runtime ---
+ *
+ * dyld loads the dylib at some kernel-chosen address (`loadAddress`)
+ * and applies a "slide".  Both nlist_64.n_value and export_trie
+ * symbol offsets contain `vaddr + shift` (the file-layout-shifted
+ * address).  dyld computes the runtime address as:
+ *   resolved = loadAddress + (vaddr + shift)
+ * which lands on the correct code/data because file offset 0 maps
+ * to loadAddress and the actual content lives at file offset
+ * (vaddr + shift).  See feedback_macho_audit_lessons.md for why
+ * the shift MUST appear in trie offsets (common audit confusion).
+ *
+ * --- Dynamic linking ---
+ *
+ * For each ELF DT_NEEDED, we emit an LC_LOAD_DYLIB pointing to
+ * `@rpath/<lib>.dylib`.  LC_RPATH = `@loader_path` so dyld finds
+ * sibling dylibs.  ELF dynamic relocations are translated:
+ *   R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT  -> Mach-O bind opcodes
+ *   R_AARCH64_RELATIVE, DT_RELR              -> Mach-O rebase opcodes
+ * dyld walks these opcode streams at load time and patches the
+ * data segment.
+ *
+ * --- Code signing ---
+ *
+ * Output dylib is unsigned.  Run `codesign --force --sign -` after
+ * generation (done by patch_rootfs_aot.sh on macOS CI runners).
  *
  * Usage: elf2macho <input.elf> <output.dylib>
  */
@@ -245,7 +290,11 @@ typedef struct {
 	uint64_t n_value;
 } nlist_64;
 
-/* ULEB128 encoder. */
+/*
+ * ULEB128 encoder.  Used throughout Mach-O dyld_info opcodes and
+ * the export trie.  Each byte holds 7 bits with the high bit
+ * indicating "more bytes follow".  Value 0 encodes as one byte 0x00.
+ */
 static size_t
 write_uleb(uint8_t *p, uint64_t v)
 {
@@ -259,7 +308,17 @@ write_uleb(uint8_t *p, uint64_t v)
 	return n;
 }
 
-/* ---- ELF dynamic section parsing ---- */
+/* ---- ELF dynamic section parsing ----
+ *
+ * The PT_DYNAMIC segment contains an array of (tag, value) pairs
+ * describing the binary's dynamic linking requirements: dependencies,
+ * symbol table, relocations, etc.  We parse it once into struct
+ * dynamic_info and then use that to generate Mach-O equivalents.
+ *
+ * Pointers in the parsed info point into the loaded ELF buffer
+ * (no copies); callers must not free the ELF buffer until done
+ * with the dynamic_info.
+ */
 
 #define MAX_NEEDED	16
 
@@ -324,7 +383,20 @@ is_versioned_sym(const char *name)
 	return strchr(name, '@') != NULL;
 }
 
-/* ---- Mach-O symbol table builder ---- */
+/* ---- Mach-O symbol table builder ----
+ *
+ * Mach-O nlist_64 symbol entries must be sorted in 3 groups in order:
+ * (1) local symbols, (2) external defined, (3) external undefined.
+ * LC_DYSYMTAB stores the index and count of each group.
+ *
+ * dyld uses external defined symbols (via the export trie, but the
+ * symbol table is still required) and external undefined symbols
+ * (which are bound at load time via the bind opcodes).
+ *
+ * String table convention: byte 0 is null, then null-terminated names.
+ * Each Mach-O symbol gets a leading underscore (e.g. ELF "malloc"
+ * becomes Mach-O "_malloc").
+ */
 
 #define MAX_SYMS 4096
 
@@ -485,7 +557,26 @@ free_symtab(struct symtab_builder *sb)
 	memset(sb, 0, sizeof(*sb));
 }
 
-/* ---- Bind opcode generation ---- */
+/* ---- Bind opcode generation ----
+ *
+ * dyld walks a stream of opcodes at load time to bind external
+ * symbols.  Each opcode is one byte: 4-bit opcode + 4-bit immediate.
+ * Some opcodes are followed by ULEB128 values or null-terminated
+ * strings.  dyld maintains a cursor (segment_index + offset) and
+ * a current symbol/library/type as it walks the stream.
+ *
+ * For each symbol bind we emit:
+ *   SET_SYMBOL_TRAILING_FLAGS_IMM | 0  (followed by symbol name)
+ *   SET_SEGMENT_AND_OFFSET_ULEB | seg  (followed by ULEB offset)
+ *   DO_BIND
+ * DO_BIND uses the current cursor (segment, offset) and writes
+ * the resolved symbol address there, then advances the cursor by
+ * sizeof(pointer)=8 bytes.  We reset the cursor before each bind
+ * via SET_SEGMENT_AND_OFFSET so they don't need to be sorted.
+ *
+ * The bind type (POINTER) and library ordinal (1 = first
+ * LC_LOAD_DYLIB) are set once at the start.
+ */
 
 struct bind_builder {
 	uint8_t		*buf;
@@ -637,7 +728,27 @@ free_binds(struct bind_builder *bb)
 	memset(bb, 0, sizeof(*bb));
 }
 
-/* ---- Rebase opcode generation ---- */
+/* ---- Rebase opcode generation ----
+ *
+ * Rebase opcodes tell dyld which pointers in the data segment need
+ * to have the slide added (R_AARCH64_RELATIVE in ELF terms).  The
+ * file already contains the unrelocated addend at each offset;
+ * dyld adds its slide and writes the result back.
+ *
+ * Sources:
+ * - DT_RELA entries with R_AARCH64_RELATIVE type
+ * - DT_RELR: a compact bitmap encoding for runs of relative
+ *   relocations.  Format alternates address-entries (LSB=0, the
+ *   address itself is a relocation site) and bitmap-entries (LSB=1,
+ *   bits 1..63 indicate offsets at base + (i-1)*8 for the next 63
+ *   slots starting at the previous address).
+ *
+ * The opcode stream is similar to bind: a cursor is set with
+ * SET_SEGMENT_AND_OFFSET, then DO_REBASE_ULEB_TIMES advances it
+ * by N pointers.  ADD_ADDR_ULEB skips ahead between non-contiguous
+ * runs.  We sort offsets ascending and emit one opcode per
+ * relocation (not optimal but simple and correct).
+ */
 
 struct rebase_builder {
 	uint8_t		*buf;
@@ -811,19 +922,37 @@ free_rebases(struct rebase_builder *rb)
 	memset(rb, 0, sizeof(*rb));
 }
 
-/* ---- Export trie generation ---- */
-
-/*
- * The export trie is a compressed prefix tree. Each node:
- *   terminal_size (uleb128)
- *     if non-zero: flags (uleb128) + symbol_offset (uleb128)
- *   n_children (1 byte)
- *   for each child:
- *     edge string (null-terminated)
- *     child_offset (uleb128, absolute from trie start)
+/* ---- Export trie generation ----
  *
- * Edges contain shared prefixes; the trie is built by inserting
- * each symbol name and splitting edges as needed.
+ * The export trie is a compressed prefix tree of exported symbols.
+ * dyld uses it to resolve dlsym() and inter-dylib symbol lookups.
+ * It is more compact than a flat symbol list when many symbols
+ * share prefixes (e.g. "pthread_*", "__pthread_*").
+ *
+ * Encoded format for each node:
+ *   terminal_size (uleb128)
+ *     if non-zero (i.e. this node is a complete symbol):
+ *       flags (uleb128)         -- 0 for regular symbols
+ *       symbol_offset (uleb128) -- vaddr (with file shift) of the symbol
+ *   n_children (1 byte)
+ *   for each child (sorted alphabetically by edge):
+ *     edge string (null-terminated)
+ *     child_offset (uleb128, absolute byte offset from trie start)
+ *
+ * IMPORTANT: children must be sorted alphabetically by edge string,
+ * and the symbol_offset must include the file shift (so dyld's
+ * computed runtime address loadAddress + offset lands on the actual
+ * code/data, since the file has the content at offset (vaddr+shift)).
+ *
+ * The trie is built by inserting symbols one at a time; each insert
+ * walks from root, descending matching edges, splitting an edge if
+ * a partial match is found, and adding new children otherwise.
+ *
+ * Sizing: trie_compute_sizes() walks the tree and computes each
+ * node's file_offset.  Since each node encodes its children's
+ * offsets as ULEB128 (whose size depends on the value), changing
+ * a child's offset can change the parent's size, which can cascade.
+ * We iterate the sizing pass until total size converges.
  */
 
 struct trie_node {
@@ -1384,13 +1513,22 @@ main(int argc, char **argv)
 		    shift);
 	}
 
-	/* Compute LINKEDIT internal layout.
-	 *   rebase_off
-	 *   bind_off
-	 *   export_off
-	 *   symtab_off (8-byte aligned)
-	 *   strtab_off
-	 *   codesig_off (16-byte aligned)
+	/*
+	 * Compute LINKEDIT internal layout.  All offsets are relative
+	 * to the start of LINKEDIT (which itself sits at file offset
+	 * `linkedit_off` in the dylib).  Sections are concatenated in
+	 * a fixed order with appropriate alignment:
+	 *
+	 *   rebase opcodes (8-byte aligned tail)
+	 *   bind opcodes (8-byte aligned tail)
+	 *   export trie (8-byte aligned tail)
+	 *   symbol table (nlist_64[])
+	 *   string table (8-byte aligned tail)
+	 *   code signature placeholder (16-byte aligned start)
+	 *
+	 * codesign overwrites the codesig area when it signs the file.
+	 * We reserve 4KB which is enough for ad-hoc signatures of any
+	 * size we'll produce.
 	 */
 	uint64_t le_rebase_off = 0;
 	uint64_t le_rebase_sz = (rb.size + 7) & ~(uint64_t)7;
