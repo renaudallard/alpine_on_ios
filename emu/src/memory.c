@@ -651,6 +651,12 @@ mem_munmap(mem_space_t *ms, uint64_t addr, uint64_t size)
  * Apply the host page protection for a region.  Used by mem_mprotect
  * after either an in-place prot change or a region split, so the
  * kernel page table tracks the prot field we just stored.
+ *
+ * MEM_MAP_EXTERNAL regions reference memory owned by another process
+ * (the parent across a fork, the dylib loaded by dyld, etc.), so
+ * touching the kernel page protections on them could leak the guest
+ * mprotect into the parent's view.  Just update our prot field and
+ * skip the host call; mem_translate will still honour it.
  */
 static void
 host_mprotect_region(mem_space_t *ms, mem_region_t *r)
@@ -658,6 +664,8 @@ host_mprotect_region(mem_space_t *ms, mem_region_t *r)
 	int	hp;
 
 	if (!NATIVE_MODE(ms))
+		return;
+	if (r->flags & MEM_MAP_EXTERNAL)
 		return;
 	hp = 0;
 	if (r->prot & MEM_PROT_READ)
