@@ -26,10 +26,47 @@
 #define EM_AARCH64	183
 #define ET_DYN		3
 #define PT_LOAD		1
+#define PT_DYNAMIC	2
 #define PT_INTERP	3
 #define PF_X		1
 #define PF_W		2
 #define PF_R		4
+
+#define DT_NULL		0
+#define DT_NEEDED	1
+#define DT_PLTRELSZ	2
+#define DT_PLTGOT	3
+#define DT_STRTAB	5
+#define DT_SYMTAB	6
+#define DT_RELA		7
+#define DT_RELASZ	8
+#define DT_RELAENT	9
+#define DT_STRSZ	10
+#define DT_SYMENT	11
+#define DT_PLTREL	20
+#define DT_JMPREL	23
+#define DT_RELR		36
+#define DT_RELRSZ	35
+#define DT_RELRENT	37
+
+#define R_AARCH64_NONE		0
+#define R_AARCH64_ABS64		257
+#define R_AARCH64_GLOB_DAT	1025
+#define R_AARCH64_JUMP_SLOT	1026
+#define R_AARCH64_RELATIVE	1027
+
+#define STB_LOCAL	0
+#define STB_GLOBAL	1
+#define STB_WEAK	2
+#define STT_NOTYPE	0
+#define STT_OBJECT	1
+#define STT_FUNC	2
+#define STT_SECTION	3
+#define STT_FILE	4
+#define ELF64_ST_BIND(i)	((i) >> 4)
+#define ELF64_ST_TYPE(i)	((i) & 0xf)
+#define ELF64_R_SYM(i)		((i) >> 32)
+#define ELF64_R_TYPE(i)		((i) & 0xffffffff)
 
 typedef struct {
 	uint8_t		e_ident[EI_NIDENT];
@@ -47,6 +84,26 @@ typedef struct {
 	uint64_t	p_filesz, p_memsz, p_align;
 } Elf64_Phdr;
 
+typedef struct {
+	int64_t		d_tag;
+	uint64_t	d_val;
+} Elf64_Dyn;
+
+typedef struct {
+	uint64_t	r_offset;
+	uint64_t	r_info;
+	int64_t		r_addend;
+} Elf64_Rela;
+
+typedef struct {
+	uint32_t	st_name;
+	uint8_t		st_info;
+	uint8_t		st_other;
+	uint16_t	st_shndx;
+	uint64_t	st_value;
+	uint64_t	st_size;
+} Elf64_Sym;
+
 /* ---- Mach-O definitions ---- */
 
 #define MH_MAGIC_64		0xFEEDFACF
@@ -59,12 +116,36 @@ typedef struct {
 
 #define LC_SEGMENT_64		0x19
 #define LC_ID_DYLIB		0x0D
+#define LC_LOAD_DYLIB		0x0C
 #define LC_UUID			0x1B
 #define LC_BUILD_VERSION	0x32
 #define LC_SYMTAB		0x02
 #define LC_DYSYMTAB		0x0B
 #define LC_CODE_SIGNATURE	0x1D
+#define LC_DYLD_INFO_ONLY	0x80000022
 #define LC_DYLD_EXPORTS_TRIE	0x80000033
+
+/* nlist_64 type flags */
+#define N_UNDF		0x0
+#define N_SECT		0xe
+#define N_EXT		0x01
+
+/* Bind opcodes */
+#define BIND_TYPE_POINTER			1
+#define BIND_OPCODE_DONE			0x00
+#define BIND_OPCODE_SET_DYLIB_ORDINAL_IMM	0x10
+#define BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM 0x40
+#define BIND_OPCODE_SET_TYPE_IMM		0x50
+#define BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB	0x70
+#define BIND_OPCODE_DO_BIND			0x90
+#define BIND_OPCODE_ADD_ADDR_ULEB		0x80
+
+/* Rebase opcodes */
+#define REBASE_TYPE_POINTER			1
+#define REBASE_OPCODE_DONE			0x00
+#define REBASE_OPCODE_SET_TYPE_IMM		0x10
+#define REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB 0x20
+#define REBASE_OPCODE_DO_REBASE_ULEB_TIMES	0x60
 
 #define VM_PROT_READ	1
 #define VM_PROT_WRITE	2
@@ -136,6 +217,37 @@ typedef struct {
 	uint32_t cmd, cmdsize;
 	uint32_t dataoff, datasize;
 } linkedit_data_command;
+
+typedef struct {
+	uint32_t cmd, cmdsize;
+	uint32_t rebase_off, rebase_size;
+	uint32_t bind_off, bind_size;
+	uint32_t weak_bind_off, weak_bind_size;
+	uint32_t lazy_bind_off, lazy_bind_size;
+	uint32_t export_off, export_size;
+} dyld_info_command;
+
+typedef struct {
+	uint32_t n_strx;
+	uint8_t  n_type;
+	uint8_t  n_sect;
+	uint16_t n_desc;
+	uint64_t n_value;
+} nlist_64;
+
+/* ULEB128 encoder. */
+static size_t
+write_uleb(uint8_t *p, uint64_t v)
+{
+	size_t n = 0;
+	do {
+		uint8_t b = v & 0x7f;
+		v >>= 7;
+		if (v != 0) b |= 0x80;
+		p[n++] = b;
+	} while (v != 0);
+	return n;
+}
 
 /* ---- Helpers ---- */
 
