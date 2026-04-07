@@ -213,8 +213,13 @@ for apkfile in "$DLDIR"/*.apk; do
 	# Patch ELF files.
 	find "$pkgdir" -type f | while read -r f; do
 		head=$(head -c 4 "$f" 2>/dev/null | od -A n -t x1 2>/dev/null | tr -d ' ')
-		if [ "$head" = "7f454c46" ]; then
-			"$AOT_PATCH" "$f"
+		if [ "$head" != "7f454c46" ]; then
+			continue
+		fi
+		"$AOT_PATCH" "$f"
+		# Only ET_DYN (PIE) gets a dylib companion.
+		etype=$(od -A n -t u2 -N 2 -j 16 "$f" 2>/dev/null | tr -d ' ')
+		if [ "$etype" = "3" ]; then
 			"$ELF2MACHO" "$f" "${f}.dylib" >/dev/null 2>&1 || true
 		fi
 	done

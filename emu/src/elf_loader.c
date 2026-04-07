@@ -211,6 +211,12 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 	}
 
 	/* Compute base address. */
+	if (mem->aot_mode && !is_dyn) {
+		emu_set_error("elf: ET_EXEC not supported in AOT mode "
+		    "(only PIE/ET_DYN)");
+		goto fail;
+	}
+
 	if (is_dyn) {
 		if (mem->aot_mode) {
 			/*

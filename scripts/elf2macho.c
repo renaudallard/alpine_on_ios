@@ -191,6 +191,11 @@ main(int argc, char **argv)
 		free(elf); return 1;
 	}
 
+	if (ehdr->e_type != ET_DYN) {
+		fprintf(stderr, "%s: not ET_DYN (PIE required)\n", argv[1]);
+		free(elf); return 1;
+	}
+
 	/* Find PT_LOAD segments (expect one RX + one RW). */
 	phdrs = (Elf64_Phdr *)(elf + ehdr->e_phoff);
 	has_text = has_data = 0;

@@ -30,21 +30,38 @@ fi
 
 echo "Scanning $ROOTFS for ELF aarch64 binaries..."
 
+converted=0
+skipped=0
+failed=0
+
 # Find all regular files and check for ELF magic.
 find "$ROOTFS" -type f | while read -r f; do
 	# Quick check: first 4 bytes must be ELF magic.
 	HEAD=$(head -c 4 "$f" 2>/dev/null | od -A n -t x1 2>/dev/null | tr -d ' ')
-	if [ "$HEAD" = "7f454c46" ]; then
-		"$AOT_PATCH" "$f"
-		# Convert to Mach-O dylib so iOS can execute it.
-		DYLIB="${f}.dylib"
-		if "$ELF2MACHO" "$f" "$DYLIB" >/dev/null 2>&1; then
-			# Codesign the dylib.
-			if command -v codesign >/dev/null 2>&1; then
-				codesign --force --sign - "$DYLIB" 2>/dev/null || true
-			fi
-		fi
+	if [ "$HEAD" != "7f454c46" ]; then
+		continue
 	fi
+
+	# Check e_type (offset 16, 2 bytes LE).  ET_DYN = 3.
+	ETYPE=$(od -A n -t u2 -N 2 -j 16 "$f" 2>/dev/null | tr -d ' ')
+	if [ "$ETYPE" != "3" ]; then
+		# Non-PIE ELF: skip conversion but still patch.
+		"$AOT_PATCH" "$f"
+		skipped=$((skipped + 1))
+		continue
+	fi
+
+	"$AOT_PATCH" "$f"
+	DYLIB="${f}.dylib"
+	if ! "$ELF2MACHO" "$f" "$DYLIB" >/dev/null 2>&1; then
+		echo "ERROR: elf2macho failed on $f" >&2
+		failed=$((failed + 1))
+		continue
+	fi
+	if command -v codesign >/dev/null 2>&1; then
+		codesign --force --sign - "$DYLIB" 2>/dev/null || true
+	fi
+	converted=$((converted + 1))
 done
 
 echo "AOT patching complete."
