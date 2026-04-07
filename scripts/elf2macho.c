@@ -308,6 +308,16 @@ elf_vaddr_to_ptr(uint8_t *elf, Elf64_Phdr *phdrs, int phnum, uint64_t vaddr)
 	return NULL;
 }
 
+/*
+ * Check if a symbol name contains a version suffix ("@" or "@@").
+ * Returns 1 if versioned (caller should skip or strip).
+ */
+static int
+is_versioned_sym(const char *name)
+{
+	return strchr(name, '@') != NULL;
+}
+
 /* ---- Mach-O symbol table builder ---- */
 
 #define MAX_SYMS 4096
@@ -390,6 +400,10 @@ build_symtab(struct dynamic_info *dyn, struct symtab_builder *sb)
 		name = dyn->strtab + s->st_name;
 		if (name[0] == '\0')
 			continue;
+		/* Skip versioned symbols (only use the default version
+		 * which has no @ suffix). */
+		if (is_versioned_sym(name))
+			continue;
 
 		sb->syms[idx].name = name;
 		sb->syms[idx].vaddr = s->st_value;
@@ -416,6 +430,8 @@ build_symtab(struct dynamic_info *dyn, struct symtab_builder *sb)
 			continue;
 		name = dyn->strtab + s->st_name;
 		if (name[0] == '\0')
+			continue;
+		if (is_versioned_sym(name))
 			continue;
 
 		sb->syms[idx].name = name;
