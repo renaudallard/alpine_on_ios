@@ -242,24 +242,43 @@ vfs_proc_readdir(void *ctx, const char *path, void *buf, size_t bufsiz,
 	idx = 0;
 
 	for (i = 0; entries[i] != NULL; i++) {
+		const char	*name;
+		uint8_t		 d_type;
+
 		if (idx < *offset) {
 			idx++;
 			continue;
 		}
 
-		namelen = strlen(entries[i]);
+		name = entries[i];
+		namelen = strlen(name);
 		reclen = offsetof(struct emu_dirent64, d_name) + namelen + 1;
 		reclen = (reclen + 7) & ~(size_t)7;
 
 		if (written + reclen > bufsiz)
 			break;
 
+		/*
+		 * Match the type vfs_proc_stat reports:
+		 *   self, sys, fd        -> DT_DIR
+		 *   exe                  -> DT_LNK
+		 *   everything else      -> DT_REG (proc_gen_content backed)
+		 */
+		if (strcmp(name, "self") == 0 ||
+		    strcmp(name, "sys") == 0 ||
+		    strcmp(name, "fd") == 0)
+			d_type = 4;	/* DT_DIR */
+		else if (strcmp(name, "exe") == 0)
+			d_type = 10;	/* DT_LNK */
+		else
+			d_type = 8;	/* DT_REG */
+
 		memset(&ent, 0, sizeof(ent));
 		ent.d_ino = (uint64_t)(i + 2);
 		ent.d_off = idx + 1;
 		ent.d_reclen = (uint16_t)reclen;
-		ent.d_type = 4;	/* DT_DIR for simplicity */
-		snprintf(ent.d_name, sizeof(ent.d_name), "%s", entries[i]);
+		ent.d_type = d_type;
+		snprintf(ent.d_name, sizeof(ent.d_name), "%s", name);
 
 		memcpy(out + written, &ent, reclen);
 		written += reclen;
