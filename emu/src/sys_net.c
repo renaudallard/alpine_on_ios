@@ -523,6 +523,10 @@ do_sendmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	if (mem_read64(proc->mem, a1 + 24, &iov_count) != 0)
 		return -LINUX_EFAULT;
 
+	/* Linux IOV_MAX. */
+	if (iov_count > 1024)
+		return -LINUX_EINVAL;
+
 	total = 0;
 	for (i = 0; i < (int)iov_count; i++) {
 		uint64_t	base, len;
@@ -570,6 +574,10 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EFAULT;
 	if (mem_read64(proc->mem, a1 + 24, &iov_count) != 0)
 		return -LINUX_EFAULT;
+
+	/* Linux IOV_MAX. */
+	if (iov_count > 1024)
+		return -LINUX_EINVAL;
 
 	/*
 	 * Use host recvmsg for proper msg_name/msg_control handling.
