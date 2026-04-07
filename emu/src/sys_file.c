@@ -1717,10 +1717,13 @@ do_sendfile(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 
 	/* Update offset if provided. */
 	if (a2 != 0) {
-		int64_t	off;
+		off_t	off;
 
 		off = lseek(in_fde->real_fd, 0, SEEK_CUR);
-		mem_write64(proc->mem, a2, (uint64_t)off);
+		if (off == (off_t)-1)
+			return done > 0 ? (int64_t)done : neg_errno(errno);
+		if (mem_write64(proc->mem, a2, (uint64_t)off) != 0)
+			return done > 0 ? (int64_t)done : -LINUX_EFAULT;
 	}
 
 	return (int64_t)done;
