@@ -203,9 +203,15 @@ proc_exit(emu_process_t *proc, int status)
 	proc->state = PROC_ZOMBIE;
 	proc->cpu.running = 0;
 
-	/* Write 0 to clear_child_tid and wake futex waiters. */
+	/*
+	 * Write 0 to clear_child_tid and wake futex waiters.  The
+	 * thread is exiting so we cannot return -EFAULT to anyone;
+	 * follow Linux semantics and silently ignore an unmapped
+	 * tidptr but still wake the futex (waiters could be in
+	 * another mm that still has the page mapped).
+	 */
 	if (proc->clear_child_tid != 0) {
-		mem_write32(proc->mem, proc->clear_child_tid, 0);
+		(void)mem_write32(proc->mem, proc->clear_child_tid, 0);
 		futex_wake(proc->clear_child_tid, 1,
 		    LINUX_FUTEX_BITSET_MATCH_ANY);
 	}
