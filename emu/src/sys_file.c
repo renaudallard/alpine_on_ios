@@ -2248,7 +2248,8 @@ do_timerfd_settime(emu_process_t *proc, uint64_t a0, uint64_t a1,
 		uint8_t	zbuf[32];
 
 		memset(zbuf, 0, sizeof(zbuf));
-		mem_copy_to(proc->mem, a3, zbuf, sizeof(zbuf));
+		if (mem_copy_to(proc->mem, a3, zbuf, sizeof(zbuf)) != 0)
+			return -LINUX_EFAULT;
 	}
 
 	/* struct itimerspec: it_interval(16) + it_value(16) */
