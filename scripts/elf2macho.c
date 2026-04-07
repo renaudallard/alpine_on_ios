@@ -1486,8 +1486,8 @@ main(int argc, char **argv)
 	    24 + 32 +
 	    24 + 24 + 24 + 80 + 16 + 16;
 	if (hdr_size > PAGE_SZ) {
-		fprintf(stderr, "%s: header too large (%zu > %d)\n",
-		    argv[1], hdr_size, PAGE_SZ);
+		fprintf(stderr, "%s: header too large (%llu > %d)\n",
+		    argv[1], (unsigned long long)hdr_size, PAGE_SZ);
 		free(elf); return 1;
 	}
 
