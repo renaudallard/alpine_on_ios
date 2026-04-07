@@ -694,7 +694,12 @@ elf_setup_stack(mem_space_t *mem, const elf_info_t *info,
 	AUXV(AT_GID, 0);
 	AUXV(AT_EGID, 0);
 	AUXV(AT_RANDOM, random_addr);
-	AUXV(AT_HWCAP, 0);
+	/*
+	 * Baseline aarch64 capabilities: HWCAP_FP (1) and HWCAP_ASIMD
+	 * (2).  Without these musl falls back to scalar code paths in
+	 * memcpy/memmove/strlen and friends.
+	 */
+	AUXV(AT_HWCAP, 3);
 	AUXV(AT_PLATFORM, platform_addr);
 	AUXV(AT_NULL, 0);
 
