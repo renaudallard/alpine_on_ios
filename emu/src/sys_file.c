@@ -1856,11 +1856,15 @@ do_epoll_ctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	if (tfde == NULL || tfde->type == FD_NONE)
 		return -LINUX_EBADF;
 
-	/* struct epoll_event: uint32 events at +0, uint64 data at +4 */
+	/*
+	 * struct epoll_event on aarch64: uint32 events at +0, 4 bytes
+	 * pad, uint64 data at +8.  EPOLL_PACKED is only set on x86_64,
+	 * so on aarch64 the struct is 16 bytes with natural alignment.
+	 */
 	if (op != LINUX_EPOLL_CTL_DEL && a3 != 0) {
 		if (mem_read32(proc->mem, a3, &events) != 0)
 			return -LINUX_EFAULT;
-		if (mem_read64(proc->mem, a3 + 4, &data) != 0)
+		if (mem_read64(proc->mem, a3 + 8, &data) != 0)
 			return -LINUX_EFAULT;
 	} else {
 		events = 0;
@@ -1984,13 +1988,16 @@ do_epoll_pwait(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		if (pfds[i].revents & POLLHUP)
 			revents |= LINUX_EPOLLHUP;
 
-		/* struct epoll_event: events(4) + data(8) = 12 bytes */
-		addr = a1 + (uint64_t)ready * 12;
+		/*
+		 * struct epoll_event on aarch64: 16 bytes total
+		 * (events(4) + pad(4) + data(8)).  Only x86_64 packs it.
+		 */
+		addr = a1 + (uint64_t)ready * 16;
 		if (mem_write32(proc->mem, addr, revents) != 0) {
 			free(pfds);
 			return -LINUX_EFAULT;
 		}
-		if (mem_write64(proc->mem, addr + 4,
+		if (mem_write64(proc->mem, addr + 8,
 		    ep->entries[i].data) != 0) {
 			free(pfds);
 			return -LINUX_EFAULT;
