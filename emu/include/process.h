@@ -129,6 +129,8 @@ fd_table_t	*fd_table_create(void);
 fd_table_t	*fd_table_clone(fd_table_t *);
 void		 fd_table_release(fd_table_t *);
 int		 fd_alloc(fd_table_t *, int minfd);
+int		 fd_alloc_init(fd_table_t *, int minfd,
+		    const fd_entry_t *init);
 void		 fd_close(fd_table_t *, int fd);
 void		 fd_close_cloexec(fd_table_t *);
 fd_entry_t	*fd_get(fd_table_t *, int fd);

@@ -767,6 +767,25 @@ fd_table_release(fd_table_t *tbl)
 int
 fd_alloc(fd_table_t *tbl, int minfd)
 {
+	fd_entry_t	init;
+
+	/*
+	 * Plain fd_alloc: reserve the slot with a placeholder
+	 * entry so other fd_allocs skip it, but leave real_fd = -1
+	 * so the caller still has to set the real values.  Kept for
+	 * backward compatibility; new code should prefer
+	 * fd_alloc_init which removes the races between this call
+	 * and the caller's subsequent field writes.
+	 */
+	memset(&init, 0, sizeof(init));
+	init.type = FD_FILE;
+	init.real_fd = -1;
+	return fd_alloc_init(tbl, minfd, &init);
+}
+
+int
+fd_alloc_init(fd_table_t *tbl, int minfd, const fd_entry_t *init)
+{
 	int	i;
 
 	if (minfd < 0)
@@ -776,18 +795,13 @@ fd_alloc(fd_table_t *tbl, int minfd)
 	for (i = minfd; i < MAX_FDS; i++) {
 		if (tbl->fds[i].type == FD_NONE) {
 			/*
-			 * Reserve the slot before releasing the lock so
-			 * another thread sharing this fd_table cannot pick
-			 * the same index before the caller fills in the
-			 * real type/real_fd.  Set real_fd to -1 so a stray
-			 * fd_close on this slot does not close stdin.
+			 * Install the caller-provided entry under the
+			 * same lock acquisition that found the slot.
+			 * A concurrent fd_get on this index will either
+			 * see FD_NONE (we have not written yet) or the
+			 * fully-initialised entry; no partial state.
 			 */
-			tbl->fds[i].type = FD_FILE;
-			tbl->fds[i].real_fd = -1;
-			tbl->fds[i].cloexec = 0;
-			tbl->fds[i].flags = 0;
-			tbl->fds[i].private = NULL;
-			tbl->fds[i].close_fn = NULL;
+			tbl->fds[i] = *init;
 			pthread_mutex_unlock(&tbl->lock);
 			return (i);
 		}

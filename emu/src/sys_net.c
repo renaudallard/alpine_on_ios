@@ -107,17 +107,21 @@ do_socket(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	if (is_nonblock)
 		fcntl(hfd, F_SETFL, fcntl(hfd, F_GETFL) | O_NONBLOCK);
 
-	efd = fd_alloc(proc->fds, 0);
+	{
+		fd_entry_t	init;
+
+		memset(&init, 0, sizeof(init));
+		init.type = FD_SOCKET;
+		init.real_fd = hfd;
+		init.flags = is_nonblock ? LINUX_SOCK_NONBLOCK : 0;
+		init.cloexec = is_cloexec;
+		efd = fd_alloc_init(proc->fds, 0, &init);
+	}
 	if (efd < 0) {
 		close(hfd);
 		return -LINUX_EMFILE;
 	}
-
-	fde = &proc->fds->fds[efd];
-	fde->type = FD_SOCKET;
-	fde->real_fd = hfd;
-	fde->flags = is_nonblock ? LINUX_SOCK_NONBLOCK : 0;
-	fde->cloexec = is_cloexec;
+	(void)fde;
 
 	return efd;
 }

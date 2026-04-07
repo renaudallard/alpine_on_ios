@@ -475,16 +475,19 @@ do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 	fd_type = FD_FILE;
 	hfd = try_vfs_open(proc, dirfd, a1, linux_flags, mode, &fd_type);
 	if (hfd >= 0) {
-		efd = fd_alloc(proc->fds, 0);
+		fd_entry_t	init;
+
+		memset(&init, 0, sizeof(init));
+		init.type = fd_type;
+		init.real_fd = hfd;
+		init.flags = linux_flags;
+		init.cloexec = is_cloexec;
+		efd = fd_alloc_init(proc->fds, 0, &init);
 		if (efd < 0) {
 			close(hfd);
 			return -LINUX_EMFILE;
 		}
-		fde = &proc->fds->fds[efd];
-		fde->type = fd_type;
-		fde->real_fd = hfd;
-		fde->flags = linux_flags;
-		fde->cloexec = is_cloexec;
+		(void)fde;	/* no separate post-alloc write needed */
 		LOG_TRACE("openat(vfs): type=%d -> efd=%d hfd=%d",
 		    fd_type, efd, hfd);
 		return efd;
@@ -508,17 +511,20 @@ do_openat(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		return neg_errno(errno);
 	}
 
-	efd = fd_alloc(proc->fds, 0);
-	if (efd < 0) {
-		close(hfd);
-		return -LINUX_EMFILE;
-	}
+	{
+		fd_entry_t	init;
 
-	fde = &proc->fds->fds[efd];
-	fde->type = FD_FILE;
-	fde->real_fd = hfd;
-	fde->flags = linux_flags;
-	fde->cloexec = is_cloexec;
+		memset(&init, 0, sizeof(init));
+		init.type = FD_FILE;
+		init.real_fd = hfd;
+		init.flags = linux_flags;
+		init.cloexec = is_cloexec;
+		efd = fd_alloc_init(proc->fds, 0, &init);
+		if (efd < 0) {
+			close(hfd);
+			return -LINUX_EMFILE;
+		}
+	}
 
 	LOG_TRACE("openat: %s -> efd=%d hfd=%d", host_path, efd, hfd);
 	return efd;
