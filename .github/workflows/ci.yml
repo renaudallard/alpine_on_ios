@@ -31,6 +31,21 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Diagnose binary execution
+        run: |
+          cat > /tmp/hello.c <<'EOF'
+          #include <stdio.h>
+          int main(int argc, char **argv) { (void)argv; printf("hello %d\n", argc); return 0; }
+          EOF
+          cc -O2 -o /tmp/hello /tmp/hello.c
+          file /tmp/hello
+          codesign -dvvv /tmp/hello 2>&1 || true
+          /tmp/hello arg1 arg2
+          echo "plain hello worked, exit=$?"
+          codesign --force --sign - /tmp/hello 2>&1 || true
+          /tmp/hello arg1
+          echo "signed hello exit=$?"
+
       - name: Download rootfs
         run: ./rootfs/download_rootfs.sh
 
