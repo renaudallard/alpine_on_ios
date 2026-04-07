@@ -1036,7 +1036,7 @@ do_dup(emu_process_t *proc, uint64_t a0)
 static int64_t
 do_dup3(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 {
-	int		oldfd, newfd;
+	int		oldfd, newfd, dupfd;
 	fd_entry_t	*oldfde, *newfde;
 
 	oldfd = (int)a0;
@@ -1052,13 +1052,17 @@ do_dup3(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	if (newfd < 0 || newfd >= MAX_FDS)
 		return -LINUX_EBADF;
 
+	dupfd = dup(oldfde->real_fd);
+	if (dupfd < 0)
+		return neg_errno(errno);
+
 	/* Close existing fd at newfd if open. */
 	fd_close(proc->fds, newfd);
 
 	/* Access entry directly; fd_get returns NULL for FD_NONE. */
 	newfde = &proc->fds->fds[newfd];
 	newfde->type = oldfde->type;
-	newfde->real_fd = dup(oldfde->real_fd);
+	newfde->real_fd = dupfd;
 	newfde->flags = oldfde->flags;
 	newfde->cloexec = (a2 & LINUX_O_CLOEXEC) ? 1 : 0;
 	return newfd;
