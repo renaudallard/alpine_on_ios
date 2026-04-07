@@ -919,9 +919,14 @@ mem_translate(mem_space_t *ms, uint64_t addr, uint64_t size, int prot)
 	 * This allows mixing native and interpreter regions in
 	 * AOT mode (needed when host page size > guest page size).
 	 */
+	/* Reject sizes that wrap a guest-controlled addr off the end. */
+	if (size != 0 && addr + size < addr)
+		return NULL;
+
 	pthread_rwlock_rdlock(&ms->lock);
 	for (r = ms->regions; r != NULL; r = r->next) {
-		if (addr >= r->base && addr + size <= r->base + r->size) {
+		if (addr >= r->base && size <= r->size &&
+		    addr - r->base <= r->size - size) {
 			if ((r->prot & prot) != prot) {
 				pthread_rwlock_unlock(&ms->lock);
 				return NULL;
