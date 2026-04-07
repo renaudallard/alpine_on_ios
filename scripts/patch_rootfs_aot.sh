@@ -30,9 +30,11 @@ fi
 
 echo "Scanning $ROOTFS for ELF aarch64 binaries..."
 
-converted=0
-skipped=0
-failed=0
+# Counters live in a temp file so the piped subshell can update them
+# and the parent can read them after the loop finishes.
+COUNTERS=$(mktemp)
+trap 'rm -f "$COUNTERS"' EXIT
+echo "0 0 0 0" > "$COUNTERS"
 
 # Find all regular files and check for ELF magic.
 find "$ROOTFS" -type f | while read -r f; do
@@ -42,26 +44,44 @@ find "$ROOTFS" -type f | while read -r f; do
 		continue
 	fi
 
+	read converted skipped failed errors < "$COUNTERS"
+
 	# Check e_type (offset 16, 2 bytes LE).  ET_DYN = 3.
 	ETYPE=$(od -A n -t u2 -N 2 -j 16 "$f" 2>/dev/null | tr -d ' ')
 	if [ "$ETYPE" != "3" ]; then
 		# Non-PIE ELF: skip conversion but still patch.
-		"$AOT_PATCH" "$f"
+		if ! "$AOT_PATCH" "$f"; then
+			echo "ERROR: aot_patch failed on $f" >&2
+			errors=$((errors + 1))
+		fi
 		skipped=$((skipped + 1))
+		echo "$converted $skipped $failed $errors" > "$COUNTERS"
 		continue
 	fi
 
-	"$AOT_PATCH" "$f"
+	if ! "$AOT_PATCH" "$f"; then
+		echo "ERROR: aot_patch failed on $f" >&2
+		errors=$((errors + 1))
+		echo "$converted $skipped $failed $errors" > "$COUNTERS"
+		continue
+	fi
 	DYLIB="${f}.dylib"
 	if ! "$ELF2MACHO" "$f" "$DYLIB" >/dev/null 2>&1; then
 		echo "ERROR: elf2macho failed on $f" >&2
 		failed=$((failed + 1))
+		echo "$converted $skipped $failed $errors" > "$COUNTERS"
 		continue
 	fi
 	if command -v codesign >/dev/null 2>&1; then
 		codesign --force --sign - "$DYLIB" 2>/dev/null || true
 	fi
 	converted=$((converted + 1))
+	echo "$converted $skipped $failed $errors" > "$COUNTERS"
 done
 
-echo "AOT patching complete."
+read converted skipped failed errors < "$COUNTERS"
+echo "AOT patching complete: $converted converted, $skipped skipped, $failed elf2macho failures, $errors patch errors."
+
+if [ "$failed" -gt 0 ] || [ "$errors" -gt 0 ]; then
+	exit 1
+fi
