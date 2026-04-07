@@ -978,15 +978,21 @@ do_fcntl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	}
 	case LINUX_F_DUPFD:
 	case LINUX_F_DUPFD_CLOEXEC: {
-		int		newfd;
+		int		newfd, dupfd;
 		fd_entry_t	*nfde;
 
 		newfd = fd_alloc(proc->fds, (int)a2);
 		if (newfd < 0)
 			return -LINUX_EMFILE;
+		dupfd = dup(fde->real_fd);
+		if (dupfd < 0) {
+			int saved_errno = errno;
+			fd_close(proc->fds, newfd);
+			return neg_errno(saved_errno);
+		}
 		nfde = &proc->fds->fds[newfd];
 		nfde->type = fde->type;
-		nfde->real_fd = dup(fde->real_fd);
+		nfde->real_fd = dupfd;
 		nfde->flags = fde->flags;
 		nfde->cloexec = ((int)a1 == LINUX_F_DUPFD_CLOEXEC) ? 1 : 0;
 		return newfd;
@@ -1000,7 +1006,7 @@ do_fcntl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 static int64_t
 do_dup(emu_process_t *proc, uint64_t a0)
 {
-	int		fd, newfd;
+	int		fd, newfd, dupfd;
 	fd_entry_t	*fde, *nfde;
 
 	fd = (int)a0;
@@ -1012,9 +1018,16 @@ do_dup(emu_process_t *proc, uint64_t a0)
 	if (newfd < 0)
 		return -LINUX_EMFILE;
 
+	dupfd = dup(fde->real_fd);
+	if (dupfd < 0) {
+		int saved_errno = errno;
+		fd_close(proc->fds, newfd);
+		return neg_errno(saved_errno);
+	}
+
 	nfde = &proc->fds->fds[newfd];
 	nfde->type = fde->type;
-	nfde->real_fd = dup(fde->real_fd);
+	nfde->real_fd = dupfd;
 	nfde->flags = fde->flags;
 	nfde->cloexec = 0;
 	return newfd;
