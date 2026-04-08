@@ -81,6 +81,13 @@ def patch_file(path):
         e_phoff, e_shoff = struct.unpack_from("<QQ", data, 32)
         e_phentsize, e_phnum = struct.unpack_from("<HH", data, 54)
 
+        # Relocatable objects (ET_REL, typically .o files shipped
+        # inside some -dev packages) have no program header table,
+        # hence no PT_LOAD executable segment to patch.  Nothing
+        # to do; skip silently rather than flag as malformed.
+        if e_phnum == 0 or e_phentsize == 0:
+            return 0
+
         # Validate program-header table fits in the file.
         if (
             e_phentsize < 56
