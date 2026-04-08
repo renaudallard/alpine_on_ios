@@ -21,9 +21,11 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -819,15 +821,58 @@ do_ioctl(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		if (fde->type != FD_TTY)
 			return -LINUX_ENOTTY;
 		return 0;
-	case LINUX_TIOCGWINSZ:
-	case LINUX_TIOCSWINSZ:
+	case LINUX_TIOCGWINSZ: {
 		/*
-		 * ENOTTY: busybox uses TIOCGWINSZ for terminal
-		 * detection alongside TCGETS.  Returning success here
-		 * enables a code path that corrupts the heap after
-		 * fork.  Terminal size comes from COLUMNS/LINES env.
+		 * fd 0/1/2 is now the slave end of a real host pty
+		 * (see emu_spawn), so forward TIOCGWINSZ to the host.
+		 * struct winsize is 8 bytes layout-identical on Linux
+		 * and Darwin: { uint16_t ws_row, ws_col, ws_xpixel,
+		 * ws_ypixel; }, no translation needed.
 		 */
-		return -LINUX_ENOTTY;
+		struct winsize	hws;
+		uint16_t	gws[4];
+
+		if (fde->type != FD_TTY)
+			return -LINUX_ENOTTY;
+		memset(&hws, 0, sizeof(hws));
+		if (ioctl(fde->real_fd, TIOCGWINSZ, &hws) < 0) {
+			/* Fall back to the app-provided size. */
+			pthread_mutex_lock(&g_ws_lock);
+			gws[0] = g_ws_rows;
+			gws[1] = g_ws_cols;
+			pthread_mutex_unlock(&g_ws_lock);
+			gws[2] = 0;
+			gws[3] = 0;
+		} else {
+			gws[0] = hws.ws_row;
+			gws[1] = hws.ws_col;
+			gws[2] = hws.ws_xpixel;
+			gws[3] = hws.ws_ypixel;
+		}
+		if (mem_copy_to(proc->mem, a2, gws, sizeof(gws)) != 0)
+			return -LINUX_EFAULT;
+		return 0;
+	}
+	case LINUX_TIOCSWINSZ: {
+		struct winsize	hws;
+		uint16_t	gws[4];
+
+		if (fde->type != FD_TTY)
+			return -LINUX_ENOTTY;
+		if (mem_copy_from(proc->mem, gws, a2, sizeof(gws)) != 0)
+			return -LINUX_EFAULT;
+		memset(&hws, 0, sizeof(hws));
+		hws.ws_row = gws[0];
+		hws.ws_col = gws[1];
+		hws.ws_xpixel = gws[2];
+		hws.ws_ypixel = gws[3];
+		(void)ioctl(fde->real_fd, TIOCSWINSZ, &hws);
+		pthread_mutex_lock(&g_ws_lock);
+		g_ws_rows = hws.ws_row;
+		g_ws_cols = hws.ws_col;
+		pthread_mutex_unlock(&g_ws_lock);
+		return 0;
+	}
 	case LINUX_TIOCGPGRP:
 	case LINUX_TIOCSPGRP:
 		/*

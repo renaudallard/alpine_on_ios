@@ -2,6 +2,12 @@ CC = cc
 CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -O2 -g -Iinclude -D_GNU_SOURCE
 LDFLAGS = -lpthread -lm
 
+# openpty() lives in libutil on Linux; on Darwin it's in libSystem.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+LDFLAGS += -lutil
+endif
+
 SRCS = $(wildcard src/*.c)
 ASM_SRCS = $(wildcard src/*.S)
 OBJS = $(SRCS:src/%.c=build/%.o) $(ASM_SRCS:src/%.S=build/%.o)

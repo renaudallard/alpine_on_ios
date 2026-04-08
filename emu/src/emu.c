@@ -17,8 +17,13 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>
+#include <util.h>	/* openpty */
+#else
+#include <pty.h>	/* openpty on Linux (needs -lutil) */
 #endif
 
 
@@ -127,8 +132,10 @@ int
 emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 {
 	emu_process_t	*proc;
-	int		 sockpair[2];
+	int		 master, slave;
 	int		 ret;
+	struct winsize	 ws;
+	struct termios	 tio;
 
 	g_last_error[0] = '\0';	/* Clear previous error */
 
@@ -137,35 +144,68 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 		return (-1);
 	}
 
-	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockpair) < 0) {
-		set_error("socketpair: %s", strerror(errno));
+	/*
+	 * Real pty pair instead of socketpair so the guest sees an
+	 * actual terminal on fd 0/1/2.  The host tty driver does
+	 * canonical input, echo, signal processing (Ctrl-C, Ctrl-\,
+	 * Ctrl-Z), and window-size tracking for free, which is what
+	 * busybox ash needs to go into interactive mode at all.
+	 */
+	memset(&ws, 0, sizeof(ws));
+	ws.ws_row = 24;
+	ws.ws_col = 80;
+	memset(&tio, 0, sizeof(tio));
+	/* Sensible canonical/cooked defaults: echo + line buffering +
+	 * SIG on Ctrl-C, NL->CRNL on output, 8-bit, 38400 baud. */
+	tio.c_iflag = ICRNL | IXON;
+	tio.c_oflag = OPOST | ONLCR;
+	tio.c_cflag = CS8 | CREAD;
+	tio.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL |
+	    IEXTEN;
+	tio.c_cc[VINTR]  = 003;   /* Ctrl-C */
+	tio.c_cc[VQUIT]  = 034;   /* Ctrl-\ */
+	tio.c_cc[VERASE] = 0177;  /* DEL */
+	tio.c_cc[VKILL]  = 025;   /* Ctrl-U */
+	tio.c_cc[VEOF]   = 004;   /* Ctrl-D */
+	tio.c_cc[VSTART] = 021;   /* Ctrl-Q */
+	tio.c_cc[VSTOP]  = 023;   /* Ctrl-S */
+	tio.c_cc[VSUSP]  = 032;   /* Ctrl-Z */
+	tio.c_cc[VMIN]   = 1;
+	tio.c_cc[VTIME]  = 0;
+
+	if (openpty(&master, &slave, NULL, &tio, &ws) < 0) {
+		set_error("openpty: %s", strerror(errno));
 		return (-1);
 	}
 
 	proc = proc_create(NULL);
 	if (proc == NULL) {
 		set_error("proc_create failed");
-		close(sockpair[0]);
-		close(sockpair[1]);
+		close(master);
+		close(slave);
 		return (-1);
 	}
 
 	proc->vfs = g_vfs;
 	snprintf(proc->cwd, sizeof(proc->cwd), "/");
 
-	/* Wire fds 0, 1, 2 to the process end of the socketpair. */
+	/*
+	 * Wire fds 0, 1, 2 to the slave side of the pty.  Dup three
+	 * times so each guest fd has its own host fd entry and
+	 * close()/dup2() semantics work independently.
+	 */
 	{
 		int fd0, fd1, fd2;
-		fd0 = dup(sockpair[1]);
-		fd1 = dup(sockpair[1]);
-		fd2 = dup(sockpair[1]);
-		close(sockpair[1]);
+		fd0 = dup(slave);
+		fd1 = dup(slave);
+		fd2 = dup(slave);
+		close(slave);
 		if (fd0 < 0 || fd1 < 0 || fd2 < 0) {
 			set_error("dup: %s", strerror(errno));
 			if (fd0 >= 0) close(fd0);
 			if (fd1 >= 0) close(fd1);
 			if (fd2 >= 0) close(fd2);
-			close(sockpair[0]);
+			close(master);
 			proc_destroy(proc);
 			return (-1);
 		}
@@ -182,7 +222,7 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 		/* Only set generic error if elf_load didn't set a specific one */
 		if (g_last_error[0] == '\0')
 			set_error("execve %s: error %d", path, ret);
-		close(sockpair[0]);
+		close(master);
 		proc_destroy(proc);
 		return (-1);
 	}
@@ -190,13 +230,13 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 	ret = pthread_create(&proc->host_thread, NULL, proc_run, proc);
 	if (ret != 0) {
 		set_error("pthread_create: %s", strerror(ret));
-		close(sockpair[0]);
+		close(master);
 		proc_destroy(proc);
 		return (-1);
 	}
 	pthread_detach(proc->host_thread);
 
-	*term_fd = sockpair[0];
+	*term_fd = master;
 	return (proc->pid);
 }
 
@@ -204,12 +244,31 @@ int
 emu_set_winsize(int pid, unsigned short rows, unsigned short cols)
 {
 	emu_process_t	*proc;
+	struct winsize	 ws;
 
 	sys_set_winsize(rows, cols);
 
 	proc = proc_find(pid);
 	if (proc == NULL)
 		return (-1);
+
+	/*
+	 * Forward to the real host pty driver via fd 0's backing
+	 * host fd.  The driver will then deliver SIGWINCH to the
+	 * foreground process group on its own, but we still send
+	 * our own EMU_SIGWINCH below for processes that rely on
+	 * the emulator's signal path.
+	 */
+	if (proc->fds != NULL) {
+		fd_entry_t	*fde = fd_get(proc->fds, 0);
+		if (fde != NULL && fde->type == FD_TTY &&
+		    fde->real_fd >= 0) {
+			memset(&ws, 0, sizeof(ws));
+			ws.ws_row = rows;
+			ws.ws_col = cols;
+			(void)ioctl(fde->real_fd, TIOCSWINSZ, &ws);
+		}
+	}
 
 	sig_send(proc, EMU_SIGWINCH);
 	return (0);
