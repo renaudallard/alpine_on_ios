@@ -50,7 +50,7 @@ struct ContentView: View {
 
                     /* Show loading hint until shell produces output. */
                     if !bridge.hasOutput {
-                        VStack {
+                        VStack(spacing: 12) {
                             Spacer()
                             HStack {
                                 ProgressView()
@@ -62,7 +62,14 @@ struct ContentView: View {
                             .padding(8)
                             .background(Color.black.opacity(0.8))
                             .cornerRadius(8)
-                            .padding(.bottom, 40)
+
+                            /* While the shell is still loading (or
+                             * hung), also show whatever crumbs the
+                             * previous run left behind.  Gives the
+                             * user unlimited time to read them
+                             * instead of the splash flashing by. */
+                            breadcrumbsView
+                                .padding(.bottom, 40)
                         }
                     }
                 }
@@ -94,31 +101,42 @@ struct ContentView: View {
                 .font(.system(.body, design: .monospaced))
                 .foregroundColor(.green)
 
-            /*
-             * If the previous run left breadcrumbs behind (silent
-             * crash with no .ips), show them here so the user can
-             * see where the last attempt died while the current
-             * one spins up.
-             */
-            if !bridge.previousBreadcrumbs.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Previous run crumbs:")
-                            .font(.system(.caption2, design: .monospaced).bold())
-                            .foregroundColor(.orange)
-                        Text(bridge.previousBreadcrumbs)
+            breadcrumbsView
+        }
+    }
+
+    /*
+     * Reusable panel that shows the previous run's breadcrumb
+     * trail (latest line first, capped at last 40) when any
+     * are present.  Invisible when there are none.
+     */
+    @ViewBuilder
+    private var breadcrumbsView: some View {
+        if !bridge.previousBreadcrumbs.isEmpty {
+            let lines = bridge.previousBreadcrumbs
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .suffix(40)
+                .reversed()
+                .map { String($0) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Previous run crumbs (latest first):")
+                        .font(.system(.caption2, design: .monospaced).bold())
+                        .foregroundColor(.orange)
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                        Text(l)
                             .font(.system(.caption2, design: .monospaced))
                             .foregroundColor(.orange)
                             .textSelection(.enabled)
                     }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 240)
-                .background(Color.black.opacity(0.6))
-                .cornerRadius(8)
-                .padding(.horizontal)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxHeight: 300)
+            .background(Color.black.opacity(0.6))
+            .cornerRadius(8)
+            .padding(.horizontal)
         }
     }
 
