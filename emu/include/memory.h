@@ -26,6 +26,7 @@
 #define MEM_MAP_ANONYMOUS	0x20
 #define MEM_MAP_EXTERNAL	0x40	/* host buf not owned by us */
 #define MEM_MAP_CALLOC		0x100	/* host buf is calloc'd, not mmap'd */
+#define MEM_MAP_SKIP_MPROTECT	0x200	/* don't forward guest mprotect to host */
 
 /* A contiguous region of guest memory */
 typedef struct mem_region {
@@ -58,7 +59,7 @@ void		 mem_space_ref(mem_space_t *);
 uint64_t	mem_mmap(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot, int flags, int fd, uint64_t offset);
 uint64_t	mem_mmap_host(mem_space_t *, uint64_t addr, uint64_t size,
-		    int prot, uint8_t *host_buf, int owned);
+		    int prot, uint8_t *host_buf, int map_flags);
 uint64_t	mem_mmap_file(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot, int fd, uint64_t offset);
 int		mem_munmap(mem_space_t *, uint64_t addr, uint64_t size);

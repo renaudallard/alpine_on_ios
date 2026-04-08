@@ -554,19 +554,17 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		newmem->brk_base = (uint64_t)heap;
 		newmem->brk_current = (uint64_t)heap;
 		/*
-		 * owned=0: leave the MEM_MAP_EXTERNAL flag on the heap
-		 * so that host_mprotect_region and mem_munmap's
-		 * partial-range paths skip the underlying host mapping.
-		 * A guest-issued mprotect on the heap would otherwise
-		 * apply to the real pages and can strip write permission
-		 * from the backing store, killing the next access.
-		 * The 264 MB leak on teardown that this reintroduces is
-		 * the lesser evil until we split ownership and mprotect-
-		 * safety into two separate flags.
+		 * MEM_MAP_SKIP_MPROTECT: we own the region (so it is
+		 * munmap'd on mem_space_destroy, no 33 MB leak per
+		 * execve), but guest-issued mprotect calls are not
+		 * forwarded to the host pages.  Without the skip,
+		 * musl's early init strips write permission from the
+		 * heap and the next access SIGBUSes.
 		 */
 		if (mem_mmap_host(newmem, (uint64_t)heap, heap_size,
 		    MEM_PROT_READ | MEM_PROT_WRITE,
-		    (uint8_t *)heap, 0) == (uint64_t)-1) {
+		    (uint8_t *)heap, MEM_MAP_SKIP_MPROTECT)
+		    == (uint64_t)-1) {
 			LOG_ERR("execve: AOT heap register failed");
 			munmap(heap, heap_size);
 			EXECVE_FAIL(-ENOMEM);
@@ -583,11 +581,12 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 			EXECVE_FAIL(-ENOMEM);
 		}
 		stack_top = (uint64_t)sp_region + AOT_STACK_SIZE;
-		/* owned=0 for the same reason as the heap above. */
+		/* Same MEM_MAP_SKIP_MPROTECT rationale as the heap. */
 		if (mem_mmap_host(newmem, (uint64_t)sp_region,
 		    AOT_STACK_SIZE,
 		    MEM_PROT_READ | MEM_PROT_WRITE,
-		    (uint8_t *)sp_region, 0) == (uint64_t)-1) {
+		    (uint8_t *)sp_region, MEM_MAP_SKIP_MPROTECT)
+		    == (uint64_t)-1) {
 			LOG_ERR("execve: AOT stack register failed");
 			munmap(sp_region, AOT_STACK_SIZE);
 			EXECVE_FAIL(-ENOMEM);

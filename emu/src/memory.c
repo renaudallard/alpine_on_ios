@@ -459,17 +459,30 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
  * mem_space_destroy (caller keeps ownership; used e.g. for dyld-
  * loaded dylib pages or the framebuffer shared buffer).
  *
- * If owned == 1, mem_space_destroy will munmap the buffer when
- * the last reference to this mem_space drops.  Use for heap/
- * stack regions allocated via mmap() by proc_execve — leaving
- * them unowned means every process exit leaks the full region.
+ * map_flags is an OR of MEM_MAP_* bits:
+ *   0                      region is owned by us, guest mprotect
+ *                          is forwarded to the host.  mem_space_destroy
+ *                          will munmap the buffer when the last
+ *                          reference drops.
+ *   MEM_MAP_EXTERNAL       buffer owned by someone else (dyld,
+ *                          framebuffer, parent across a fork).  Not
+ *                          freed on destroy and guest mprotect is
+ *                          suppressed (implies SKIP_MPROTECT).
+ *   MEM_MAP_SKIP_MPROTECT  we own the buffer (so it IS freed on
+ *                          destroy), but guest-issued mprotect calls
+ *                          are not forwarded to the host page
+ *                          protection.  Use for the AOT heap/stack,
+ *                          where musl's early init strips write
+ *                          permission from pages it expects to stay
+ *                          writable and would SIGBUS the next access.
+ *
  * Forked children still share the parent's heap/stack via
  * mem_space_clone(), which unconditionally re-adds the EXTERNAL
  * flag so a child never frees memory owned by its parent.
  */
 uint64_t
 mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
-    int prot, uint8_t *host_buf, int owned)
+    int prot, uint8_t *host_buf, int map_flags)
 {
 	mem_region_t	*r;
 	uint64_t	 aligned_size;
@@ -516,9 +529,7 @@ mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
 	r->base = addr;
 	r->size = aligned_size;
 	r->prot = prot;
-	r->flags = MEM_MAP_PRIVATE;
-	if (!owned)
-		r->flags |= MEM_MAP_EXTERNAL;
+	r->flags = MEM_MAP_PRIVATE | map_flags;
 	r->host = host_buf;
 
 	region_insert(ms, r);
@@ -652,11 +663,13 @@ mem_munmap(mem_space_t *ms, uint64_t addr, uint64_t size)
  * after either an in-place prot change or a region split, so the
  * kernel page table tracks the prot field we just stored.
  *
- * MEM_MAP_EXTERNAL regions reference memory owned by another process
- * (the parent across a fork, the dylib loaded by dyld, etc.), so
- * touching the kernel page protections on them could leak the guest
- * mprotect into the parent's view.  Just update our prot field and
- * skip the host call; mem_translate will still honour it.
+ * Skipped for MEM_MAP_EXTERNAL (another process owns the pages and
+ * we must not touch the kernel protection bits) AND for
+ * MEM_MAP_SKIP_MPROTECT (we own the pages but the guest is not
+ * allowed to change their real host protection — e.g. the AOT
+ * heap/stack, where musl's early init strips write perms from pages
+ * that need to stay writable).  mem_translate still honours the
+ * guest prot field in both cases.
  */
 static void
 host_mprotect_region(mem_space_t *ms, mem_region_t *r)
@@ -665,7 +678,7 @@ host_mprotect_region(mem_space_t *ms, mem_region_t *r)
 
 	if (!NATIVE_MODE(ms))
 		return;
-	if (r->flags & MEM_MAP_EXTERNAL)
+	if (r->flags & (MEM_MAP_EXTERNAL | MEM_MAP_SKIP_MPROTECT))
 		return;
 	hp = 0;
 	if (r->prot & MEM_PROT_READ)
