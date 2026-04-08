@@ -190,7 +190,8 @@ alpine_on_ios/
     download_rootfs.sh   Download Alpine minirootfs
     overlay/             X11 config, .profile, start-firefox.sh
   scripts/
-    aot_patch.c          AOT patcher: SVC->BRK in ELF binaries
+    aot_patch.py         AOT patcher: SVC->BRK in ELF binaries
+    elf2macho.c          ELF -> Mach-O dylib converter (16K page, dyld binds)
     patch_rootfs_aot.sh  Patch + codesign all ELFs in a rootfs
     build_aot_repo.sh    Build AOT-patched APK repository
     build_rootfs.sh      Rootfs assembly
@@ -208,9 +209,8 @@ alpine_on_ios/
 | AltStore can't find server | Ensure AltServer is running, same Wi-Fi |
 | App expires after 7 days | Re-sign with AltStore/Sideloadly, or use TrollStore |
 | No keyboard input | Tap the terminal area to focus the keyboard |
-| Blank terminal | Wait for shell to load; check loading indicator for mode info |
+| Blank terminal | Wait for the "Spawning shell..." indicator to finish |
 | apk signature errors | Use `--allow-untrusted` for the AOT repository |
-| Slow startup | Loading indicator shows `aot=0` if native failed; rebuild from Xcode |
 
 ## Support
 
