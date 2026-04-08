@@ -840,46 +840,31 @@ build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
 		}
 	}
 
-	/* From DT_RELR: compressed RELATIVE relocations.
-	 * Format: words alternating between addresses and bitmaps.
-	 * If LSB == 0: it's an address; emit it.
-	 * If LSB == 1: it's a bitmap; bits 1..63 indicate offsets
-	 *              from the previous address (in 8-byte units). */
-	if (dyn->relr != NULL) {
-		uint64_t base = 0;
-		n = dyn->relrsz / sizeof(uint64_t);
-		for (i = 0; i < n; i++) {
-			uint64_t entry = dyn->relr[i];
-			if ((entry & 1) == 0) {
-				/* Address entry. */
-				base = entry;
-				if (n_offsets >= cap_offsets) {
-					cap_offsets = (cap_offsets + 1) * 2;
-					offsets = realloc(offsets,
-					    cap_offsets * sizeof(uint64_t));
-				}
-				offsets[n_offsets++] = base;
-				base += 8;
-			} else {
-				/* Bitmap entry: 63 bits of bitmap. */
-				int bit;
-				for (bit = 1; bit < 64; bit++) {
-					if (entry & (1ULL << bit)) {
-						uint64_t off = base + (bit - 1) * 8;
-						if (n_offsets >= cap_offsets) {
-							cap_offsets =
-							    (cap_offsets + 1) * 2;
-							offsets = realloc(offsets,
-							    cap_offsets *
-							    sizeof(uint64_t));
-						}
-						offsets[n_offsets++] = off;
-					}
-				}
-				base += 63 * 8;
-			}
-		}
-	}
+	/*
+	 * Intentionally NOT emitting rebase opcodes for DT_RELR
+	 * entries.  Musl's _dlstart_c in ld-musl-aarch64.so.1 runs
+	 * its own RELR self-relocation loop during startup, and
+	 * that loop is an "add base" operation on the existing slot:
+	 *
+	 *     *reloc_addr += ldso.base;
+	 *
+	 * If dyld has already processed the same slots via a rebase
+	 * opcode, the slot holds (load_base + ELF_vaddr) when musl
+	 * runs, and musl's += base turns it into
+	 * (2*load_base + ELF_vaddr), corrupting every pointer in
+	 * .data.rel.ro / .got.  Every pointer subsequently
+	 * dereferenced in ld-musl's internal init then crashes
+	 * before any syscall (BRK) can even fire, which on iOS
+	 * shows up as a silent process death with no .ips file.
+	 *
+	 * Leave the RELR slots untouched in the Mach-O.  dyld will
+	 * see them as zero-initialized pointers; musl will then
+	 * apply the relative adjustment exactly once and the pointers
+	 * end up correct.  R_AARCH64_RELATIVE in RELA format is
+	 * safe to double-apply because musl's handler overwrites
+	 * with (base + addend), not `+= base`; same for GLOB_DAT,
+	 * JUMP_SLOT and ABS64.  So the bug is specifically RELR.
+	 */
 
 	/*
 	 * GLOB_DAT/JUMP_SLOT/ABS64 relocations targeting a DEFINED
