@@ -684,8 +684,8 @@ proc_run(void *arg)
 	if (proc->mem == NULL || !proc->mem->aot_mode ||
 	    !native_available()) {
 		LOG_ERR("proc: pid %d cannot run without AOT", proc->pid);
-		emu_set_error("AOT native execution not available. "
-		    "Install via TrollStore or enable JIT in AltStore.");
+		emu_set_error("AOT native execution not available on "
+		    "this host");
 		proc_run_exit(proc, 1);
 		return (NULL);
 	}
