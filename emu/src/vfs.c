@@ -179,7 +179,8 @@ vfs_resolve_rw(vfs_t *vfs, const char *guest_path, char *host_path,
 	vfs_normalize_path("/", guest_path, pathbuf, sizeof(pathbuf));
 
 	if (vfs->overlay[0] != '\0') {
-		char	ovpath[PATH_MAX];
+		char		ovpath[PATH_MAX];
+		struct stat	ovst;
 
 		if (snprintf(ovpath, sizeof(ovpath), "%s%s",
 		    vfs->overlay, pathbuf) < (int)sizeof(ovpath)) {
@@ -194,8 +195,17 @@ vfs_resolve_rw(vfs_t *vfs, const char *guest_path, char *host_path,
 				    (int)sizeof(resolved))
 					goto do_resolve;
 			}
-			/* For reads: use overlay if file exists there. */
-			if (access(ovpath, F_OK) == 0) {
+			/*
+			 * For reads: use overlay if anything exists at
+			 * that path — *including* dead symlinks whose
+			 * target only makes sense under the guest
+			 * filesystem (e.g. busybox applet symlinks that
+			 * point at /bin/busybox).  access(F_OK) would
+			 * follow the link on the host and report ENOENT
+			 * for such guest-relative targets, so use lstat
+			 * instead to catch the link itself.
+			 */
+			if (lstat(ovpath, &ovst) == 0) {
 				if (snprintf(resolved, sizeof(resolved),
 				    "%s", vfs->overlay) <
 				    (int)sizeof(resolved))
