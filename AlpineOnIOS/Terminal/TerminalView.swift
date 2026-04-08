@@ -105,6 +105,10 @@ struct TerminalView: View {
     private func handleKey(_ key: String) {
         guard !key.isEmpty else { return }
 
+        let b0 = key.utf8.first ?? 0
+        let msg = "kb.handleKey: len=\(key.utf8.count) b0=0x\(String(b0, radix: 16))"
+        msg.withCString { emu_breadcrumb_str($0) }
+
         if settings.hapticFeedback {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
@@ -267,7 +271,9 @@ struct KeyboardInputView: UIViewRepresentable {
 
         /* Become first responder after a short delay */
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            tf.becomeFirstResponder()
+            let ok = tf.becomeFirstResponder()
+            let msg = "kb.becomeFirst: ok=\(ok) isFirst=\(tf.isFirstResponder)"
+            msg.withCString { emu_breadcrumb_str($0) }
         }
 
         return tf
@@ -301,6 +307,9 @@ struct KeyboardInputView: UIViewRepresentable {
         func textField(_ textField: UITextField,
                         shouldChangeCharactersIn range: NSRange,
                         replacementString string: String) -> Bool {
+            let msg = "kb.shouldChange: len=\(string.utf8.count) " +
+                "empty=\(string.isEmpty)"
+            msg.withCString { emu_breadcrumb_str($0) }
             if string.isEmpty {
                 /* Backspace/delete: send BS (0x08) */
                 onKeyPress("\u{08}")
@@ -316,6 +325,8 @@ struct KeyboardInputView: UIViewRepresentable {
 
         /* Handle return key */
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            let msg = "kb.shouldReturn"
+            msg.withCString { emu_breadcrumb_str($0) }
             onKeyPress("\n")
             return false
         }
@@ -343,6 +354,9 @@ class HiddenTextField: UITextField {
 
     override func pressesBegan(_ presses: Set<UIPress>,
                                 with event: UIPressesEvent?) {
+        let msg = "kb.pressesBegan: count=\(presses.count) " +
+            "isFirst=\(self.isFirstResponder)"
+        msg.withCString { emu_breadcrumb_str($0) }
         /* Handle special keys (arrows, escape, etc.) */
         for press in presses {
             guard let key = press.key else { continue }
