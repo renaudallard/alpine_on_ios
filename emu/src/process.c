@@ -49,7 +49,7 @@
  */
 uint64_t	g_native_base;
 
-#define AOT_STACK_SIZE		(8ULL * 1024 * 1024)	/* 8 MB */
+#define AOT_STACK_SIZE		(1ULL * 1024 * 1024)	/* 1 MB */
 
 /*
  * Helper macro for proc_execve cleanup on error.  Closes any
@@ -477,9 +477,15 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	newmem->brk_base = info.brk;
 	newmem->brk_current = info.brk;
 
-	/* AOT: pre-allocate heap so brk() doesn't need to relocate. */
+	/* AOT: pre-allocate heap so brk() doesn't need to relocate.
+	 * Sized for busybox sh + small utilities.  A full desktop
+	 * (firefox, python) needs more, but those workloads are
+	 * blocked on other issues anyway, and a smaller allocation
+	 * keeps us well under iOS's per-process memory budget on
+	 * devices where the increased-memory-limit entitlement is
+	 * not granted by the signer. */
 	if (newmem->aot_mode) {
-		uint64_t heap_size = 256ULL * 1024 * 1024; /* 256 MB */
+		uint64_t heap_size = 32ULL * 1024 * 1024; /* 32 MB */
 		void *heap = mmap(NULL, heap_size,
 		    PROT_READ | PROT_WRITE,
 		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
