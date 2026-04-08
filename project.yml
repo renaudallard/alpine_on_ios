@@ -3,7 +3,6 @@ options:
   bundleIdPrefix: com.alpineonios
   deploymentTarget:
     iOS: "15.0"
-    macOS: "13.0"
   xcodeVersion: "15.0"
   generateEmptyDirectories: true
 
@@ -77,65 +76,6 @@ targets:
           - "$(inherited)"
           - "_GNU_SOURCE=1"
 
-  AlpineOnMac:
-    type: application
-    platform: macOS
-    sources:
-      - path: AlpineOnIOS
-        excludes:
-          - "**/*.plist"
-      - path: emu/src
-        compilerFlags: ["-std=c11", "-Wall", "-Wextra"]
-        type: sources
-        excludes:
-          - "**/*.S"
-      - path: emu/src/native_entry.S
-        type: sources
-      - path: emu/include
-        type: headers
-        headerVisibility: project
-    info:
-      path: AlpineOnIOS/App/Info-macOS.plist
-    entitlements:
-      path: AlpineOnMac.entitlements
-    dependencies:
-      - sdk: Metal.framework
-      - sdk: MetalKit.framework
-    postBuildScripts:
-      - script: |
-          ROOTFS="${SRCROOT}/rootfs/alpine"
-          DEST="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/alpine"
-          if [ -d "$ROOTFS" ]; then
-            echo "Copying rootfs..."
-            rm -rf "$DEST"
-            mkdir -p "$(dirname "$DEST")"
-            rsync -a --no-links "$ROOTFS/" "$DEST/"
-            echo "AOT-patching ELF binaries..."
-            if [ -z "$ELF2MACHO_PREBUILT" ] && \
-               [ -x /tmp/aot_tools/elf2macho ]; then
-              export ELF2MACHO_PREBUILT=/tmp/aot_tools/elf2macho
-            fi
-            export ELF2MACHO_PREBUILT
-            "${SRCROOT}/scripts/patch_rootfs_aot.sh" "$DEST" "$ROOTFS"
-            echo "Rootfs: $(du -sh "$DEST" | cut -f1)"
-          else
-            echo "warning: rootfs not found at $ROOTFS"
-          fi
-        name: Copy Alpine rootfs
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.alpineonios.mac
-        MARKETING_VERSION: "0.6.80"
-        CURRENT_PROJECT_VERSION: 62
-        CODE_SIGN_IDENTITY: "-"
-        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
-        ENABLE_HARDENED_RUNTIME: "YES"
-        INFOPLIST_KEY_CFBundleDisplayName: "Alpine Terminal"
-        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
-        GCC_PREPROCESSOR_DEFINITIONS:
-          - "$(inherited)"
-          - "_GNU_SOURCE=1"
-
 # Scheme pre-actions run OUTSIDE of xcodebuild's build-phase
 # script sandbox and are therefore allowed to compile a fresh
 # binary and run it later.  We use them to build elf2macho to a
@@ -163,19 +103,3 @@ schemes:
                 /tmp/aot_tools/elf2macho 2>/dev/null || true
           name: Build elf2macho outside sandbox
           settingsTarget: AlpineOnIOS
-  AlpineOnMac:
-    build:
-      targets:
-        AlpineOnMac: all
-      preActions:
-        - script: |
-            set -e
-            mkdir -p /tmp/aot_tools
-            env -i PATH="$PATH" HOME="$HOME" SRCROOT="$SRCROOT" \
-                xcrun clang -target arm64-apple-macos13 -O2 \
-                -o /tmp/aot_tools/elf2macho \
-                "${SRCROOT}/scripts/elf2macho.c"
-            /usr/bin/codesign --force --sign - \
-                /tmp/aot_tools/elf2macho 2>/dev/null || true
-          name: Build elf2macho outside sandbox
-          settingsTarget: AlpineOnMac

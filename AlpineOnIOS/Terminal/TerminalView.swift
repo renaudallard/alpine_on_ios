@@ -15,11 +15,7 @@
  */
 
 import SwiftUI
-#if os(iOS)
 import UIKit
-#elseif os(macOS)
-import AppKit
-#endif
 
 // MARK: - Terminal View
 
@@ -109,11 +105,9 @@ struct TerminalView: View {
     private func handleKey(_ key: String) {
         guard !key.isEmpty else { return }
 
-        #if os(iOS)
         if settings.hapticFeedback {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
-        #endif
 
         var data: Data
         if ctrlPressed, key.count == 1 {
@@ -242,8 +236,6 @@ struct TerminalGridView: View {
 }
 
 // MARK: - Hidden Keyboard Input
-
-#if os(iOS)
 
 /// A hidden UITextField to capture keyboard input on iOS.
 struct KeyboardInputView: UIViewRepresentable {
@@ -477,108 +469,6 @@ struct AccessoryKeyBar: View {
         .background(Color(.systemGray6))
     }
 }
-
-#elseif os(macOS)
-
-/// An invisible NSView that captures all keyboard input on macOS.
-struct KeyboardInputView: NSViewRepresentable {
-    var onKeyPress: (String) -> Void
-    @Binding var ctrlPressed: Bool
-
-    func makeNSView(context: Context) -> KeyCaptureView {
-        let view = KeyCaptureView()
-        view.onKeyPress = onKeyPress
-
-        NotificationCenter.default.addObserver(
-            context.coordinator,
-            selector: #selector(Coordinator.focusKeyboard(_:)),
-            name: .terminalFocusKeyboard,
-            object: nil)
-        context.coordinator.view = view
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            view.window?.makeFirstResponder(view)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: KeyCaptureView, context: Context) {
-        nsView.onKeyPress = onKeyPress
-        context.coordinator.view = nsView
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    class Coordinator: NSObject {
-        var view: KeyCaptureView?
-
-        @objc func focusKeyboard(_ notification: Notification) {
-            if let v = view {
-                v.window?.makeFirstResponder(v)
-            }
-        }
-
-        deinit {
-            NotificationCenter.default.removeObserver(self)
-        }
-    }
-}
-
-/// NSView subclass that handles ALL keyboard input via keyDown.
-class KeyCaptureView: NSView {
-    var onKeyPress: ((String) -> Void)?
-
-    override var acceptsFirstResponder: Bool { true }
-    override var canBecomeKeyView: Bool { true }
-
-    override func keyDown(with event: NSEvent) {
-        let chars = event.charactersIgnoringModifiers ?? ""
-        let flags = event.modifierFlags
-
-        /* Handle special keys */
-        switch event.keyCode {
-        case 126: onKeyPress?("\u{1B}[A"); return  /* up */
-        case 125: onKeyPress?("\u{1B}[B"); return  /* down */
-        case 124: onKeyPress?("\u{1B}[C"); return  /* right */
-        case 123: onKeyPress?("\u{1B}[D"); return  /* left */
-        case 53:  onKeyPress?("\u{1B}"); return     /* escape */
-        case 48:  onKeyPress?("\t"); return          /* tab */
-        case 51:  onKeyPress?("\u{7F}"); return      /* backspace (DEL) */
-        case 36:  onKeyPress?("\n"); return           /* return */
-        default: break
-        }
-
-        /* Ctrl+key → control character */
-        if flags.contains(.control), let ch = chars.uppercased().unicodeScalars.first,
-           ch.value >= 0x40, ch.value <= 0x5F {
-            let ctrl = String(UnicodeScalar(ch.value - 0x40)!)
-            onKeyPress?(ctrl)
-            return
-        }
-
-        /* Regular characters */
-        if let characters = event.characters, !characters.isEmpty {
-            onKeyPress?(characters)
-        }
-    }
-
-    /* Suppress the beep for unhandled keys */
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        return false
-    }
-}
-
-/// No accessory key bar on macOS; the physical keyboard suffices.
-struct AccessoryKeyBar: View {
-    @Binding var ctrlPressed: Bool
-    var onKey: (String) -> Void
-
-    var body: some View {
-        EmptyView()
-    }
-}
-
-#endif
 
 // MARK: - Notification Names
 

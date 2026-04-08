@@ -169,8 +169,6 @@ class DisplayCoordinator: NSObject, MTKViewDelegate {
 
 // MARK: - Platform Display View
 
-#if os(iOS)
-
 struct DisplayView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MTKView {
@@ -236,31 +234,3 @@ class DisplayCoordinatorIOS: DisplayCoordinator {
         }
     }
 }
-
-#elseif os(macOS)
-
-struct DisplayView: NSViewRepresentable {
-
-    func makeNSView(context: Context) -> MTKView {
-        let view = MTKView()
-        guard let device = MTLCreateSystemDefaultDevice() else {
-            return view
-        }
-        view.device = device
-        view.delegate = context.coordinator
-        view.preferredFramesPerSecond = 60
-        view.colorPixelFormat = .bgra8Unorm
-        view.enableSetNeedsDisplay = false
-        view.isPaused = false
-        context.coordinator.setup(device: device)
-        return view
-    }
-
-    func updateNSView(_ nsView: MTKView, context: Context) {}
-
-    func makeCoordinator() -> DisplayCoordinator {
-        DisplayCoordinator()
-    }
-}
-
-#endif

@@ -45,11 +45,9 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                #if os(iOS)
                 Section(header: Text("Keyboard")) {
                     Toggle("Haptic Feedback", isOn: $settings.hapticFeedback)
                 }
-                #endif
 
                 Section(header: Text("Data")) {
                     Button(role: .destructive) {
@@ -85,9 +83,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     Button("Done") { dismiss() }

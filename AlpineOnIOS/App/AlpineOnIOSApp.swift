@@ -65,11 +65,7 @@ struct AlpineOnIOSApp: App {
     }
 
     private func bundleRootfsPath() -> String {
-        #if os(iOS)
         return Bundle.main.bundlePath + "/alpine"
-        #elseif os(macOS)
-        return Bundle.main.resourcePath! + "/alpine"
-        #endif
     }
 
     private func overlayPath() -> String {

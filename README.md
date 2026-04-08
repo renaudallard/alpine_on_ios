@@ -14,13 +14,13 @@
   <a href="https://github.com/renaudallard/alpine_on_ios/releases/latest">
     <img src="https://img.shields.io/github/downloads/renaudallard/alpine_on_ios/total?style=flat-square&label=downloads" alt="Downloads">
   </a>
-  <img src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20macOS%2013%2B-blue?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-iOS%2015%2B-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/license-ISC-green?style=flat-square" alt="License">
 </p>
 
 <p align="center">
-  Run a full Alpine Linux aarch64 distribution on iPhone, iPad, and Mac.<br>
-  Near-native speed via AOT precompilation on iOS. No developer account needed.
+  Run a full Alpine Linux aarch64 distribution on iPhone and iPad.<br>
+  Near-native speed via AOT precompilation. No developer account needed.
 </p>
 
 ---
@@ -135,7 +135,7 @@ sh ~/start-firefox.sh
 
 ### Prerequisites
 
-- **iOS/macOS**: macOS + Xcode 15+ + [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+- **iOS**: macOS + Xcode 15+ + [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 - **Linux testing**: GCC or Clang (C11), make, pthreads
 
 ### Quick start
@@ -150,10 +150,6 @@ xcodebuild build -project AlpineOnIOS.xcodeproj \
     -scheme AlpineOnIOS -sdk iphoneos \
     -configuration Release CODE_SIGNING_ALLOWED=NO
 
-# macOS build
-xcodebuild build -project AlpineOnIOS.xcodeproj \
-    -scheme AlpineOnMac -configuration Release
-
 # package .ipa
 ./scripts/package_ipa.sh build/Build/Products/Release-iphoneos
 ```
@@ -165,7 +161,7 @@ AOT-patches all ELF binaries, and ad-hoc codesigns them.
 
 | Workflow | Trigger | Action |
 |----------|---------|--------|
-| `ci.yml` | Push / PR | Test on Linux, build iOS + macOS |
+| `ci.yml` | Push / PR | Test on Linux, build iOS |
 | `version-tag.yml` | `MARKETING_VERSION` change | Auto-create `v*` tag, dispatch release |
 | `release.yml` | Tag / dispatch | Build IPA + DMG, publish GitHub Release |
 | `aot-repo.yml` | Daily / manual | Build AOT-patched APK repository |
@@ -196,7 +192,7 @@ alpine_on_ios/
     build_aot_repo.sh    Build AOT-patched APK repository
     build_rootfs.sh      Rootfs assembly
     package_ipa.sh       IPA packaging
-  project.yml            XcodeGen spec (iOS + macOS targets)
+  project.yml            XcodeGen spec (iOS target)
   .github/workflows/     CI, release, auto-tag, AOT repo
 ```
 
@@ -205,7 +201,7 @@ alpine_on_ios/
 | Problem | Solution |
 |---------|----------|
 | "Untrusted Developer" | Settings > General > Device Management > Trust |
-| App crashes on launch | Requires iOS 15.0 / macOS 13.0 or later |
+| App crashes on launch | Requires iOS 15.0 or later |
 | AltStore can't find server | Ensure AltServer is running, same Wi-Fi |
 | App expires after 7 days | Re-sign with AltStore/Sideloadly, or use TrollStore |
 | No keyboard input | Tap the terminal area to focus the keyboard |

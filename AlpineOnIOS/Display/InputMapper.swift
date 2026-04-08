@@ -14,7 +14,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if os(iOS)
 import UIKit
 
 /// Maps iOS touch events to Linux evdev input events.
@@ -46,4 +45,3 @@ struct InputMapper {
         }
     }
 }
-#endif
