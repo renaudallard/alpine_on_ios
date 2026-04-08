@@ -811,8 +811,7 @@ rebase_uleb(struct rebase_builder *rb, uint64_t v)
  */
 static int
 build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
-    int data_seg_idx, uint64_t data_seg_vmaddr, uint64_t shift,
-    uint8_t *out_buf)
+    int data_seg_idx, uint64_t data_seg_vmaddr, uint64_t shift)
 {
 	uint64_t i, n;
 	uint64_t *offsets = NULL;
@@ -822,7 +821,10 @@ build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
 
 	/* Collect all relative relocation offsets. */
 
-	/* From DT_RELA: R_AARCH64_RELATIVE entries. */
+	/* From DT_RELA: R_AARCH64_RELATIVE entries.  The final value is
+	 * base + r_addend, matched by leaving r_addend+shift in the
+	 * slot and letting dyld add the slide.  apply_self_reloc_values()
+	 * pre-writes that; we just add the offset to the rebase list. */
 	if (dyn->rela != NULL) {
 		n = dyn->relasz / sizeof(Elf64_Rela);
 		for (i = 0; i < n; i++) {
@@ -835,14 +837,6 @@ build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
 				    cap_offsets * sizeof(uint64_t));
 			}
 			offsets[n_offsets++] = rl->r_offset;
-			/* Pre-write addend at the offset in our output buffer. */
-			if (out_buf != NULL) {
-				uint64_t off_in_file =
-				    (rl->r_offset + shift) - data_seg_vmaddr;
-				/* Write the addend value (dyld will add slide). */
-				/* Already in the data segment from pread. */
-				(void)off_in_file;
-			}
 		}
 	}
 
@@ -888,15 +882,16 @@ build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
 	}
 
 	/*
-	 * GLOB_DAT/JUMP_SLOT relocations targeting a DEFINED (local)
-	 * symbol.  An ordinary ELF dynamic linker would resolve these
-	 * to the symbol's load-time address; on Mach-O they cannot use
-	 * the bind opcode stream (the ordinal lookup is for foreign
-	 * libraries) so we treat them as rebases of a value that
-	 * apply_self_reloc_values() pre-writes into the data segment.
-	 * Without this, a self-contained dylib like ld-musl ships with
-	 * its own GOT/PLT entries holding 0 / PLT0-vaddr garbage and
-	 * crashes the first time any internal call goes through them.
+	 * GLOB_DAT/JUMP_SLOT/ABS64 relocations targeting a DEFINED
+	 * (local) symbol.  An ordinary ELF dynamic linker would resolve
+	 * these to the symbol's load-time address; on Mach-O they
+	 * cannot use the bind opcode stream (the ordinal lookup is for
+	 * foreign libraries) so we treat them as rebases of a value
+	 * that apply_self_reloc_values() pre-writes into the data
+	 * segment.  Without this, a self-contained dylib like ld-musl
+	 * ships with its own GOT/PLT entries holding 0 / PLT0-vaddr
+	 * garbage and crashes the first time any internal call goes
+	 * through them.
 	 */
 	{
 		Elf64_Rela	*rels2[2];
@@ -918,7 +913,8 @@ build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
 				Elf64_Sym	*s;
 
 				if (type != R_AARCH64_GLOB_DAT &&
-				    type != R_AARCH64_JUMP_SLOT)
+				    type != R_AARCH64_JUMP_SLOT &&
+				    type != R_AARCH64_ABS64)
 					continue;
 				if (sym_idx == 0 || sym_idx >= dyn->nsyms)
 					continue;
@@ -1008,14 +1004,21 @@ free_rebases(struct rebase_builder *rb)
 }
 
 /*
- * Pre-write the resolved value for each GLOB_DAT/JUMP_SLOT reloc
- * that targets a DEFINED local symbol.  build_rebases() already
- * added their offsets to the rebase opcode stream so dyld will
- * add the load slide; here we put the symbol's shifted vaddr at
- * the slot so the slid result equals the symbol's runtime address.
+ * Pre-write the resolved value for each RELA entry whose final
+ * runtime address is base+offset+shift:
+ *   - R_AARCH64_RELATIVE: value = r_addend + shift
+ *   - R_AARCH64_GLOB_DAT / JUMP_SLOT / ABS64 targeting a DEFINED
+ *     local symbol: value = sym->st_value + r_addend + shift
  *
- * For ld-musl-aarch64.so.1 this rescues 21 GOT/PLT slots that the
- * file would otherwise ship with 0 / PLT0-vaddr garbage.
+ * build_rebases() already added these offsets to the rebase
+ * opcode stream so dyld will add the load slide at load time,
+ * and together they resolve to the correct runtime address.
+ *
+ * Without this, a self-contained dylib like ld-musl-aarch64.so.1
+ * ships with its own GOT/PLT entries holding 0 / PLT0-vaddr
+ * garbage and crashes the first time any internal call goes
+ * through them.  RELR-format relatives are unaffected because
+ * their slot already holds the unslid target.
  */
 static void
 apply_self_reloc_values(struct dynamic_info *dyn, uint8_t *out,
@@ -1026,9 +1029,6 @@ apply_self_reloc_values(struct dynamic_info *dyn, uint8_t *out,
 	uint64_t	 nrels[2];
 	uint64_t	 i;
 	int		 r;
-
-	if (dyn->symtab == NULL || dyn->nsyms == 0)
-		return;
 
 	rels[0] = dyn->rela;
 	nrels[0] = dyn->rela ? dyn->relasz / sizeof(Elf64_Rela) : 0;
@@ -1043,17 +1043,24 @@ apply_self_reloc_values(struct dynamic_info *dyn, uint8_t *out,
 			Elf64_Sym	*s;
 			uint64_t	 value, file_off;
 
-			if (type != R_AARCH64_GLOB_DAT &&
-			    type != R_AARCH64_JUMP_SLOT)
+			if (type == R_AARCH64_RELATIVE) {
+				value = (uint64_t)rl->r_addend + shift;
+			} else if (type == R_AARCH64_GLOB_DAT ||
+			    type == R_AARCH64_JUMP_SLOT ||
+			    type == R_AARCH64_ABS64) {
+				if (dyn->symtab == NULL)
+					continue;
+				if (sym_idx == 0 || sym_idx >= dyn->nsyms)
+					continue;
+				s = &dyn->symtab[sym_idx];
+				if (s->st_shndx == 0)
+					continue;  /* undef -> bind path */
+				value = s->st_value +
+				    (uint64_t)rl->r_addend + shift;
+			} else {
 				continue;
-			if (sym_idx == 0 || sym_idx >= dyn->nsyms)
-				continue;
-			s = &dyn->symtab[sym_idx];
-			if (s->st_shndx == 0)
-				continue;	/* undef -> bind path */
+			}
 
-			value = s->st_value +
-			    (uint64_t)rl->r_addend + shift;
 			file_off = rl->r_offset + shift;
 
 			/* Bounds: must land in the __DATA file range. */
@@ -1652,7 +1659,7 @@ main(int argc, char **argv)
 		uint64_t seg_vmaddr = has_data ? data_seg_vmaddr :
 		    text_seg_vmaddr;
 		build_binds(&dyn, &sb, &bb, seg_idx, seg_vmaddr, shift);
-		build_rebases(&dyn, &rb, seg_idx, seg_vmaddr, shift, NULL);
+		build_rebases(&dyn, &rb, seg_idx, seg_vmaddr, shift);
 	}
 
 	/* Build export trie for libraries (binaries have no exports). */
