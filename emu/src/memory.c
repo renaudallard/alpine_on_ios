@@ -454,11 +454,22 @@ mem_mmap(mem_space_t *ms, uint64_t addr, uint64_t size, int prot,
 
 /*
  * Map a caller-provided host buffer into the guest address space.
- * The buffer is NOT freed by munmap or mem_space_destroy.
+ *
+ * If owned == 0, the buffer is NOT freed by munmap or
+ * mem_space_destroy (caller keeps ownership; used e.g. for dyld-
+ * loaded dylib pages or the framebuffer shared buffer).
+ *
+ * If owned == 1, mem_space_destroy will munmap the buffer when
+ * the last reference to this mem_space drops.  Use for heap/
+ * stack regions allocated via mmap() by proc_execve — leaving
+ * them unowned means every process exit leaks the full region.
+ * Forked children still share the parent's heap/stack via
+ * mem_space_clone(), which unconditionally re-adds the EXTERNAL
+ * flag so a child never frees memory owned by its parent.
  */
 uint64_t
 mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
-    int prot, uint8_t *host_buf)
+    int prot, uint8_t *host_buf, int owned)
 {
 	mem_region_t	*r;
 	uint64_t	 aligned_size;
@@ -505,7 +516,9 @@ mem_mmap_host(mem_space_t *ms, uint64_t addr, uint64_t size,
 	r->base = addr;
 	r->size = aligned_size;
 	r->prot = prot;
-	r->flags = MEM_MAP_PRIVATE | MEM_MAP_EXTERNAL;
+	r->flags = MEM_MAP_PRIVATE;
+	if (!owned)
+		r->flags |= MEM_MAP_EXTERNAL;
 	r->host = host_buf;
 
 	region_insert(ms, r);

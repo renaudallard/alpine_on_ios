@@ -58,7 +58,7 @@ void		 mem_space_ref(mem_space_t *);
 uint64_t	mem_mmap(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot, int flags, int fd, uint64_t offset);
 uint64_t	mem_mmap_host(mem_space_t *, uint64_t addr, uint64_t size,
-		    int prot, uint8_t *host_buf);
+		    int prot, uint8_t *host_buf, int owned);
 uint64_t	mem_mmap_file(mem_space_t *, uint64_t addr, uint64_t size,
 		    int prot, int fd, uint64_t offset);
 int		mem_munmap(mem_space_t *, uint64_t addr, uint64_t size);

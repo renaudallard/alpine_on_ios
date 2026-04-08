@@ -351,7 +351,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				pa_size = ALIGN_UP(skew + ssize, 0x4000);
 
 				got = mem_mmap_host(mem, pa_addr, pa_size,
-				    sprot, (uint8_t *)pa_addr);
+				    sprot, (uint8_t *)pa_addr, 0);
 				if (got == (uint64_t)-1 || got != pa_addr) {
 					emu_set_error("elf: register seg %d "
 					    "wanted 0x%lx got 0x%lx", i,

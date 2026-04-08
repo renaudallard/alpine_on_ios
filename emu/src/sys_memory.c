@@ -84,7 +84,7 @@ do_mmap(emu_process_t *proc, uint64_t addr, uint64_t length, uint64_t prot,
 			if (length > fb->size)
 				length = fb->size;
 			ret = mem_mmap_host(proc->mem, addr, length,
-			    (int)prot, fb->pixels);
+			    (int)prot, fb->pixels, 0);
 			LOG_TRACE("mmap(fb): ret=0x%llx len=0x%llx",
 			    (unsigned long long)ret,
 			    (unsigned long long)length);

@@ -491,7 +491,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		newmem->brk_current = (uint64_t)heap;
 		if (mem_mmap_host(newmem, (uint64_t)heap, heap_size,
 		    MEM_PROT_READ | MEM_PROT_WRITE,
-		    (uint8_t *)heap) == (uint64_t)-1) {
+		    (uint8_t *)heap, 1) == (uint64_t)-1) {
 			LOG_ERR("execve: AOT heap register failed");
 			munmap(heap, heap_size);
 			EXECVE_FAIL(-ENOMEM);
@@ -511,7 +511,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		if (mem_mmap_host(newmem, (uint64_t)sp_region,
 		    AOT_STACK_SIZE,
 		    MEM_PROT_READ | MEM_PROT_WRITE,
-		    (uint8_t *)sp_region) == (uint64_t)-1) {
+		    (uint8_t *)sp_region, 1) == (uint64_t)-1) {
 			LOG_ERR("execve: AOT stack register failed");
 			munmap(sp_region, AOT_STACK_SIZE);
 			EXECVE_FAIL(-ENOMEM);
