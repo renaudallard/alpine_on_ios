@@ -887,6 +887,54 @@ build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
 		}
 	}
 
+	/*
+	 * GLOB_DAT/JUMP_SLOT relocations targeting a DEFINED (local)
+	 * symbol.  An ordinary ELF dynamic linker would resolve these
+	 * to the symbol's load-time address; on Mach-O they cannot use
+	 * the bind opcode stream (the ordinal lookup is for foreign
+	 * libraries) so we treat them as rebases of a value that
+	 * apply_self_reloc_values() pre-writes into the data segment.
+	 * Without this, a self-contained dylib like ld-musl ships with
+	 * its own GOT/PLT entries holding 0 / PLT0-vaddr garbage and
+	 * crashes the first time any internal call goes through them.
+	 */
+	{
+		Elf64_Rela	*rels2[2];
+		uint64_t	 nrels2[2];
+		int		 r;
+
+		rels2[0] = dyn->rela;
+		nrels2[0] = dyn->rela ?
+		    dyn->relasz / sizeof(Elf64_Rela) : 0;
+		rels2[1] = dyn->jmprel;
+		nrels2[1] = dyn->jmprel ?
+		    dyn->pltrelsz / sizeof(Elf64_Rela) : 0;
+
+		for (r = 0; r < 2; r++) {
+			for (i = 0; i < nrels2[r]; i++) {
+				Elf64_Rela	*rl = &rels2[r][i];
+				uint32_t	 type = ELF64_R_TYPE(rl->r_info);
+				uint64_t	 sym_idx = ELF64_R_SYM(rl->r_info);
+				Elf64_Sym	*s;
+
+				if (type != R_AARCH64_GLOB_DAT &&
+				    type != R_AARCH64_JUMP_SLOT)
+					continue;
+				if (sym_idx == 0 || sym_idx >= dyn->nsyms)
+					continue;
+				s = &dyn->symtab[sym_idx];
+				if (s->st_shndx == 0)
+					continue;	/* undef -> bind path */
+				if (n_offsets >= cap_offsets) {
+					cap_offsets = (cap_offsets + 1) * 2;
+					offsets = realloc(offsets,
+					    cap_offsets * sizeof(uint64_t));
+				}
+				offsets[n_offsets++] = rl->r_offset;
+			}
+		}
+	}
+
 	if (n_offsets == 0) {
 		free(offsets);
 		rebase_byte(rb, REBASE_OPCODE_DONE);
@@ -903,6 +951,16 @@ build_rebases(struct dynamic_info *dyn, struct rebase_builder *rb,
 				offsets[j] = t;
 			}
 		}
+	}
+
+	/* Drop duplicates so we never rebase the same slot twice. */
+	{
+		size_t w = 0;
+		for (i = 0; i < n_offsets; i++) {
+			if (w == 0 || offsets[i] != offsets[w - 1])
+				offsets[w++] = offsets[i];
+		}
+		n_offsets = w;
 	}
 
 	/* Emit opcodes. */
@@ -947,6 +1005,69 @@ free_rebases(struct rebase_builder *rb)
 {
 	free(rb->buf);
 	memset(rb, 0, sizeof(*rb));
+}
+
+/*
+ * Pre-write the resolved value for each GLOB_DAT/JUMP_SLOT reloc
+ * that targets a DEFINED local symbol.  build_rebases() already
+ * added their offsets to the rebase opcode stream so dyld will
+ * add the load slide; here we put the symbol's shifted vaddr at
+ * the slot so the slid result equals the symbol's runtime address.
+ *
+ * For ld-musl-aarch64.so.1 this rescues 21 GOT/PLT slots that the
+ * file would otherwise ship with 0 / PLT0-vaddr garbage.
+ */
+static void
+apply_self_reloc_values(struct dynamic_info *dyn, uint8_t *out,
+    uint64_t out_size, uint64_t data_seg_fileoff,
+    uint64_t data_seg_filesize, uint64_t shift)
+{
+	Elf64_Rela	*rels[2];
+	uint64_t	 nrels[2];
+	uint64_t	 i;
+	int		 r;
+
+	if (dyn->symtab == NULL || dyn->nsyms == 0)
+		return;
+
+	rels[0] = dyn->rela;
+	nrels[0] = dyn->rela ? dyn->relasz / sizeof(Elf64_Rela) : 0;
+	rels[1] = dyn->jmprel;
+	nrels[1] = dyn->jmprel ? dyn->pltrelsz / sizeof(Elf64_Rela) : 0;
+
+	for (r = 0; r < 2; r++) {
+		for (i = 0; i < nrels[r]; i++) {
+			Elf64_Rela	*rl = &rels[r][i];
+			uint32_t	 type = ELF64_R_TYPE(rl->r_info);
+			uint64_t	 sym_idx = ELF64_R_SYM(rl->r_info);
+			Elf64_Sym	*s;
+			uint64_t	 value, file_off;
+
+			if (type != R_AARCH64_GLOB_DAT &&
+			    type != R_AARCH64_JUMP_SLOT)
+				continue;
+			if (sym_idx == 0 || sym_idx >= dyn->nsyms)
+				continue;
+			s = &dyn->symtab[sym_idx];
+			if (s->st_shndx == 0)
+				continue;	/* undef -> bind path */
+
+			value = s->st_value +
+			    (uint64_t)rl->r_addend + shift;
+			file_off = rl->r_offset + shift;
+
+			/* Bounds: must land in the __DATA file range. */
+			if (file_off < data_seg_fileoff)
+				continue;
+			if (file_off + 8 >
+			    data_seg_fileoff + data_seg_filesize)
+				continue;
+			if (file_off + 8 > out_size)
+				continue;
+
+			memcpy(out + file_off, &value, 8);
+		}
+	}
 }
 
 /* ---- Export trie generation ----
@@ -1587,6 +1708,16 @@ main(int argc, char **argv)
 	/* Copy data segment. */
 	if (has_data && data_fileoff_elf + data_filesz <= (uint64_t)st.st_size)
 		memcpy(out + data_off, elf + data_fileoff_elf, data_filesz);
+
+	/*
+	 * Pre-write self-reloc values into the data segment.  Must run
+	 * after the data copy above (which would otherwise overwrite
+	 * them with the raw ELF GOT bytes) and before any header
+	 * emission, since dyld's rebase pass reads what we leave here.
+	 */
+	if (has_dyn && has_data)
+		apply_self_reloc_values(&dyn, out, total_sz,
+		    data_seg_fileoff, data_seg_filesize, shift);
 
 	/*
 	 * Build Mach-O headers.
