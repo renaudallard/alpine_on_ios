@@ -160,7 +160,11 @@ class EmulatorBridge: ObservableObject {
     private let dumpLock = NSLock()
 
     func write(data: Data) {
-        guard termFD >= 0 else { return }
+        if termFD < 0 {
+            let msg = "tx-drop: termFD<0 len=\(data.count)"
+            msg.withCString { emu_breadcrumb_str($0) }
+            return
+        }
         data.withUnsafeBytes { buf in
             if let ptr = buf.baseAddress {
                 _ = Darwin.write(termFD, ptr, buf.count)
@@ -169,8 +173,11 @@ class EmulatorBridge: ObservableObject {
         logBytes(prefix: "tx", data: data, isRx: false)
     }
 
-    /// Append a hex+printable dump of up to the first 20 rx/tx
-    /// events to the breadcrumb file for offline debugging.
+    /// Append a hex+printable dump of every rx/tx event to the
+    /// breadcrumb file for offline debugging.  Previously capped
+    /// at the first 20 events but that was hiding a real bug
+    /// where user keystrokes never reached the shell; uncap and
+    /// rely on the 16 KB file tail to keep the file small.
     fileprivate func logBytes(prefix: String, data: Data,
                               isRx: Bool) {
         dumpLock.lock()
@@ -183,7 +190,6 @@ class EmulatorBridge: ObservableObject {
             txDumpCount += 1
         }
         dumpLock.unlock()
-        guard n < 20 else { return }
         let take = data.prefix(64)
         let hex = take.map { String(format: "%02x", $0) }
             .joined(separator: " ")
