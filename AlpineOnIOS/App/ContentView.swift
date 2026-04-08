@@ -48,10 +48,17 @@ struct ContentView: View {
                         .environmentObject(bridge)
                         .environmentObject(settings)
 
-                    /* Show loading hint until shell produces output. */
-                    if !bridge.hasOutput {
-                        VStack(spacing: 12) {
-                            Spacer()
+                    /*
+                     * Overlay that stays visible during the
+                     * Loading-shell phase AND the first moments
+                     * after hasOutput flips, so the previous-run
+                     * crumbs are readable long enough to use.
+                     * The loading hint itself disappears once
+                     * the shell has produced any output.
+                     */
+                    VStack(spacing: 12) {
+                        Spacer()
+                        if !bridge.hasOutput {
                             HStack {
                                 ProgressView()
                                     .tint(.green)
@@ -62,16 +69,12 @@ struct ContentView: View {
                             .padding(8)
                             .background(Color.black.opacity(0.8))
                             .cornerRadius(8)
-
-                            /* While the shell is still loading (or
-                             * hung), also show whatever crumbs the
-                             * previous run left behind.  Gives the
-                             * user unlimited time to read them
-                             * instead of the splash flashing by. */
-                            breadcrumbsView
-                                .padding(.bottom, 40)
                         }
+
+                        breadcrumbsView
+                            .padding(.bottom, 40)
                     }
+                    .allowsHitTesting(false)
                 }
             case .error(let msg):
                 errorView(msg)

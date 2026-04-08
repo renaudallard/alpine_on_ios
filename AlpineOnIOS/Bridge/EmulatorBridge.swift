@@ -152,6 +152,13 @@ class EmulatorBridge: ObservableObject {
     // MARK: - I/O
 
     /// Write data to the terminal file descriptor.
+    /// Diagnostic counters for breadcrumb logging of terminal I/O.
+    /// Capped so we don't spam the breadcrumb file over a long
+    /// session; 0 until the first RX/TX, incremented per call.
+    private var rxDumpCount: Int = 0
+    private var txDumpCount: Int = 0
+    private let dumpLock = NSLock()
+
     func write(data: Data) {
         guard termFD >= 0 else { return }
         data.withUnsafeBytes { buf in
@@ -159,6 +166,35 @@ class EmulatorBridge: ObservableObject {
                 _ = Darwin.write(termFD, ptr, buf.count)
             }
         }
+        logBytes(prefix: "tx", data: data, isRx: false)
+    }
+
+    /// Append a hex+printable dump of up to the first 20 rx/tx
+    /// events to the breadcrumb file for offline debugging.
+    fileprivate func logBytes(prefix: String, data: Data,
+                              isRx: Bool) {
+        dumpLock.lock()
+        let n: Int
+        if isRx {
+            n = rxDumpCount
+            rxDumpCount += 1
+        } else {
+            n = txDumpCount
+            txDumpCount += 1
+        }
+        dumpLock.unlock()
+        guard n < 20 else { return }
+        let take = data.prefix(64)
+        let hex = take.map { String(format: "%02x", $0) }
+            .joined(separator: " ")
+        let printable = String(take.map { b -> Character in
+            (b >= 0x20 && b < 0x7f)
+                ? Character(UnicodeScalar(b))
+                : "."
+        })
+        let line = "\(prefix)[\(n)] len=\(data.count) " +
+            "hex=\(hex) asc=\"\(printable)\""
+        line.withCString { emu_breadcrumb("%s", $0) }
     }
 
     /// Register a read callback. Starts the reader thread immediately
@@ -176,7 +212,7 @@ class EmulatorBridge: ObservableObject {
         guard termFD >= 0, readThread == nil else { return }
 
         let fd = termFD
-        let thread = Thread {
+        let thread = Thread { [weak self] in
             let bufSize = 4096
             let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
             defer { buf.deallocate() }
@@ -185,8 +221,14 @@ class EmulatorBridge: ObservableObject {
                 let n = read(fd, buf, bufSize)
                 if n <= 0 { break }
                 let data = Data(bytes: buf, count: n)
-                if !self.hasOutput {
-                    DispatchQueue.main.async { self.hasOutput = true }
+                if let self = self {
+                    self.logBytes(prefix: "rx", data: data,
+                                  isRx: true)
+                    if !self.hasOutput {
+                        DispatchQueue.main.async {
+                            self.hasOutput = true
+                        }
+                    }
                 }
                 callback(data)
             }
