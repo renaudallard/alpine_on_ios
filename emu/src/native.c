@@ -80,24 +80,39 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 	}
 
 	if (imm == 0x0001) {
-		/* SVC #0: syscall */
-		proc->cpu.x[8] = UC_REGS(uc)[8];
-		for (i = 0; i < 6; i++)
+		/*
+		 * SVC #0: syscall.  Snapshot the FULL register state
+		 * from uc into proc->cpu before running the handler.
+		 * proc_fork memcpys proc->cpu into the child, and
+		 * without the full snapshot the child would inherit
+		 * stale pc/sp/x[9..30]/nzcv from the last native_exit
+		 * (typically the shell's entry point), not the live
+		 * post-BRK state — so the child would re-run busybox
+		 * from main instead of continuing past clone and
+		 * crash on the missing argc/argv/envp stack layout.
+		 */
+		for (i = 0; i < 31; i++)
 			proc->cpu.x[i] = UC_REGS(uc)[i];
+		proc->cpu.sp = UC_SP(uc);
+		proc->cpu.pc = pc + 4;
+		proc->cpu.nzcv = UC_CPSR(uc) & 0xF0000000;
 
 		sys_handle(proc);
 
-		/* Write back return value */
-		UC_REGS(uc)[0] = proc->cpu.x[0];
+		/*
+		 * Mirror the full state back to uc.  Most handlers
+		 * only touch x[0] (return value), but some (signal
+		 * delivery, sigreturn) rewrite x[1..30] and sp, so
+		 * write everything back.
+		 */
+		for (i = 0; i < 31; i++)
+			UC_REGS(uc)[i] = proc->cpu.x[i];
+		UC_SP(uc) = proc->cpu.sp;
 
 		if (!proc->cpu.running) {
-			/* Save guest state and jump to native_exit */
-			for (i = 0; i < 31; i++)
-				proc->cpu.x[i] = UC_REGS(uc)[i];
-			proc->cpu.sp = UC_SP(uc);
-			proc->cpu.pc = pc + 4;
-			proc->cpu.nzcv = UC_CPSR(uc) & 0xF0000000;
-
+			/* State already in proc->cpu from the pre-handler
+			 * snapshot (and any handler writes above); just
+			 * trampoline to native_exit. */
 			UC_PC(uc) = (uint64_t)native_exit;
 			UC_REGS(uc)[0] = (uint64_t)&proc->cpu;
 			return;
