@@ -19,12 +19,24 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "emu.h"
 #include "syscall.h"
 #include "process.h"
 #include "log.h"
 
 /* Linux ENOSYS */
 #define LINUX_ENOSYS	38
+
+/*
+ * Syscall counter for breadcrumb instrumentation.  We want a
+ * full trail of the first few hundred calls (covers musl startup
+ * through to the first shell prompt) and then coarser samples
+ * so the breadcrumbs file does not explode on a long run.  Every
+ * 1000-th call after the initial burst still gets logged, plus
+ * the very last one before a hang will always be the last file
+ * line because we fflush + close after each write.
+ */
+static unsigned long g_syscall_count;
 
 void
 sys_handle(emu_process_t *proc)
@@ -39,6 +51,15 @@ sys_handle(emu_process_t *proc)
 	a3 = proc->cpu.x[3];
 	a4 = proc->cpu.x[4];
 	a5 = proc->cpu.x[5];
+
+	g_syscall_count++;
+	if (g_syscall_count <= 400 || (g_syscall_count % 1000) == 0) {
+		emu_breadcrumb("sys #%lu nr=%llu "
+		    "a0=0x%llx a1=0x%llx a2=0x%llx",
+		    g_syscall_count, (unsigned long long)nr,
+		    (unsigned long long)a0, (unsigned long long)a1,
+		    (unsigned long long)a2);
+	}
 
 	LOG_TRACE("syscall: nr=%llu a0=0x%llx a1=0x%llx a2=0x%llx",
 	    (unsigned long long)nr, (unsigned long long)a0,
@@ -229,6 +250,12 @@ sys_handle(emu_process_t *proc)
 	}
 
 	proc->cpu.x[0] = (uint64_t)ret;
+
+	if (g_syscall_count <= 400 || (g_syscall_count % 1000) == 0) {
+		emu_breadcrumb("sys #%lu nr=%llu ret=%lld",
+		    g_syscall_count, (unsigned long long)nr,
+		    (long long)ret);
+	}
 
 	LOG_TRACE("syscall: nr=%llu ret=%lld",
 	    (unsigned long long)nr, (long long)ret);

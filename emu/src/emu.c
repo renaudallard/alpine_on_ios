@@ -299,19 +299,24 @@ emu_mode_info(void)
  * thread during early native execution, jetsam kill, or a clean
  * exit from a C fatal path).  The Swift bridge hands us a file
  * path under the app's Documents directory once at startup; we
- * open/append line-by-line with line buffering and a flush+close
- * after each write so whatever is on disk always reflects the
- * last point we reached, even if the next line would have been
- * in the middle of a crash.  emu_breadcrumbs_reset() drains the
- * file at startup and truncates it so each run starts clean.
+ * keep the file open between calls and fflush() after each line
+ * so whatever is on disk always reflects the last point we
+ * reached, even if the next line would have been in the middle
+ * of a crash.  emu_breadcrumbs_reset() drains the file at startup
+ * and truncates it so each run starts clean.
  */
 static char		 g_breadcrumb_path[1024];
+static FILE		*g_breadcrumb_fp;
 static pthread_mutex_t	 g_breadcrumb_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void
 emu_set_breadcrumb_path(const char *path)
 {
 	pthread_mutex_lock(&g_breadcrumb_lock);
+	if (g_breadcrumb_fp != NULL) {
+		fclose(g_breadcrumb_fp);
+		g_breadcrumb_fp = NULL;
+	}
 	if (path != NULL)
 		snprintf(g_breadcrumb_path, sizeof(g_breadcrumb_path),
 		    "%s", path);
@@ -325,7 +330,6 @@ emu_breadcrumb(const char *fmt, ...)
 {
 	char	line[512];
 	va_list	ap;
-	FILE	*f;
 	int	n;
 
 	pthread_mutex_lock(&g_breadcrumb_lock);
@@ -333,10 +337,12 @@ emu_breadcrumb(const char *fmt, ...)
 		pthread_mutex_unlock(&g_breadcrumb_lock);
 		return;
 	}
-	f = fopen(g_breadcrumb_path, "a");
-	if (f == NULL) {
-		pthread_mutex_unlock(&g_breadcrumb_lock);
-		return;
+	if (g_breadcrumb_fp == NULL) {
+		g_breadcrumb_fp = fopen(g_breadcrumb_path, "a");
+		if (g_breadcrumb_fp == NULL) {
+			pthread_mutex_unlock(&g_breadcrumb_lock);
+			return;
+		}
 	}
 	va_start(ap, fmt);
 	n = vsnprintf(line, sizeof(line) - 1, fmt, ap);
@@ -347,9 +353,8 @@ emu_breadcrumb(const char *fmt, ...)
 		n = (int)sizeof(line) - 2;
 	line[n] = '\n';
 	line[n + 1] = '\0';
-	fputs(line, f);
-	fflush(f);
-	fclose(f);
+	fputs(line, g_breadcrumb_fp);
+	fflush(g_breadcrumb_fp);
 	pthread_mutex_unlock(&g_breadcrumb_lock);
 
 	/* Also mirror to the regular log so we still get it via
@@ -360,18 +365,34 @@ emu_breadcrumb(const char *fmt, ...)
 const char *
 emu_breadcrumbs_reset(void)
 {
-	static char	buf[8192];
+	static char	buf[16384];
 	FILE		*f;
 	size_t		n;
 
 	buf[0] = '\0';
 	pthread_mutex_lock(&g_breadcrumb_lock);
+	if (g_breadcrumb_fp != NULL) {
+		fclose(g_breadcrumb_fp);
+		g_breadcrumb_fp = NULL;
+	}
 	if (g_breadcrumb_path[0] == '\0') {
 		pthread_mutex_unlock(&g_breadcrumb_lock);
 		return (buf);
 	}
 	f = fopen(g_breadcrumb_path, "r");
 	if (f != NULL) {
+		/*
+		 * Read the tail of the file: if the previous run
+		 * logged thousands of syscalls, only the last ~16k
+		 * bytes fit in the UI buffer and are what we need
+		 * to identify the hang point.
+		 */
+		if (fseek(f, 0, SEEK_END) == 0) {
+			long end = ftell(f);
+			long start = end > (long)(sizeof(buf) - 1)
+			    ? end - (long)(sizeof(buf) - 1) : 0;
+			fseek(f, start, SEEK_SET);
+		}
 		n = fread(buf, 1, sizeof(buf) - 1, f);
 		buf[n] = '\0';
 		fclose(f);
