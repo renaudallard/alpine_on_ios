@@ -209,6 +209,18 @@ for apkfile in "$DLDIR"/*.apk; do
 	mkdir -p "$pkgdir"
 	tar -xzf "$apkfile" -C "$pkgdir" 2>/dev/null || continue
 
+	# Some packages ship data directories with restrictive modes
+	# (e.g. alertmanager's var/lib/alertmanager/data at 0700).  Tar
+	# preserves the mode on extraction, so the runner — who now
+	# owns the extracted files — still can't traverse into them.
+	# Grant u+rwX (execute on directories and already-executable
+	# files only) for the duration of the patch + repack.  The
+	# final .apk is rebuilt from these modes, so the consumer sees
+	# the slightly relaxed owner bits, which is acceptable since
+	# the AOT repo is not meant to reproduce upstream Alpine
+	# packaging byte-for-byte.
+	chmod -R u+rwX "$pkgdir" 2>/dev/null || true
+
 	# Patch ELF files.
 	find "$pkgdir" -type f | while read -r f; do
 		head=$(head -c 4 "$f" 2>/dev/null | od -A n -t x1 2>/dev/null | tr -d ' ')
