@@ -98,6 +98,18 @@ typedef struct emu_process {
 	pthread_cond_t	wait_cond;
 	pthread_cond_t	reap_cond;	/* Child waits for collection */
 
+	/*
+	 * vfork-style blocking.  A non-CLONE_VM fork (proc_fork) sets
+	 * vfork_blocking = 1 on the child, then the parent blocks on
+	 * vfork_cond until the child either calls execve or exits.
+	 * This is necessary because mem_space_clone is a shallow clone
+	 * that leaves the child sharing the parent's stack, heap and
+	 * data via MEM_MAP_EXTERNAL; running both threads concurrently
+	 * in guest mode races on the same stack pages and crashes.
+	 */
+	int		vfork_blocking;
+	pthread_cond_t	vfork_cond;
+
 	struct emu_process	*next;
 } emu_process_t;
 
