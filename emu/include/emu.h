@@ -110,6 +110,10 @@ const char *emu_mode_info(void);
 void emu_set_breadcrumb_path(const char *path);
 void emu_breadcrumb(const char *fmt, ...)
     __attribute__((format(printf, 1, 2)));
+/* Swift-callable non-variadic form of emu_breadcrumb.  Swift
+ * cannot bridge C variadic functions, so the bridge uses this
+ * to log a single already-formatted line. */
+void emu_breadcrumb_str(const char *msg);
 /*
  * Read all breadcrumbs from the previous run (if any) into a
  * static buffer and truncate the file so the next run starts

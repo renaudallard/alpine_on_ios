@@ -398,6 +398,12 @@ emu_set_breadcrumb_path(const char *path)
 }
 
 void
+emu_breadcrumb_str(const char *msg)
+{
+	emu_breadcrumb("%s", msg);
+}
+
+void
 emu_breadcrumb(const char *fmt, ...)
 {
 	char	line[512];

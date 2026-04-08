@@ -194,7 +194,7 @@ class EmulatorBridge: ObservableObject {
         })
         let line = "\(prefix)[\(n)] len=\(data.count) " +
             "hex=\(hex) asc=\"\(printable)\""
-        line.withCString { emu_breadcrumb("%s", $0) }
+        line.withCString { emu_breadcrumb_str($0) }
     }
 
     /// Register a read callback. Starts the reader thread immediately
