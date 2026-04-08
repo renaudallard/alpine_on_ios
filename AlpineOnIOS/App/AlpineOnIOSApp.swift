@@ -75,8 +75,26 @@ struct AlpineOnIOSApp: App {
          * bundle's busybox and recreates any stale ones. */
         createBusyboxSymlinks(rootfs: overlay)
 
-        bridge.startAll(rootfsPath: bundleRootfs,
+        /*
+         * If the previous run wrote any breadcrumbs, delay the
+         * actual emu startup by a few seconds so the crumbs panel
+         * is guaranteed on screen long enough to read and
+         * screenshot.  Subsequent launches of the emulator on
+         * iOS can crash fast enough inside emu_init / emu_spawn
+         * that the default auto-start flashes through the
+         * initializing splash before the user can react.  First
+         * launches (no prior crumbs) get no delay.
+         */
+        let br = bridge
+        if !br.previousBreadcrumbs.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                br.startAll(rootfsPath: bundleRootfs,
+                            overlayPath: overlay)
+            }
+        } else {
+            br.startAll(rootfsPath: bundleRootfs,
                         overlayPath: overlay)
+        }
     }
 
     private func bundleRootfsPath() -> String {
