@@ -391,6 +391,13 @@ proc_fork(emu_process_t *parent)
 	/* Child returns 0 from fork. */
 	child->cpu.x[0] = 0;
 
+	emu_breadcrumb("proc_fork: parent cpu.pc=0x%lx sp=0x%lx "
+	    "x[30]=0x%lx -> child pid=%d",
+	    (unsigned long)parent->cpu.pc,
+	    (unsigned long)parent->cpu.sp,
+	    (unsigned long)parent->cpu.x[30],
+	    child->pid);
+
 	/*
 	 * vfork-style: mark the child as blocking its parent, then
 	 * start the child thread, then block on child->vfork_cond

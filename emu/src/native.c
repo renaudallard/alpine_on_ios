@@ -91,6 +91,18 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		 * from main instead of continuing past clone and
 		 * crash on the missing argc/argv/envp stack layout.
 		 */
+		/*
+		 * Diagnostic: log uc.pc and the stale cpu.pc so we
+		 * can verify the snapshot is taking effect and that
+		 * child->cpu.pc in proc_fork ends up = pc+4.
+		 */
+		if (UC_REGS(uc)[8] == 220 /*SYS_clone*/) {
+			emu_breadcrumb("svc.clone: uc.pc=0x%lx "
+			    "pre-cpu.pc=0x%lx sp=0x%lx",
+			    (unsigned long)pc,
+			    (unsigned long)proc->cpu.pc,
+			    (unsigned long)UC_SP(uc));
+		}
 		for (i = 0; i < 31; i++)
 			proc->cpu.x[i] = UC_REGS(uc)[i];
 		proc->cpu.sp = UC_SP(uc);
