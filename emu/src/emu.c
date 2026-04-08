@@ -145,11 +145,13 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 	}
 
 	/*
-	 * Real pty pair instead of socketpair so the guest sees an
-	 * actual terminal on fd 0/1/2.  The host tty driver does
-	 * canonical input, echo, signal processing (Ctrl-C, Ctrl-\,
-	 * Ctrl-Z), and window-size tracking for free, which is what
-	 * busybox ash needs to go into interactive mode at all.
+	 * Preferred: real host pty pair so the guest sees an actual
+	 * terminal on fd 0/1/2 and the host tty driver handles
+	 * canonical input, echo, signal processing and window-size
+	 * tracking for free.  On iOS the sandbox blocks openpty()
+	 * with EPERM, so we fall back to a plain socketpair and
+	 * let the sys_file ioctl handler fake the tty responses
+	 * (TIOCGWINSZ/TCGETS/...) based on the fd's isatty() state.
 	 */
 	memset(&ws, 0, sizeof(ws));
 	ws.ws_row = 24;
@@ -174,8 +176,19 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 	tio.c_cc[VTIME]  = 0;
 
 	if (openpty(&master, &slave, NULL, &tio, &ws) < 0) {
-		set_error("openpty: %s", strerror(errno));
-		return (-1);
+		int	sp[2];
+		int	saved = errno;
+
+		LOG_INFO("emu_spawn: openpty failed (%s); "
+		    "falling back to socketpair",
+		    strerror(saved));
+		if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) < 0) {
+			set_error("openpty: %s; socketpair: %s",
+			    strerror(saved), strerror(errno));
+			return (-1);
+		}
+		master = sp[0];
+		slave = sp[1];
 	}
 
 	proc = proc_create(NULL);
