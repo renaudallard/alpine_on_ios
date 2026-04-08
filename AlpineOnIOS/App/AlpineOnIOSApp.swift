@@ -109,20 +109,20 @@ struct AlpineOnIOSApp: App {
 
     /// Create busybox applet symlinks in the overlay.
     ///
-    /// Targets are **absolute paths into the app bundle** rather
-    /// than relative paths, because:
+    /// Symlink targets are **guest-absolute paths** (`/bin/busybox`),
+    /// NOT host paths.  From the iOS host's point of view these
+    /// links are dead — `/bin/busybox` does not exist on iOS —
+    /// but the emulator's VFS resolver re-interprets symlink
+    /// targets as guest paths and walks them through the overlay
+    /// + rootfs stack, ultimately finding the real file in the
+    /// app bundle's alpine/bin/busybox.  A version of this
+    /// function that used absolute host paths into the bundle
+    /// broke the resolver because it then appended that host
+    /// path to `rootfs` as though it were a guest path.
     ///
-    ///   1. The overlay lives in Documents/alpine while busybox
-    ///      itself lives in Bundle.../App.app/alpine/bin/busybox,
-    ///      so any relative-path target would resolve on the host
-    ///      side to a Documents file that does not exist.
-    ///
-    ///   2. iOS installd strips symlinks from app bundles, so
-    ///      shipping them in the bundle is not an option.
-    ///
-    /// The bundle path contains a UUID that changes on every
-    /// reinstall, so on each launch we compare the current target
-    /// to the expected one and recreate any stale links.
+    /// Idempotent: compares the current link target against
+    /// `/bin/busybox` and only recreates if different, so it is
+    /// safe (and cheap) to run on every launch.
     private func createBusyboxSymlinks(rootfs: String) {
         let fm = FileManager.default
 
@@ -160,7 +160,13 @@ struct AlpineOnIOSApp: App {
                 "crond", "chpasswd"],
         ]
 
-        let bundleBusybox = bundleRootfsPath() + "/bin/busybox"
+        /*
+         * Guest-absolute target.  The resolver walks this through
+         * overlay→rootfs and ends up at the real busybox inside
+         * the app bundle, regardless of where the bundle UUID
+         * moves between reinstalls.
+         */
+        let guestTarget = "/bin/busybox"
 
         for (dir, names) in applets {
             for name in names {
@@ -168,13 +174,13 @@ struct AlpineOnIOSApp: App {
                 /* Already correct? skip. */
                 let current = try? fm.destinationOfSymbolicLink(
                     atPath: link)
-                if current == bundleBusybox {
+                if current == guestTarget {
                     continue
                 }
                 /* Stale or non-existent — nuke and recreate. */
                 try? fm.removeItem(atPath: link)
                 try? fm.createSymbolicLink(atPath: link,
-                    withDestinationPath: bundleBusybox)
+                    withDestinationPath: guestTarget)
             }
         }
     }
