@@ -26,9 +26,36 @@ PF_X = 1
 
 def patch_file(path):
     """Return number of patches applied, or -1 on error."""
+    # Some .apk archives ship setuid binaries with mode 4555 (no
+    # user-write bit), so a plain O_RDWR fails with EPERM even
+    # though we own the extracted file.  Grant u+w for the
+    # duration of the patch and restore the original mode on the
+    # way out.
+    try:
+        st_pre = os.stat(path)
+    except OSError as e:
+        print(f"aot_patch: stat({path}): {e.strerror}", file=sys.stderr)
+        return -1
+
+    # open(O_RDWR) needs both u+r and u+w; give both and restore.
+    orig_mode = st_pre.st_mode
+    need_restore = False
+    if (orig_mode & 0o600) != 0o600:
+        try:
+            os.chmod(path, (orig_mode & 0o7777) | 0o600)
+            need_restore = True
+        except OSError as e:
+            print(f"aot_patch: chmod u+rw {path}: {e.strerror}", file=sys.stderr)
+            return -1
+
     try:
         fd = os.open(path, os.O_RDWR)
     except OSError as e:
+        if need_restore:
+            try:
+                os.chmod(path, orig_mode)
+            except OSError:
+                pass
         print(f"aot_patch: open({path}): {e.strerror}", file=sys.stderr)
         return -1
 
@@ -55,12 +82,17 @@ def patch_file(path):
         e_phentsize, e_phnum = struct.unpack_from("<HH", data, 54)
 
         # Validate program-header table fits in the file.
-        if e_phentsize < 56 or e_phoff > st.st_size or \
-           e_phnum * e_phentsize > st.st_size - e_phoff:
-            print(f"aot_patch: {path} malformed phdr table "
-                  f"(phoff={e_phoff} phnum={e_phnum} "
-                  f"phentsize={e_phentsize} size={st.st_size})",
-                  file=sys.stderr)
+        if (
+            e_phentsize < 56
+            or e_phoff > st.st_size
+            or e_phnum * e_phentsize > st.st_size - e_phoff
+        ):
+            print(
+                f"aot_patch: {path} malformed phdr table "
+                f"(phoff={e_phoff} phnum={e_phnum} "
+                f"phentsize={e_phentsize} size={st.st_size})",
+                file=sys.stderr,
+            )
             return -1
 
         patched = 0
@@ -69,8 +101,9 @@ def patch_file(path):
             p_type, p_flags = struct.unpack_from("<II", data, base)
             if p_type != PT_LOAD or not (p_flags & PF_X):
                 continue
-            p_offset, p_vaddr, p_paddr, p_filesz = \
-                struct.unpack_from("<QQQQ", data, base + 8)
+            p_offset, p_vaddr, p_paddr, p_filesz = struct.unpack_from(
+                "<QQQQ", data, base + 8
+            )
             if p_offset + p_filesz > st.st_size:
                 continue
 
@@ -99,6 +132,11 @@ def patch_file(path):
         return patched
     finally:
         os.close(fd)
+        if need_restore:
+            try:
+                os.chmod(path, orig_mode)
+            except OSError:
+                pass
 
 
 def main():
