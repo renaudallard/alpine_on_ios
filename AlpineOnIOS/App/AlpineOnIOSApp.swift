@@ -69,10 +69,11 @@ struct AlpineOnIOSApp: App {
             }
         }
 
-        /* Busybox symlinks in overlay so PATH finds them. */
-        if !fm.fileExists(atPath: overlay + "/bin/ls") {
-            createBusyboxSymlinks(rootfs: overlay)
-        }
+        /* Busybox symlinks in overlay so PATH finds them.
+         * Safe and cheap to run every launch; createBusyboxSymlinks
+         * skips entries whose target already points at the current
+         * bundle's busybox and recreates any stale ones. */
+        createBusyboxSymlinks(rootfs: overlay)
 
         bridge.startAll(rootfsPath: bundleRootfs,
                         overlayPath: overlay)
@@ -89,6 +90,21 @@ struct AlpineOnIOSApp: App {
     }
 
     /// Create busybox applet symlinks in the overlay.
+    ///
+    /// Targets are **absolute paths into the app bundle** rather
+    /// than relative paths, because:
+    ///
+    ///   1. The overlay lives in Documents/alpine while busybox
+    ///      itself lives in Bundle.../App.app/alpine/bin/busybox,
+    ///      so any relative-path target would resolve on the host
+    ///      side to a Documents file that does not exist.
+    ///
+    ///   2. iOS installd strips symlinks from app bundles, so
+    ///      shipping them in the bundle is not an option.
+    ///
+    /// The bundle path contains a UUID that changes on every
+    /// reinstall, so on each launch we compare the current target
+    /// to the expected one and recreate any stale links.
     private func createBusyboxSymlinks(rootfs: String) {
         let fm = FileManager.default
 
@@ -126,17 +142,21 @@ struct AlpineOnIOSApp: App {
                 "crond", "chpasswd"],
         ]
 
-        for (dir, names) in applets {
-            /* Compute relative path from this dir to /bin/busybox */
-            let depth = dir.components(separatedBy: "/").count - 2
-            let relPath = String(repeating: "../", count: depth) + "bin/busybox"
+        let bundleBusybox = bundleRootfsPath() + "/bin/busybox"
 
+        for (dir, names) in applets {
             for name in names {
                 let link = rootfs + dir + "/" + name
-                if !fm.fileExists(atPath: link) {
-                    try? fm.createSymbolicLink(
-                        atPath: link, withDestinationPath: relPath)
+                /* Already correct? skip. */
+                let current = try? fm.destinationOfSymbolicLink(
+                    atPath: link)
+                if current == bundleBusybox {
+                    continue
                 }
+                /* Stale or non-existent — nuke and recreate. */
+                try? fm.removeItem(atPath: link)
+                try? fm.createSymbolicLink(atPath: link,
+                    withDestinationPath: bundleBusybox)
             }
         }
     }

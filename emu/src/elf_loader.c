@@ -225,12 +225,27 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			 * that preserves code+data segment layout.
 			 * dlopen() loads it with executable code pages
 			 * (signed by the app bundle).
+			 *
+			 * Follow symlinks first.  Busybox applets
+			 * (/bin/ls etc.) are installed in the Documents
+			 * overlay as symlinks pointing at the real
+			 * busybox file inside the app bundle.  The ELF
+			 * content is reachable by just opening the
+			 * symlink, but the .dylib companion lives next
+			 * to the target, not the link, so we need to
+			 * append ".dylib" to the resolved path.
 			 */
 			char dylib_path[PATH_MAX];
+			char real_host_path[PATH_MAX];
+			const char *base_for_dylib;
 			void *dl;
 
+			if (realpath(host_path, real_host_path) != NULL)
+				base_for_dylib = real_host_path;
+			else
+				base_for_dylib = host_path;
 			snprintf(dylib_path, sizeof(dylib_path),
-			    "%s.dylib", host_path);
+			    "%s.dylib", base_for_dylib);
 
 			dl = dlopen(dylib_path, RTLD_NOW | RTLD_LOCAL);
 			if (dl == NULL) {
