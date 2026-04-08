@@ -1593,8 +1593,16 @@ main(int argc, char **argv)
 	uint64_t data_seg_filesize, data_seg_vmsize;
 	uint64_t text_vaddr_page = text_vaddr & ~(uint64_t)(PAGE_SZ - 1);
 
-	/* Shift up so code starts at page boundary >= one full page. */
-	shift = PAGE_SZ - text_vaddr_page;
+	/* Shift the code so the Mach-O header gets its own leading
+	 * page.  If the ELF's text is already at or past file offset
+	 * PAGE_SZ (text_vaddr_page != 0) the header fits in front of
+	 * it without moving anything; otherwise we push the text up
+	 * by exactly one page.  The previous formula
+	 *   shift = PAGE_SZ - text_vaddr_page
+	 * underflowed to a huge garbage value whenever
+	 * text_vaddr_page >= PAGE_SZ.  elf_loader.c applies the same
+	 * rule at runtime so the two must stay in sync. */
+	shift = (text_vaddr_page == 0) ? PAGE_SZ : 0;
 
 	text_seg_fileoff = 0;
 	text_seg_vmaddr = 0;

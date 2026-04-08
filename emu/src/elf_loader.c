@@ -296,7 +296,11 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				/*
 				 * The converter (elf2macho) uses iOS arm64
 				 * page size (16K) regardless of host.  Match
-				 * its calculation: shift = 16K - text_vaddr_page.
+				 * its calculation: shift is one page when the
+				 * ELF's text sits in page 0 (so the Mach-O
+				 * header gets its own leading page), and zero
+				 * when text is already at or past page 1.
+				 * Keep in sync with scripts/elf2macho.c.
 				 */
 				{
 					const uint64_t IOS_PAGE = 0x4000;
@@ -310,7 +314,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 							break;
 						}
 					}
-					shift = IOS_PAGE - tvp;
+					shift = (tvp == 0) ? IOS_PAGE : 0;
 					base = img_addr + shift;
 				}
 			}
