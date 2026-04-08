@@ -291,6 +291,99 @@ emu_mode_info(void)
 	return (buf);
 }
 
+/*
+ * ---- Breadcrumbs ------------------------------------------------
+ *
+ * Append-only progress log used to diagnose silent crashes where
+ * iOS does not emit a standard .ips file (signal in a background
+ * thread during early native execution, jetsam kill, or a clean
+ * exit from a C fatal path).  The Swift bridge hands us a file
+ * path under the app's Documents directory once at startup; we
+ * open/append line-by-line with line buffering and a flush+close
+ * after each write so whatever is on disk always reflects the
+ * last point we reached, even if the next line would have been
+ * in the middle of a crash.  emu_breadcrumbs_reset() drains the
+ * file at startup and truncates it so each run starts clean.
+ */
+static char		 g_breadcrumb_path[1024];
+static pthread_mutex_t	 g_breadcrumb_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void
+emu_set_breadcrumb_path(const char *path)
+{
+	pthread_mutex_lock(&g_breadcrumb_lock);
+	if (path != NULL)
+		snprintf(g_breadcrumb_path, sizeof(g_breadcrumb_path),
+		    "%s", path);
+	else
+		g_breadcrumb_path[0] = '\0';
+	pthread_mutex_unlock(&g_breadcrumb_lock);
+}
+
+void
+emu_breadcrumb(const char *fmt, ...)
+{
+	char	line[512];
+	va_list	ap;
+	FILE	*f;
+	int	n;
+
+	pthread_mutex_lock(&g_breadcrumb_lock);
+	if (g_breadcrumb_path[0] == '\0') {
+		pthread_mutex_unlock(&g_breadcrumb_lock);
+		return;
+	}
+	f = fopen(g_breadcrumb_path, "a");
+	if (f == NULL) {
+		pthread_mutex_unlock(&g_breadcrumb_lock);
+		return;
+	}
+	va_start(ap, fmt);
+	n = vsnprintf(line, sizeof(line) - 1, fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		n = 0;
+	if (n > (int)sizeof(line) - 2)
+		n = (int)sizeof(line) - 2;
+	line[n] = '\n';
+	line[n + 1] = '\0';
+	fputs(line, f);
+	fflush(f);
+	fclose(f);
+	pthread_mutex_unlock(&g_breadcrumb_lock);
+
+	/* Also mirror to the regular log so we still get it via
+	 * the normal stderr path when a Mac is attached. */
+	LOG_INFO("bcrumb: %s", line);
+}
+
+const char *
+emu_breadcrumbs_reset(void)
+{
+	static char	buf[8192];
+	FILE		*f;
+	size_t		n;
+
+	buf[0] = '\0';
+	pthread_mutex_lock(&g_breadcrumb_lock);
+	if (g_breadcrumb_path[0] == '\0') {
+		pthread_mutex_unlock(&g_breadcrumb_lock);
+		return (buf);
+	}
+	f = fopen(g_breadcrumb_path, "r");
+	if (f != NULL) {
+		n = fread(buf, 1, sizeof(buf) - 1, f);
+		buf[n] = '\0';
+		fclose(f);
+	}
+	/* Truncate so the next run's crumbs don't pile on top. */
+	f = fopen(g_breadcrumb_path, "w");
+	if (f != NULL)
+		fclose(f);
+	pthread_mutex_unlock(&g_breadcrumb_lock);
+	return (buf);
+}
+
 void
 emu_set_overlay(const char *overlay_path)
 {

@@ -439,6 +439,8 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	interp_base = 0;
 	stack_top = 0;	/* determined after loading */
 
+	emu_breadcrumb("execve: loading %s", host_path);
+
 	/* Load ELF. */
 	memset(&info, 0, sizeof(info));
 	ret = elf_load(host_path, newmem, bin_base, &info);
@@ -446,6 +448,10 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		LOG_ERR("execve: elf_load %s failed", host_path);
 		EXECVE_FAIL(-ENOEXEC);
 	}
+
+	emu_breadcrumb("execve: elf_load %s ok (entry=0x%llx base=0x%llx)",
+	    host_path,
+	    (unsigned long long)info.entry, (unsigned long long)info.base);
 
 	entry = info.entry;
 
@@ -460,6 +466,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 			EXECVE_FAIL(-ENOENT);
 		}
 
+		emu_breadcrumb("execve: loading interp %s", interp_host);
 		memset(&interp_info, 0, sizeof(interp_info));
 		ret = elf_load(interp_host, newmem, interp_base,
 		    &interp_info);
@@ -467,6 +474,10 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 			LOG_ERR("execve: interp elf_load %s failed", interp_host);
 			EXECVE_FAIL(-ENOEXEC);
 		}
+
+		emu_breadcrumb("execve: interp ok (entry=0x%llx base=0x%llx)",
+		    (unsigned long long)interp_info.entry,
+		    (unsigned long long)interp_info.base);
 
 		info.interp_base = interp_info.base;
 		info.interp_entry = interp_info.entry;
@@ -542,12 +553,17 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 		    ~((uint64_t)hpg - 1);
 	}
 
+	emu_breadcrumb("execve: heap/stack allocated, setting up stack");
+
 	/* Set up stack. */
 	sp = elf_setup_stack(newmem, &info, argv, envp, stack_top);
 	if (sp == 0) {
 		LOG_ERR("execve: failed to set up stack");
 		EXECVE_FAIL(-ENOMEM);
 	}
+
+	emu_breadcrumb("execve: stack setup ok sp=0x%llx",
+	    (unsigned long long)sp);
 
 	/*
 	 * phdr_data has been copied onto the guest stack; the
@@ -611,6 +627,8 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 
 	LOG_INFO("proc: execve pid %d: %s entry=0x%lx sp=0x%lx",
 	    proc->pid, path, (unsigned long)entry, (unsigned long)sp);
+	emu_breadcrumb("execve: done pid=%d entry=0x%lx sp=0x%lx",
+	    proc->pid, (unsigned long)entry, (unsigned long)sp);
 	return (0);
 }
 
@@ -692,6 +710,10 @@ proc_run(void *arg)
 
 	proc = (emu_process_t *)arg;
 
+	emu_breadcrumb("proc_run: enter pid=%d pc=0x%lx sp=0x%lx",
+	    proc->pid, (unsigned long)proc->cpu.pc,
+	    (unsigned long)proc->cpu.sp);
+
 	LOG_DBG("proc: running pid %d, pc=0x%lx sp=0x%lx", proc->pid,
 	    (unsigned long)proc->cpu.pc, (unsigned long)proc->cpu.sp);
 
@@ -704,9 +726,12 @@ proc_run(void *arg)
 		LOG_ERR("proc: pid %d cannot run without AOT", proc->pid);
 		emu_set_error("AOT native execution not available on "
 		    "this host");
+		emu_breadcrumb("proc_run: AOT unavailable, exiting");
 		proc_run_exit(proc, 1);
 		return (NULL);
 	}
+
+	emu_breadcrumb("proc_run: AOT ok, mem_translate check");
 
 	{
 		void *hp = mem_translate(proc->mem, proc->cpu.pc, 4,
@@ -717,14 +742,22 @@ proc_run(void *arg)
 			    (unsigned long)proc->cpu.pc);
 			emu_set_error("AOT: code not mapped at expected "
 			    "address");
+			emu_breadcrumb("proc_run: code not mapped "
+			    "hp=%p pc=0x%lx", hp,
+			    (unsigned long)proc->cpu.pc);
 			proc_run_exit(proc, 1);
 			return (NULL);
 		}
 	}
 
+	emu_breadcrumb("proc_run: mem_translate ok, calling native_run");
+
 	LOG_INFO("proc: pid %d AOT native pc=0x%lx",
 	    proc->pid, (unsigned long)proc->cpu.pc);
 	native_run(proc);
+
+	emu_breadcrumb("proc_run: native_run returned, exit_code=%d",
+	    proc->cpu.exit_code);
 	proc_run_exit(proc, proc->cpu.exit_code);
 	return (NULL);
 

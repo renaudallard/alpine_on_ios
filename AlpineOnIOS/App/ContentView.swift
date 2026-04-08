@@ -93,6 +93,32 @@ struct ContentView: View {
             Text(statusText)
                 .font(.system(.body, design: .monospaced))
                 .foregroundColor(.green)
+
+            /*
+             * If the previous run left breadcrumbs behind (silent
+             * crash with no .ips), show them here so the user can
+             * see where the last attempt died while the current
+             * one spins up.
+             */
+            if !bridge.previousBreadcrumbs.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Previous run crumbs:")
+                            .font(.system(.caption2, design: .monospaced).bold())
+                            .foregroundColor(.orange)
+                        Text(bridge.previousBreadcrumbs)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.orange)
+                            .textSelection(.enabled)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 240)
+                .background(Color.black.opacity(0.6))
+                .cornerRadius(8)
+                .padding(.horizontal)
+            }
         }
     }
 
@@ -116,6 +142,17 @@ struct ContentView: View {
                 Text(message)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.green)
+                    .textSelection(.enabled)
+                if !bridge.previousBreadcrumbs.isEmpty {
+                    Text("Previous run crumbs:")
+                        .font(.system(.caption2, design: .monospaced).bold())
+                        .foregroundColor(.orange)
+                        .padding(.top, 8)
+                    Text(bridge.previousBreadcrumbs)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.orange)
+                        .textSelection(.enabled)
+                }
                 Button("Restart") {
                     exit(0)
                 }

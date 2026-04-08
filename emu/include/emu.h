@@ -99,4 +99,22 @@ void emu_set_error(const char *fmt, ...)
  */
 const char *emu_mode_info(void);
 
+/*
+ * Breadcrumb trail: append a line to a persistent file so that
+ * after a silent crash (no .ips generated, e.g. signal in a
+ * background thread during early native execution) the next app
+ * launch can display where the last run died.  Call
+ * emu_set_breadcrumb_path() once at startup, then emu_breadcrumb()
+ * from any C path whose progress you want to record.
+ */
+void emu_set_breadcrumb_path(const char *path);
+void emu_breadcrumb(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
+/*
+ * Read all breadcrumbs from the previous run (if any) into a
+ * static buffer and truncate the file so the next run starts
+ * clean.  Returns the static buffer, or "" if no previous run.
+ */
+const char *emu_breadcrumbs_reset(void);
+
 #endif /* EMU_H */

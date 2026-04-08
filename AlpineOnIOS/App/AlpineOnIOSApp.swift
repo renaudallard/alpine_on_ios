@@ -55,6 +55,20 @@ struct AlpineOnIOSApp: App {
         try? fm.createDirectory(atPath: overlay,
             withIntermediateDirectories: true, attributes: nil)
 
+        /* Configure the C-side breadcrumb trail (used to diagnose
+         * silent crashes where no .ips file is produced).  Read
+         * the crumbs from the previous run before starting a new
+         * one; if there are any, stash them so the Swift UI can
+         * show them in the error state if needed. */
+        let crumbPath = overlay + "/.breadcrumbs"
+        emu_set_breadcrumb_path(crumbPath)
+        if let cstr = emu_breadcrumbs_reset() {
+            let prev = String(cString: cstr)
+            if !prev.isEmpty {
+                bridge.previousBreadcrumbs = prev
+            }
+        }
+
         /* Busybox symlinks in overlay so PATH finds them. */
         if !fm.fileExists(atPath: overlay + "/bin/ls") {
             createBusyboxSymlinks(rootfs: overlay)

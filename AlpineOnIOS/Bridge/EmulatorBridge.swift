@@ -31,6 +31,13 @@ class EmulatorBridge: ObservableObject {
     @Published var pid: Int = -1
     @Published var hasOutput: Bool = false
 
+    /// Breadcrumb trail read from the previous (possibly crashed)
+    /// run.  Populated by the app's setup() before startAll() is
+    /// called; displayed by the UI in the error state so the user
+    /// can see where the last run died even when iOS produced no
+    /// .ips crash report.
+    var previousBreadcrumbs: String = ""
+
     private(set) var termFD: Int32 = -1
     private var readThread: Thread?
     private var readCallback: ((Data) -> Void)?

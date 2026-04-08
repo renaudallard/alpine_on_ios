@@ -19,6 +19,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "emu.h"
 #include "native.h"
 #include "cpu.h"
 #include "log.h"
@@ -158,7 +159,11 @@ int
 native_run(emu_process_t *proc)
 {
 	native_current_proc = proc;
+	emu_breadcrumb("native_run: about to native_enter pc=0x%lx sp=0x%lx",
+	    (unsigned long)proc->cpu.pc, (unsigned long)proc->cpu.sp);
 	native_enter(&proc->cpu, (void *)proc->cpu.pc);
+	emu_breadcrumb("native_run: native_enter returned "
+	    "(exit_code=%d)", proc->cpu.exit_code);
 	/* Reached here via native_exit */
 	return (proc->cpu.exit_code);
 }
