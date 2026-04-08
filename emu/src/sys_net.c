@@ -306,12 +306,25 @@ do_getsockname(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	if (fde == NULL || fde->type != FD_SOCKET)
 		return -LINUX_ENOTSOCK;
 
+	/*
+	 * POSIX: the guest supplies its buffer size in *addrlen as an
+	 * input parameter; the kernel must not write more than that
+	 * to the guest buffer, but it still reports the true address
+	 * size in *addrlen (possibly larger, so the guest knows the
+	 * copy was truncated).
+	 */
+	if (mem_read32(proc->mem, a2, &len) != 0)
+		return -LINUX_EFAULT;
 	sslen = sizeof(ss);
 	if (getsockname(fde->real_fd, (struct sockaddr *)&ss, &sslen) < 0)
 		return neg_errno_net(errno);
 
 	if (a1 != 0) {
-		if (mem_copy_to(proc->mem, a1, &ss, sslen) != 0)
+		uint32_t copy = (uint32_t)sslen;
+		if (copy > len)
+			copy = len;
+		if (copy > 0 &&
+		    mem_copy_to(proc->mem, a1, &ss, copy) != 0)
 			return -LINUX_EFAULT;
 		len = (uint32_t)sslen;
 		if (mem_copy_to(proc->mem, a2, &len, sizeof(len)) != 0)
@@ -334,12 +347,19 @@ do_getpeername(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 	if (fde == NULL || fde->type != FD_SOCKET)
 		return -LINUX_ENOTSOCK;
 
+	/* Same addrlen-honoring contract as getsockname. */
+	if (mem_read32(proc->mem, a2, &len) != 0)
+		return -LINUX_EFAULT;
 	sslen = sizeof(ss);
 	if (getpeername(fde->real_fd, (struct sockaddr *)&ss, &sslen) < 0)
 		return neg_errno_net(errno);
 
 	if (a1 != 0) {
-		if (mem_copy_to(proc->mem, a1, &ss, sslen) != 0)
+		uint32_t copy = (uint32_t)sslen;
+		if (copy > len)
+			copy = len;
+		if (copy > 0 &&
+		    mem_copy_to(proc->mem, a1, &ss, copy) != 0)
 			return -LINUX_EFAULT;
 		len = (uint32_t)sslen;
 		if (mem_copy_to(proc->mem, a2, &len, sizeof(len)) != 0)
@@ -591,7 +611,7 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		struct msghdr	 hmsg;
 		struct sockaddr_storage	ss;
 		uint64_t	msg_name;
-		uint64_t	msg_namelen_val;
+		uint32_t	msg_namelen_val;
 		ssize_t		n;
 
 		hiov = calloc((size_t)iov_count, sizeof(struct iovec));
@@ -639,7 +659,10 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		}
 		msg_namelen_val = 0;
 		if (msg_name != 0) {
-			if (mem_read64(proc->mem, a1 + 8,
+			/* msg_namelen is a 4-byte socklen_t; don't
+			 * read 8 bytes or we spuriously EFAULT when
+			 * the msghdr lands at the end of a mapping. */
+			if (mem_read32(proc->mem, a1 + 8,
 			    &msg_namelen_val) != 0) {
 				free(hiov);
 				free(hbufs);
@@ -659,8 +682,8 @@ do_recvmsg(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		/* Write back msg_namelen. */
 		if (msg_name != 0 && hmsg.msg_namelen > 0) {
 			uint32_t wlen = hmsg.msg_namelen;
-			if (wlen > (uint32_t)msg_namelen_val)
-				wlen = (uint32_t)msg_namelen_val;
+			if (wlen > msg_namelen_val)
+				wlen = msg_namelen_val;
 			if (wlen > 0 && mem_translate(proc->mem, msg_name,
 			    wlen, MEM_PROT_WRITE) != NULL) {
 				if (mem_copy_to(proc->mem, msg_name,
