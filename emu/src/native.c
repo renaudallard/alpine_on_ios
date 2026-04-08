@@ -188,6 +188,21 @@ native_run(emu_process_t *proc)
 	native_current_proc = proc;
 	emu_breadcrumb("native_run: about to native_enter pc=0x%lx sp=0x%lx",
 	    (unsigned long)proc->cpu.pc, (unsigned long)proc->cpu.sp);
+	/*
+	 * Diagnostic: read the first two instructions at the target
+	 * pc from C before entering native.  If this read SIGBUSes /
+	 * SIGSEGVs we'll see it directly instead of a silent child
+	 * death after native_enter.  Also dumps the bytes so we can
+	 * tell if they're a sane arm64 encoding (post-brk return
+	 * stub) or garbage.
+	 */
+	if (proc->cpu.pc != 0) {
+		volatile uint32_t *p = (volatile uint32_t *)proc->cpu.pc;
+		volatile uint32_t *sp_p = (volatile uint32_t *)proc->cpu.sp;
+		emu_breadcrumb("native_run: pc_insn[0]=0x%08x "
+		    "pc_insn[1]=0x%08x sp_word=0x%08x",
+		    (unsigned)p[0], (unsigned)p[1], (unsigned)sp_p[0]);
+	}
 	native_enter(&proc->cpu, (void *)proc->cpu.pc);
 	emu_breadcrumb("native_run: native_enter returned "
 	    "(exit_code=%d)", proc->cpu.exit_code);
