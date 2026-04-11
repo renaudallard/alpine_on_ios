@@ -764,6 +764,21 @@ proc_run(void *arg)
 
 	proc = (emu_process_t *)arg;
 
+	/*
+	 * Unblock SIGTRAP on this thread.  proc_fork creates the
+	 * child pthread from inside the parent's SIGTRAP handler,
+	 * whose sa_mask is sigfillset (all signals blocked).  The
+	 * new thread inherits the blocked mask and would hang at
+	 * the first BRK instruction because the kernel queues the
+	 * synchronous SIGTRAP instead of delivering it.
+	 */
+	{
+		sigset_t unblock;
+		sigemptyset(&unblock);
+		sigaddset(&unblock, SIGTRAP);
+		pthread_sigmask(SIG_UNBLOCK, &unblock, NULL);
+	}
+
 	emu_breadcrumb("proc_run: enter pid=%d pc=0x%lx sp=0x%lx",
 	    proc->pid, (unsigned long)proc->cpu.pc,
 	    (unsigned long)proc->cpu.sp);
