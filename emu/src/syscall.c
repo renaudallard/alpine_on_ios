@@ -61,9 +61,10 @@ sys_handle(emu_process_t *proc)
 		    (unsigned long long)a2);
 	}
 
-	LOG_TRACE("syscall: nr=%llu a0=0x%llx a1=0x%llx a2=0x%llx",
-	    (unsigned long long)nr, (unsigned long long)a0,
-	    (unsigned long long)a1, (unsigned long long)a2);
+	/* Verbose per-process trace so child hangs are visible. */
+	LOG_INFO("pid=%d sys nr=%llu a0=0x%llx",
+	    proc->pid, (unsigned long long)nr,
+	    (unsigned long long)a0);
 
 	switch (nr) {
 	/* File I/O */
