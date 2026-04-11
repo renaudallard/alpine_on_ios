@@ -230,7 +230,6 @@ jobs:
           #include <string.h>
           #include <unistd.h>
           #include <poll.h>
-          #include <termios.h>
           #include "emu.h"
 
           static char buf[65536];
@@ -306,16 +305,6 @@ jobs:
               sleep(3);
               drain(fd, 2000);
 
-              /* Disable PTY echo so drain only gets actual
-               * shell output, not command echo. */
-              {
-                  struct termios t;
-                  if (tcgetattr(fd, &t) == 0) {
-                      t.c_lflag &= ~(ECHO|ECHOE|ECHOK);
-                      tcsetattr(fd, TCSANOW, &t);
-                  }
-              }
-
               printf("\n=== Builtins ===\n");
               out = run(fd, "echo hello", 2);
               chk("echo", out, "hello");
@@ -331,9 +320,7 @@ jobs:
               printf("\n=== Fork+exec ===\n");
               out = run(fd, "/bin/echo FORKTEST", 5);
               chk("fork+exec echo", out, "FORKTEST");
-              out = run(fd, "/bin/echo FORK2", 30);
-              printf("  fork2 out(%d): '%.100s'\n",
-                  (int)strlen(out), out);
+              out = run(fd, "/bin/echo FORK2", 5);
               chk("fork+exec echo2", out, "FORK2");
               out = run(fd, "/bin/basename /foo/bar", 5);
               chk("basename", out, "bar");

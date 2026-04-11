@@ -909,18 +909,9 @@ fd_table_release(fd_table_t *tbl)
 		return;
 	}
 
-	/* Last reference. Close fds while lock is held.
-	 *
-	 * Skip FD_TTY entries: on macOS, closing a dup'd PTY slave
-	 * can break the master's read path even when the parent
-	 * still holds its own dup'd references.  Leaking these
-	 * fds is harmless (they're cleaned up at process exit)
-	 * and keeps the terminal functional across fork+exec.
-	 */
+	/* Last reference. Close fds while lock is held. */
 	for (i = 0; i < MAX_FDS; i++) {
 		if (tbl->fds[i].type != FD_NONE) {
-			if (tbl->fds[i].type == FD_TTY)
-				continue;
 			if (tbl->fds[i].real_fd >= 0)
 				close(tbl->fds[i].real_fd);
 			if (tbl->fds[i].close_fn != NULL)
