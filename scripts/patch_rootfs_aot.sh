@@ -102,6 +102,11 @@ find "$ROOTFS" -type f | while read -r f; do
 		continue
 	fi
 	if command -v codesign >/dev/null 2>&1; then
+		# Remove any invalid placeholder signature first, then
+		# re-sign from scratch.  elf2macho's LC_CODE_SIGNATURE
+		# layout isn't accepted by macOS 26's codesign; stripping
+		# and re-adding works around that.
+		codesign --remove-signature "$DYLIB" 2>/dev/null || true
 		if ! codesign --force --sign - "$DYLIB" 2>&1; then
 			echo "WARNING: codesign failed on $DYLIB" >&2
 		fi
