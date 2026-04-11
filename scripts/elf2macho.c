@@ -1713,7 +1713,13 @@ main(int argc, char **argv)
 	uint64_t le_codesig_sz = 16384;
 	uint64_t le_total = le_codesig_off + le_codesig_sz;
 
-	linkedit_sz = ALIGN_UP(le_total, PAGE_SZ);
+	/*
+	 * File must end exactly at the code signature boundary:
+	 * codesign rejects trailing padding after LC_CODE_SIGNATURE.
+	 * __LINKEDIT.vmsize is still page-aligned (the kernel
+	 * zero-fills the gap between filesize and vmsize).
+	 */
+	linkedit_sz = le_total;
 	total_sz = linkedit_off + linkedit_sz;
 
 	/* Allocate output. */
