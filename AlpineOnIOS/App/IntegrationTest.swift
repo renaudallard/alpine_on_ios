@@ -102,32 +102,40 @@ enum IntegrationTest {
             "SHELL=/bin/sh",
         ]
 
-        var cArgv = argv.map { strdup($0) }
-        cArgv.append(nil)
-        var cEnvp = envp.map { strdup($0) }
-        cEnvp.append(nil)
-        defer {
-            cArgv.forEach { free($0) }
-            cEnvp.forEach { free($0) }
+        let cArgv = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+            .allocate(capacity: argv.count + 1)
+        for (i, s) in argv.enumerated() {
+            cArgv[i] = strdup(s)
         }
+        cArgv[argv.count] = nil
 
-        return cArgv.withUnsafeMutableBufferPointer { av in
-            cEnvp.withUnsafeMutableBufferPointer { ev in
-                av.baseAddress!.withMemoryRebound(
+        let cEnvp = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+            .allocate(capacity: envp.count + 1)
+        for (i, s) in envp.enumerated() {
+            cEnvp[i] = strdup(s)
+        }
+        cEnvp[envp.count] = nil
+
+        let result = path.withCString { cPath in
+            cArgv.withMemoryRebound(
+                to: UnsafePointer<CChar>?.self,
+                capacity: argv.count + 1
+            ) { avp in
+                cEnvp.withMemoryRebound(
                     to: UnsafePointer<CChar>?.self,
-                    capacity: cArgv.count
-                ) { avp in
-                    ev.baseAddress!.withMemoryRebound(
-                        to: UnsafePointer<CChar>?.self,
-                        capacity: cEnvp.count
-                    ) { evp in
-                        path.withCString { cPath in
-                            emu_spawn(cPath, avp, evp, &fd)
-                        }
-                    }
+                    capacity: envp.count + 1
+                ) { evp in
+                    emu_spawn(cPath, avp, evp, &fd)
                 }
             }
         }
+
+        for i in 0..<argv.count { free(cArgv[i]) }
+        cArgv.deallocate()
+        for i in 0..<envp.count { free(cEnvp[i]) }
+        cEnvp.deallocate()
+
+        return result
     }
 
     private static func send(fd: Int32, command: String) {
