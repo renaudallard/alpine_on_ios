@@ -334,12 +334,16 @@ jobs:
               out = run(fd, "mkdir -p /tmp/td", 5);
               chk("mkdir", out, "__MARK__");
               run(fd, "echo filetest > /tmp/tf", 3);
-              /* Test file readability with builtins first */
+              /* Diagnostic: check file visibility */
               out = run(fd,
-                  "read LINE < /tmp/tf; echo $LINE", 3);
-              chk("file read", out, "filetest");
-              emu_breadcrumb_str("=== CAT TEST ===");
-              out = run(fd, "cat /tmp/tf", 30);
+                  "test -f /tmp/tf && echo YES || echo NO",
+                  3);
+              printf("  file exists: %.60s\n", out);
+              out = run(fd,
+                  "read LINE < /tmp/tf; echo GOT:$LINE", 3);
+              printf("  file read: %.60s\n", out);
+              chk("file read", out, "GOT:filetest");
+              out = run(fd, "cat /tmp/tf", 15);
               if (strstr(out, "filetest") == NULL) {
                   printf("  FAIL: cat (want 'filetest')\n");
                   printf("    got: %.200s\n", out);
