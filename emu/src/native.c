@@ -136,18 +136,6 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 			UC_REGS(uc)[0] = (uint64_t)&proc->cpu;
 			return;
 		}
-
-		/*
-		 * Resume at proc->cpu.pc, NOT the hardcoded pc+4.
-		 * For normal syscalls, cpu.pc == pc+4 (set by the
-		 * pre-handler snapshot above).  For execve, cpu.pc
-		 * is the new binary's entry point.  Without this,
-		 * the child resumes at the old code after execve
-		 * instead of the new program's entry, and hangs in
-		 * the old fork wrapper forever.
-		 */
-		UC_PC(uc) = proc->cpu.pc;
-		return;
 	} else if ((imm & 0xFF00) == 0x0100) {
 		/* MSR TPIDR_EL0, Xn */
 		rn = imm & 0x1F;
@@ -173,7 +161,19 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		return;
 	}
 
-	UC_PC(uc) = pc + 4;
+	/*
+	 * For SVC (imm == 1), cpu.pc was set to pc+4 by the
+	 * pre-handler snapshot.  If sys_handle called execve,
+	 * cpu.pc is now the new entry point.  Use cpu.pc so
+	 * execve resumes at the right address.
+	 *
+	 * For MSR/MRS TPIDR_EL0 (imm 0x01xx/0x02xx), cpu.pc
+	 * was NOT updated — use the standard pc+4.
+	 */
+	if (imm == 0x0001)
+		UC_PC(uc) = proc->cpu.pc;
+	else
+		UC_PC(uc) = pc + 4;
 }
 
 int
