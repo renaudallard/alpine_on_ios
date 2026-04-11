@@ -622,8 +622,15 @@ do_write(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EFAULT;
 
 	n = write(fde->real_fd, buf, (size_t)a2);
-	if (n < 0)
+	if (n < 0) {
+		if (fd <= 2)
+			LOG_INFO("write: pid=%d fd=%d err=%d",
+			    proc->pid, fd, errno);
 		return neg_errno(errno);
+	}
+	if (fd <= 2 && n > 0)
+		LOG_INFO("write: pid=%d fd=%d wrote %zd bytes",
+		    proc->pid, fd, n);
 	return n;
 }
 
