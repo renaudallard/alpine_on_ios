@@ -138,47 +138,171 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             ONLY_ACTIVE_ARCH=YES
 
-      - name: Integration test in Simulator
-        timeout-minutes: 5
+      - name: Smoke test (launch check)
+        timeout-minutes: 3
         run: |
           set -e
           DEVICE="${{ steps.sim.outputs.device }}"
-          echo "Using simulator $DEVICE"
           xcrun simctl boot "$DEVICE" 2>/dev/null || true
 
-          # Install
           APP=$(find DerivedData -name "AlpineOnIOS.app" \
             -path "*iphonesimulator*" | head -1)
           [ -z "$APP" ] && { echo "FAIL: .app not found"; exit 1; }
-          echo "Installing $APP"
           xcrun simctl install "$DEVICE" "$APP"
 
-          # Disable library validation so dlopen of our ad-hoc
-          # signed AOT dylibs works in the simulator sandbox.
-          xcrun simctl spawn "$DEVICE" defaults write \
-            com.alpineonios.app \
-            DYLD_DISABLE_LIBRARY_VALIDATION -bool YES 2>/dev/null || true
-
-          # Launch with --integration-test and capture output.
-          # simctl launch --console streams stdout/stderr; the
-          # app prints INTEGRATION_TEST: lines and exits 0/1.
-          OUTPUT=$(xcrun simctl launch --console-pty \
-            --terminate-running-process \
-            "$DEVICE" com.alpineonios.app \
-            DYLD_DISABLE_LIBRARY_VALIDATION=1 \
-            --integration-test 2>&1) || true
-          echo "$OUTPUT"
-
-          if echo "$OUTPUT" | grep -q "ALL TESTS PASSED"; then
-            echo "--- INTEGRATION TEST PASSED ---"
+          # Launch and check the app doesn't crash on startup.
+          # dlopen of AOT dylibs fails on the simulator (library
+          # validation), so the app will land in .error state
+          # but must not segfault or abort.
+          OUTPUT=$(xcrun simctl launch "$DEVICE" com.alpineonios.app)
+          PID=$(echo "$OUTPUT" | grep -oE '[0-9]+$')
+          echo "Launched PID=$PID"
+          sleep 10
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "PASS: app alive after 10s"
+            xcrun simctl terminate "$DEVICE" com.alpineonios.app \
+              2>/dev/null || true
           else
-            echo "--- INTEGRATION TEST FAILED ---"
-            # Dump crash log if available
+            echo "FAIL: app crashed"
             find ~/Library/Logs/DiagnosticReports \
               -name "AlpineOnIOS*" -newer "$APP" 2>/dev/null \
               | head -3 | xargs head -80 2>/dev/null || true
             xcrun simctl shutdown "$DEVICE" 2>/dev/null || true
             exit 1
           fi
-
           xcrun simctl shutdown "$DEVICE" 2>/dev/null || true
+
+  test-native:
+    name: Native integration test
+    runs-on: macos-26
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build AOT tools
+        run: |
+          mkdir -p /tmp/aot-tools
+          cc -O2 -o /tmp/aot-tools/elf2macho scripts/elf2macho.c
+          codesign --force --sign - /tmp/aot-tools/elf2macho 2>&1 || true
+          echo "ELF2MACHO_PREBUILT=/tmp/aot-tools/elf2macho" >> "$GITHUB_ENV"
+
+      - name: Download rootfs
+        run: ./rootfs/download_rootfs.sh
+
+      - name: Apply rootfs overlay
+        run: |
+          if [ -d rootfs/overlay ]; then
+            cp -r rootfs/overlay/* rootfs/alpine/
+          fi
+
+      - name: Patch rootfs (macOS native)
+        run: scripts/patch_rootfs_aot.sh rootfs/alpine rootfs/alpine
+
+      - name: Build emulator (macOS)
+        run: make -C emu
+
+      - name: Create busybox symlinks
+        run: |
+          OVERLAY="$RUNNER_TEMP/alpine_overlay"
+          mkdir -p "$OVERLAY/bin" "$OVERLAY/sbin" \
+            "$OVERLAY/usr/bin" "$OVERLAY/usr/sbin"
+          for cmd in sh ls cat echo grep sed head tail \
+            sort wc cut tr find xargs mkdir rm cp mv; do
+            ln -sf /bin/busybox "$OVERLAY/bin/$cmd"
+          done
+          echo "ALPINE_OVERLAY=$OVERLAY" >> "$GITHUB_ENV"
+
+      - name: Run integration test
+        timeout-minutes: 3
+        run: |
+          set -e
+          ROOTFS="$(pwd)/rootfs/alpine"
+          OVERLAY="$ALPINE_OVERLAY"
+
+          # Build a small C test harness that exercises the
+          # emulator: init, spawn, write echo/ls, read output.
+          cat > /tmp/integration_test.c << 'TESTEOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <unistd.h>
+          #include <poll.h>
+          #include "emu.h"
+
+          static char *drain(int fd, int timeout_ms) {
+              static char buf[16384];
+              int off = 0;
+              struct pollfd pfd = { .fd = fd, .events = POLLIN };
+              while (off < (int)sizeof(buf) - 1 &&
+                     poll(&pfd, 1, timeout_ms) > 0) {
+                  int n = (int)read(fd, buf + off, sizeof(buf) - 1 - off);
+                  if (n <= 0) break;
+                  off += n;
+                  timeout_ms = 200;
+              }
+              buf[off] = '\0';
+              return buf;
+          }
+
+          int main(int argc, char **argv) {
+              const char *rootfs = argv[1];
+              const char *overlay = argv[2];
+              int fd = -1;
+
+              if (emu_init(rootfs) != 0) {
+                  fprintf(stderr, "FAIL: emu_init: %s\n",
+                      emu_last_error());
+                  return 1;
+              }
+              emu_set_overlay(overlay);
+
+              const char *av[] = { "sh", NULL };
+              const char *ev[] = {
+                  "PATH=/bin:/usr/bin:/sbin:/usr/sbin",
+                  "HOME=/root", "TERM=dumb", NULL
+              };
+              int pid = emu_spawn("/bin/busybox", av, ev, &fd);
+              if (pid < 0) {
+                  fprintf(stderr, "FAIL: emu_spawn: %s\n",
+                      emu_last_error());
+                  return 1;
+              }
+              printf("spawned pid=%d fd=%d\n", pid, fd);
+
+              /* Wait for shell, drain banner */
+              sleep(3);
+              drain(fd, 2000);
+
+              /* Test 1: echo */
+              write(fd, "echo SELFTEST_OK\n", 17);
+              sleep(2);
+              char *out = drain(fd, 2000);
+              if (strstr(out, "SELFTEST_OK") == NULL) {
+                  fprintf(stderr, "FAIL: echo: got '%s'\n", out);
+                  return 1;
+              }
+              printf("echo: PASS\n");
+
+              /* Test 2: ls / (fork+execve) */
+              write(fd, "ls /\n", 5);
+              sleep(3);
+              out = drain(fd, 3000);
+              if (strstr(out, "bin") == NULL) {
+                  fprintf(stderr, "FAIL: ls /: got '%s'\n", out);
+                  return 1;
+              }
+              printf("ls /: PASS\n");
+
+              printf("ALL TESTS PASSED\n");
+              return 0;
+          }
+          TESTEOF
+
+          cc -O2 -I emu/include \
+            -o /tmp/integration_test /tmp/integration_test.c \
+            -Lemu/build -lemu -lpthread -lutil
+          codesign --force --sign - /tmp/integration_test \
+            2>/dev/null || true
+
+          /tmp/integration_test "$ROOTFS" "$OVERLAY"
