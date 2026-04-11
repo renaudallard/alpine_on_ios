@@ -275,6 +275,9 @@ jobs:
               int fd = -1;
               char *out;
 
+              setbuf(stdout, NULL);
+              setbuf(stderr, NULL);
+
               if (emu_init(rootfs) != 0) {
                   fprintf(stderr, "FAIL: emu_init: %s\n",
                       emu_last_error());
