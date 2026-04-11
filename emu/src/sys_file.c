@@ -2464,7 +2464,6 @@ do_ppoll(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		return -LINUX_ENOMEM;
 
 	/* struct pollfd: { int fd(4); short events(2); short revents(2); } = 8 */
-	int	first_guest_fd = -1;
 	for (i = 0; i < nfds; i++) {
 		uint32_t	fd_val;
 		uint16_t	events_val;
@@ -2483,8 +2482,6 @@ do_ppoll(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 
 		pfds[i].fd = -1;
 		pfds[i].events = (short)events_val;
-		if (i == 0)
-			first_guest_fd = (int)(int32_t)fd_val;
 
 		fde = fd_get(proc->fds, (int)(int32_t)fd_val);
 		if (fde != NULL && fde->type != FD_NONE)
@@ -2499,11 +2496,6 @@ do_ppoll(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2,
 		    mem_read64(proc->mem, a2 + 8, &nsec) == 0)
 			timeout_ms = (int)(sec * 1000 + nsec / 1000000);
 	}
-
-	emu_breadcrumb("ppoll: nfds=%d gfd[0]=%d rfd[0]=%d "
-	    "events[0]=0x%x timeout=%d",
-	    nfds, first_guest_fd, pfds[0].fd,
-	    (unsigned)pfds[0].events, timeout_ms);
 
 	n = poll(pfds, (nfds_t)nfds, timeout_ms);
 	if (n < 0) {

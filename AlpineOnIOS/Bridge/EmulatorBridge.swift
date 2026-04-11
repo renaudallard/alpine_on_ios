@@ -160,11 +160,7 @@ class EmulatorBridge: ObservableObject {
     private let dumpLock = NSLock()
 
     func write(data: Data) {
-        if termFD < 0 {
-            let msg = "tx-drop: termFD<0 len=\(data.count)"
-            msg.withCString { emu_breadcrumb_str($0) }
-            return
-        }
+        guard termFD >= 0 else { return }
         data.withUnsafeBytes { buf in
             if let ptr = buf.baseAddress {
                 _ = Darwin.write(termFD, ptr, buf.count)
