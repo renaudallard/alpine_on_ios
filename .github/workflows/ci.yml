@@ -314,11 +314,12 @@ jobs:
               chk("test", out, "0");
 
               printf("\n=== Fork+exec ===\n");
-              out = run(fd, "uname", 15);
-              chk("uname", out, "Linux");
-              /* Skip remaining fork+exec tests until uname
-               * is confirmed working; each takes 15s if hung.
-               */
+              /* Use /bin/echo to force fork+exec (not builtin).
+               * If this hangs, the child's ld-musl init is
+               * stuck on some unimplemented syscall. */
+              out = run(fd, "/bin/echo FORKTEST", 15);
+              printf("fork+exec output: '%s'\n", out);
+              chk("fork+exec echo", out, "FORKTEST");
 
               /* Remaining tests disabled until fork+exec is
                * confirmed working. */
