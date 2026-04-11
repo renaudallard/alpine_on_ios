@@ -333,27 +333,26 @@ jobs:
               printf("\n=== File ops ===\n");
               out = run(fd, "mkdir -p /tmp/td", 5);
               chk("mkdir", out, "__MARK__");
-              /* Does redirect + restore work at all? */
+              /* Test stat on rootfs file (no redirect) */
+              out = run(fd,
+                  "test -e /bin/busybox && echo Y || echo N",
+                  3);
+              printf("  rootfs stat: %.80s\n", out);
+              chk("rootfs stat", out, "Y");
+
+              /* Test redirect + stat */
               out = run(fd,
                   "echo X > /dev/null; echo REDIR_OK", 3);
-              printf("  redir test: %.80s\n", out);
               chk("redirect", out, "REDIR_OK");
 
-              /* File write+read */
               run(fd, "echo filetest > /tmp/tf", 3);
               out = run(fd, "echo AFTER_WRITE", 3);
-              printf("  after write: %.80s\n", out);
               chk("after write", out, "AFTER_WRITE");
-              /* Verify file exists via stat (builtin) */
-              out = run(fd,
-                  "test -e /tmp/tf && echo EXISTS || echo MISS",
-                  3);
-              printf("  stat check: %.80s\n", out);
 
               out = run(fd,
-                  "read L < /tmp/tf; echo GOT:$L", 3);
-              printf("  file read: %.80s\n", out);
-              chk("file read", out, "GOT:filetest");
+                  "test -e /tmp/tf && echo Y2 || echo N2", 3);
+              printf("  overlay stat: %.80s\n", out);
+              chk("overlay stat", out, "Y2");
 
               out = run(fd, "cat /tmp/tf", 15);
               if (strstr(out, "filetest") == NULL) {
