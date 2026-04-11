@@ -609,14 +609,22 @@ elf_setup_stack(mem_space_t *mem, elf_info_t *info,
 	int		argc, envc, i;
 	uint8_t		randbuf[16];
 
-	/* Allocate 8 MB stack. */
-	stack_base = stack_top - (8 * 1024 * 1024);
-	if (mem_mmap(mem, stack_base, 8 * 1024 * 1024,
-	    MEM_PROT_READ | MEM_PROT_WRITE,
-	    MEM_MAP_PRIVATE | MEM_MAP_FIXED | MEM_MAP_ANONYMOUS,
-	    -1, 0) == (uint64_t)-1) {
-		LOG_ERR("elf_setup_stack: stack mmap failed");
-		return 0;
+	/*
+	 * Allocate stack pages.  In AOT mode, proc_execve already
+	 * allocated and registered the stack region via mmap(); the
+	 * pages are live at host addresses matching the guest
+	 * addresses, so a second mem_mmap with MEM_MAP_FIXED would
+	 * collide.  In interpreter mode, we allocate fresh pages.
+	 */
+	if (!mem->aot_mode) {
+		stack_base = stack_top - (8 * 1024 * 1024);
+		if (mem_mmap(mem, stack_base, 8 * 1024 * 1024,
+		    MEM_PROT_READ | MEM_PROT_WRITE,
+		    MEM_MAP_PRIVATE | MEM_MAP_FIXED | MEM_MAP_ANONYMOUS,
+		    -1, 0) == (uint64_t)-1) {
+			LOG_ERR("elf_setup_stack: stack mmap failed");
+			return 0;
+		}
 	}
 
 	sp = stack_top;
