@@ -304,7 +304,24 @@ jobs:
           cc -O2 -I emu/include \
             -o /tmp/integration_test /tmp/integration_test.c \
             -Lemu/build -lemu -lpthread -lutil
-          codesign --force --sign - /tmp/integration_test \
-            2>/dev/null || true
+
+          # Sign with disable-library-validation so dlopen of
+          # our ad-hoc signed AOT dylibs is allowed on SIP-
+          # enabled macOS 26 runners.
+          cat > /tmp/test.entitlements << 'ENTEOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.disable-library-validation</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+          </dict>
+          </plist>
+          ENTEOF
+          codesign --force --sign - \
+            --entitlements /tmp/test.entitlements \
+            /tmp/integration_test
 
           /tmp/integration_test "$ROOTFS" "$OVERLAY"
