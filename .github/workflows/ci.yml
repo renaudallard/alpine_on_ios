@@ -113,10 +113,16 @@ jobs:
 
       - name: Build for Simulator
         run: |
+          # Pick the first available arm64 iOS Simulator device
+          SIM_DEST=$(xcodebuild -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnIOS -showdestinations 2>/dev/null \
+            | grep 'iOS Simulator.*arch:arm64' \
+            | head -1 | sed 's/.*{ //;s/ }$//')
+          echo "Building for: $SIM_DEST"
           xcodebuild build \
             -project AlpineOnIOS.xcodeproj \
             -scheme AlpineOnIOS \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "$SIM_DEST" \
             -derivedDataPath DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             ONLY_ACTIVE_ARCH=YES
@@ -125,7 +131,7 @@ jobs:
         run: |
           set -e
 
-          # Find a booted or available simulator
+          # Find any available arm64 iOS Simulator device
           DEVICE=$(xcrun simctl list devices available -j \
             | python3 -c "
           import json, sys
@@ -133,7 +139,7 @@ jobs:
           for rt, dl in devs.items():
               if 'iOS' in rt:
                   for d in dl:
-                      if 'iPhone' in d['name'] and d['isAvailable']:
+                      if d['isAvailable']:
                           print(d['udid']); sys.exit(0)
           sys.exit(1)")
           echo "Using simulator $DEVICE"
