@@ -36,7 +36,7 @@
  * the very last one before a hang will always be the last file
  * line because we fflush + close after each write.
  */
-static unsigned long g_syscall_count;
+static _Thread_local unsigned long g_syscall_count;
 
 void
 sys_handle(emu_process_t *proc)
