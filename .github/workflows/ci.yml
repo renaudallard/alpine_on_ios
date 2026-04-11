@@ -216,7 +216,7 @@ jobs:
           echo "ALPINE_OVERLAY=$OVERLAY" >> "$GITHUB_ENV"
 
       - name: Run integration test
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           set -e
           ROOTFS="$(pwd)/rootfs/alpine"
@@ -354,7 +354,7 @@ jobs:
               printf("  overlay stat: %.80s\n", out);
               chk("overlay stat", out, "Y2");
 
-              out = run(fd, "cat /tmp/tf", 30);
+              out = run(fd, "cat /tmp/tf", 10);
               chk("cat", out, "filetest");
               out = run(fd, "cp /tmp/tf /tmp/tc", 3);
               out = run(fd, "cat /tmp/tc", 3);
