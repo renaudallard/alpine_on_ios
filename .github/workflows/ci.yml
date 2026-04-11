@@ -344,6 +344,12 @@ jobs:
               out = run(fd, "echo AFTER_WRITE", 3);
               printf("  after write: %.80s\n", out);
               chk("after write", out, "AFTER_WRITE");
+              /* Verify file exists via stat (builtin) */
+              out = run(fd,
+                  "test -e /tmp/tf && echo EXISTS || echo MISS",
+                  3);
+              printf("  stat check: %.80s\n", out);
+
               out = run(fd,
                   "read L < /tmp/tf; echo GOT:$L", 3);
               printf("  file read: %.80s\n", out);
