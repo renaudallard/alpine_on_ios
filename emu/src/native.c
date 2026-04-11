@@ -24,6 +24,7 @@
 #include "cpu.h"
 #include "log.h"
 #include "process.h"
+#include "signal_emu.h"
 #include "syscall.h"
 
 #ifdef __aarch64__
@@ -117,6 +118,16 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		proc->cpu.nzcv = UC_CPSR(uc) & 0xF0000000;
 
 		sys_handle(proc);
+
+		/*
+		 * Deliver any pending signals before resuming the
+		 * guest.  sig_deliver modifies cpu.pc/sp/x[0]/x[30]
+		 * to enter the signal handler, so we must call it
+		 * before the uc write-back below.  Without this,
+		 * SIGCHLD is never delivered and busybox ash hangs
+		 * in its signal wait loop after the first fork.
+		 */
+		sig_deliver(proc);
 
 		/*
 		 * Mirror the full state back to uc.  Most handlers

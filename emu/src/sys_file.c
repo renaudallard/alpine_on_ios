@@ -622,15 +622,8 @@ do_write(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EFAULT;
 
 	n = write(fde->real_fd, buf, (size_t)a2);
-	if (n < 0) {
-		if (fd <= 2)
-			LOG_INFO("write: pid=%d fd=%d err=%d",
-			    proc->pid, fd, errno);
+	if (n < 0)
 		return neg_errno(errno);
-	}
-	if (fd <= 2 && n > 0)
-		LOG_INFO("write: pid=%d fd=%d wrote %zd bytes",
-		    proc->pid, fd, n);
 	return n;
 }
 
@@ -690,10 +683,8 @@ do_writev(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 		return -LINUX_EINVAL;
 	iovcnt = (int)a2;
 	fde = fd_get(proc->fds, fd);
-	if (fde == NULL || fde->type == FD_NONE) {
-		LOG_INFO("writev: pid=%d fd=%d EBADF", proc->pid, fd);
+	if (fde == NULL || fde->type == FD_NONE)
 		return -LINUX_EBADF;
-	}
 
 	total = 0;
 	for (i = 0; i < iovcnt; i++) {
@@ -715,18 +706,12 @@ do_writev(emu_process_t *proc, uint64_t a0, uint64_t a1, uint64_t a2)
 			return -LINUX_EFAULT;
 
 		n = write(fde->real_fd, buf, (size_t)iov_len);
-		if (n < 0) {
-			LOG_INFO("writev: pid=%d fd=%d write err=%d",
-			    proc->pid, fd, errno);
+		if (n < 0)
 			return total > 0 ? total : neg_errno(errno);
-		}
 		total += n;
 		if ((size_t)n < iov_len)
 			break;
 	}
-	if (fd <= 2 && total > 0)
-		LOG_INFO("writev: pid=%d fd=%d wrote %zd bytes",
-		    proc->pid, fd, total);
 	return total;
 }
 

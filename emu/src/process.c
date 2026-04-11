@@ -298,9 +298,6 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 	emu_process_t	*child;
 	int		 found, ret;
 
-	LOG_INFO("proc_wait: parent=%d wait_pid=%d opts=0x%x",
-	    parent->pid, pid, options);
-
 	for (;;) {
 		found = 0;
 		ret = 0;
@@ -322,8 +319,6 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 				child->collected = 1;
 				pthread_cond_signal(&child->reap_cond);
 				pthread_mutex_unlock(&proc_lock);
-				LOG_INFO("proc_wait: parent=%d collected "
-				    "pid=%d", parent->pid, ret);
 				return (ret);
 			}
 		}
@@ -335,8 +330,6 @@ proc_wait(emu_process_t *parent, int pid, int *status, int options)
 		if (options & LINUX_WNOHANG)
 			return (0);
 
-		LOG_INFO("proc_wait: parent=%d blocking",
-		    parent->pid);
 		pthread_mutex_lock(&parent->lock);
 
 		/* Re-check under parent->lock before sleeping. */
