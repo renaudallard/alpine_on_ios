@@ -354,42 +354,8 @@ jobs:
               printf("  overlay stat: %.80s\n", out);
               chk("overlay stat", out, "Y2");
 
-              out = run(fd, "cat /tmp/tf", 15);
-              if (strstr(out, "filetest") == NULL) {
-                  printf("  FAIL: cat (want 'filetest')\n");
-                  printf("    got: %.200s\n", out);
-                  fail++;
-                  /* Dump last crumbs */
-                  FILE *cf = fopen("/tmp/emu_crumbs.log","r");
-                  if (cf) {
-                      char lb[512];
-                      char *lines[200];
-                      int lc = 0;
-                      memset(lines, 0, sizeof(lines));
-                      while (fgets(lb, sizeof(lb), cf)) {
-                          free(lines[lc % 200]);
-                          lines[lc % 200] = strdup(lb);
-                          lc++;
-                      }
-                      fclose(cf);
-                      printf("--- last %d crumbs ---\n",
-                          lc < 200 ? lc : 200);
-                      for (int k=0; k<200 && k<lc; k++){
-                          int idx=(lc<=200)?k:(lc-200+k)%200;
-                          if (lines[idx])
-                              printf("  %s", lines[idx]);
-                      }
-                      for (int k = 0; k < 200; k++)
-                          free(lines[k]);
-                  }
-                  /* Stop here to avoid cascading hangs */
-                  printf("\n=== Summary ===\n");
-                  printf("%d passed, %d failed\n", pass,fail);
-                  printf("SOME TESTS FAILED\n");
-                  return 1;
-              } else {
-                  printf("  PASS: cat\n"); pass++;
-              }
+              out = run(fd, "cat /tmp/tf", 30);
+              chk("cat", out, "filetest");
               out = run(fd, "cp /tmp/tf /tmp/tc", 3);
               out = run(fd, "cat /tmp/tc", 3);
               chk("cp+cat", out, "filetest");
