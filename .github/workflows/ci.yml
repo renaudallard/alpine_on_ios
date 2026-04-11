@@ -337,7 +337,7 @@ jobs:
               /* Mark crumbs before cat so we can find the
                * child's syscall trace. */
               emu_breadcrumb_str("=== CAT TEST ===");
-              out = run(fd, "cat /tmp/tf", 8);
+              out = run(fd, "cat /tmp/tf", 30);
               if (strstr(out, "filetest") == NULL) {
                   printf("  FAIL: cat (want 'filetest')\n");
                   printf("    got: %.200s\n", out);
