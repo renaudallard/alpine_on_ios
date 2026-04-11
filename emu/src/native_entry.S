@@ -21,7 +21,7 @@
 #define CPU_SP		248
 #define CPU_PC		256
 #define CPU_NZCV	264
-#define CPU_HOST_SAVE	848
+#define CPU_HOST_SAVE	1232
 
 /*
  * void native_enter(cpu_state_t *cpu, void *host_pc)

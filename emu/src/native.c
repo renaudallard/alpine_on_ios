@@ -29,9 +29,28 @@
 #ifdef __aarch64__
 
 #include <signal.h>
+#include <stddef.h>
 #ifdef __APPLE__
 #include <libkern/OSCacheControl.h>
 #endif
+
+/*
+ * native_entry.S hardcodes field offsets from cpu_state_t.
+ * If the struct layout changes (e.g. a TLB cache is added),
+ * the assembly constant drifts and native_enter saves host
+ * registers into the wrong field — a silent corruption that
+ * crashes on process exit.  Catch it at compile time.
+ */
+_Static_assert(offsetof(cpu_state_t, x) == 0,
+    "CPU_X0 offset changed — update native_entry.S");
+_Static_assert(offsetof(cpu_state_t, sp) == 248,
+    "CPU_SP offset changed — update native_entry.S");
+_Static_assert(offsetof(cpu_state_t, pc) == 256,
+    "CPU_PC offset changed — update native_entry.S");
+_Static_assert(offsetof(cpu_state_t, nzcv) == 264,
+    "CPU_NZCV offset changed — update native_entry.S");
+_Static_assert(offsetof(cpu_state_t, native_host_save) == 1232,
+    "CPU_HOST_SAVE offset changed — update native_entry.S");
 
 #ifdef __APPLE__
 #include <mach/mach.h>
