@@ -320,7 +320,7 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 					if (img_name != NULL &&
 					    strstr(img_name, ".dylib") != NULL) {
 						const char *bn1, *bn2;
-						bn1 = strrchr(dylib_path, '/');
+						bn1 = strrchr(unique_path, '/');
 						bn2 = strrchr(img_name, '/');
 						if (bn1 && bn2 &&
 						    strcmp(bn1, bn2) == 0) {
