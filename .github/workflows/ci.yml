@@ -80,3 +80,90 @@ jobs:
         with:
           name: AlpineOnIOS-ci
           path: AlpineOnIOS.ipa
+
+  test-simulator:
+    name: Simulator smoke test
+    runs-on: macos-26
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build AOT tools
+        run: |
+          mkdir -p /tmp/aot-tools
+          cc -O2 -o /tmp/aot-tools/elf2macho scripts/elf2macho.c
+          codesign --force --sign - /tmp/aot-tools/elf2macho 2>&1 || true
+          echo "ELF2MACHO_PREBUILT=/tmp/aot-tools/elf2macho" >> "$GITHUB_ENV"
+
+      - name: Download rootfs
+        run: ./rootfs/download_rootfs.sh
+
+      - name: Apply rootfs overlay
+        run: |
+          if [ -d rootfs/overlay ]; then
+            cp -r rootfs/overlay/* rootfs/alpine/
+          fi
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build for Simulator
+        run: |
+          xcodebuild build \
+            -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnIOS \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES
+
+      - name: Smoke test in Simulator
+        run: |
+          set -e
+
+          # Find a booted or available simulator
+          DEVICE=$(xcrun simctl list devices available -j \
+            | python3 -c "
+          import json, sys
+          devs = json.load(sys.stdin)['devices']
+          for rt, dl in devs.items():
+              if 'iOS' in rt:
+                  for d in dl:
+                      if 'iPhone' in d['name'] and d['isAvailable']:
+                          print(d['udid']); sys.exit(0)
+          sys.exit(1)")
+          echo "Using simulator $DEVICE"
+          xcrun simctl boot "$DEVICE" 2>/dev/null || true
+
+          # Install
+          APP=$(find DerivedData -name "AlpineOnIOS.app" \
+            -path "*iphonesimulator*" | head -1)
+          [ -z "$APP" ] && { echo "FAIL: .app not found"; exit 1; }
+          echo "Installing $APP"
+          xcrun simctl install "$DEVICE" "$APP"
+
+          # Launch and capture PID
+          OUTPUT=$(xcrun simctl launch "$DEVICE" com.alpineonios.app)
+          PID=$(echo "$OUTPUT" | grep -oE '[0-9]+$')
+          echo "Launched PID=$PID, waiting 20s for startup..."
+          sleep 20
+
+          # Check if process is still alive
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "PASS: app still running after 20s"
+            xcrun simctl terminate "$DEVICE" com.alpineonios.app \
+              2>/dev/null || true
+          else
+            echo "FAIL: app crashed during startup"
+            # Dump any crash log
+            find ~/Library/Logs/DiagnosticReports \
+              -name "AlpineOnIOS*" -newer "$APP" 2>/dev/null \
+              | head -3 | xargs head -80 2>/dev/null || true
+            exit 1
+          fi
+
+          xcrun simctl shutdown "$DEVICE" 2>/dev/null || true
