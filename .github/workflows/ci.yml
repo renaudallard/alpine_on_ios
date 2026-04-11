@@ -111,27 +111,9 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build for Simulator
+      - name: Pick simulator
+        id: sim
         run: |
-          # Pick the first available arm64 iOS Simulator device
-          SIM_DEST=$(xcodebuild -project AlpineOnIOS.xcodeproj \
-            -scheme AlpineOnIOS -showdestinations 2>/dev/null \
-            | grep 'iOS Simulator.*arch:arm64' \
-            | head -1 | sed 's/.*{ //;s/ }$//')
-          echo "Building for: $SIM_DEST"
-          xcodebuild build \
-            -project AlpineOnIOS.xcodeproj \
-            -scheme AlpineOnIOS \
-            -destination "$SIM_DEST" \
-            -derivedDataPath DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            ONLY_ACTIVE_ARCH=YES
-
-      - name: Smoke test in Simulator
-        run: |
-          set -e
-
-          # Find any available arm64 iOS Simulator device
           DEVICE=$(xcrun simctl list devices available -j \
             | python3 -c "
           import json, sys
@@ -142,6 +124,23 @@ jobs:
                       if d['isAvailable']:
                           print(d['udid']); sys.exit(0)
           sys.exit(1)")
+          echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
+          echo "Picked simulator $DEVICE"
+
+      - name: Build for Simulator
+        run: |
+          xcodebuild build \
+            -project AlpineOnIOS.xcodeproj \
+            -scheme AlpineOnIOS \
+            -destination "id=${{ steps.sim.outputs.device }}" \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES
+
+      - name: Smoke test in Simulator
+        run: |
+          set -e
+          DEVICE="${{ steps.sim.outputs.device }}"
           echo "Using simulator $DEVICE"
           xcrun simctl boot "$DEVICE" 2>/dev/null || true
 
