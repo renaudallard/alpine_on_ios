@@ -230,6 +230,7 @@ jobs:
           #include <string.h>
           #include <unistd.h>
           #include <poll.h>
+          #include <termios.h>
           #include "emu.h"
 
           static char buf[65536];
@@ -304,6 +305,16 @@ jobs:
               printf("spawned pid=%d fd=%d\n", pid, fd);
               sleep(3);
               drain(fd, 2000);
+
+              /* Disable PTY echo so drain only gets actual
+               * shell output, not command echo. */
+              {
+                  struct termios t;
+                  if (tcgetattr(fd, &t) == 0) {
+                      t.c_lflag &= ~(ECHO|ECHOE|ECHOK);
+                      tcsetattr(fd, TCSANOW, &t);
+                  }
+              }
 
               printf("\n=== Builtins ===\n");
               out = run(fd, "echo hello", 2);
