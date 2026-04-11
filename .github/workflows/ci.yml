@@ -216,7 +216,7 @@ jobs:
           echo "ALPINE_OVERLAY=$OVERLAY" >> "$GITHUB_ENV"
 
       - name: Run integration test
-        timeout-minutes: 3
+        timeout-minutes: 10
         run: |
           set -e
           ROOTFS="$(pwd)/rootfs/alpine"
@@ -232,13 +232,16 @@ jobs:
           #include <poll.h>
           #include "emu.h"
 
+          static char buf[65536];
+          static int pass, fail;
+
           static char *drain(int fd, int timeout_ms) {
-              static char buf[16384];
               int off = 0;
               struct pollfd pfd = { .fd = fd, .events = POLLIN };
               while (off < (int)sizeof(buf) - 1 &&
                      poll(&pfd, 1, timeout_ms) > 0) {
-                  int n = (int)read(fd, buf + off, sizeof(buf) - 1 - off);
+                  int n = (int)read(fd, buf + off,
+                      sizeof(buf) - 1 - off);
                   if (n <= 0) break;
                   off += n;
                   timeout_ms = 200;
@@ -247,10 +250,30 @@ jobs:
               return buf;
           }
 
+          static char *run(int fd, const char *cmd, int wait_s) {
+              char w[1024];
+              snprintf(w, sizeof(w), "%s; echo __MARK__\n", cmd);
+              write(fd, w, strlen(w));
+              sleep(wait_s);
+              return drain(fd, 3000);
+          }
+
+          static void chk(const char *name, const char *out,
+              const char *expect) {
+              if (expect == NULL || strstr(out, expect)) {
+                  printf("  PASS: %s\n", name); pass++;
+              } else {
+                  printf("  FAIL: %s (want '%s')\n",
+                      name, expect);
+                  printf("    got: %.200s\n", out); fail++;
+              }
+          }
+
           int main(int argc, char **argv) {
               const char *rootfs = argv[1];
               const char *overlay = argv[2];
               int fd = -1;
+              char *out;
 
               if (emu_init(rootfs) != 0) {
                   fprintf(stderr, "FAIL: emu_init: %s\n",
@@ -262,7 +285,8 @@ jobs:
               const char *av[] = { "sh", NULL };
               const char *ev[] = {
                   "PATH=/bin:/usr/bin:/sbin:/usr/sbin",
-                  "HOME=/root", "TERM=dumb", NULL
+                  "HOME=/root", "TERM=dumb",
+                  "SHELL=/bin/sh", NULL
               };
               int pid = emu_spawn("/bin/busybox", av, ev, &fd);
               if (pid < 0) {
@@ -271,32 +295,108 @@ jobs:
                   return 1;
               }
               printf("spawned pid=%d fd=%d\n", pid, fd);
-
-              /* Wait for shell, drain banner */
               sleep(3);
               drain(fd, 2000);
 
-              /* Test 1: echo */
-              write(fd, "echo SELFTEST_OK\n", 17);
-              sleep(2);
-              char *out = drain(fd, 2000);
-              if (strstr(out, "SELFTEST_OK") == NULL) {
-                  fprintf(stderr, "FAIL: echo: got '%s'\n", out);
+              printf("\n=== Builtins ===\n");
+              out = run(fd, "echo hello", 2);
+              chk("echo", out, "hello");
+              out = run(fd, "pwd", 2);
+              chk("pwd", out, "/");
+              out = run(fd, "true; echo $?", 2);
+              chk("true", out, "0");
+              out = run(fd, "false; echo $?", 2);
+              chk("false", out, "1");
+              out = run(fd, "test 1 -eq 1; echo $?", 2);
+              chk("test", out, "0");
+
+              printf("\n=== Fork+exec ===\n");
+              out = run(fd, "uname", 4);
+              chk("uname", out, "Linux");
+              out = run(fd, "id -u", 4);
+              chk("id", out, "0");
+              out = run(fd, "whoami", 4);
+              chk("whoami", out, "root");
+              out = run(fd, "basename /foo/bar", 4);
+              chk("basename", out, "bar");
+              out = run(fd, "dirname /foo/bar", 4);
+              chk("dirname", out, "/foo");
+              out = run(fd, "seq 1 3", 4);
+              chk("seq", out, "3");
+              out = run(fd, "date +%Y", 4);
+              chk("date", out, "20");
+              out = run(fd, "expr 2 + 3", 4);
+              chk("expr", out, "5");
+
+              printf("\n=== File ops ===\n");
+              out = run(fd, "mkdir -p /tmp/td", 3);
+              chk("mkdir", out, "__MARK__");
+              run(fd, "echo filetest > /tmp/tf", 3);
+              out = run(fd, "cat /tmp/tf", 3);
+              chk("cat", out, "filetest");
+              out = run(fd, "cp /tmp/tf /tmp/tc", 3);
+              out = run(fd, "cat /tmp/tc", 3);
+              chk("cp+cat", out, "filetest");
+              out = run(fd, "mv /tmp/tc /tmp/tm", 3);
+              out = run(fd, "cat /tmp/tm", 3);
+              chk("mv+cat", out, "filetest");
+              run(fd, "rm /tmp/tm", 3);
+              out = run(fd,
+                  "test -f /tmp/tm; echo $?", 3);
+              chk("rm", out, "1");
+              out = run(fd, "touch /tmp/tt && echo ok", 3);
+              chk("touch", out, "ok");
+              run(fd, "ln -s /tmp/tf /tmp/tl", 3);
+              out = run(fd, "cat /tmp/tl", 3);
+              chk("ln -s", out, "filetest");
+              out = run(fd, "rmdir /tmp/td && echo ok", 3);
+              chk("rmdir", out, "ok");
+
+              printf("\n=== Pipes + text ===\n");
+              out = run(fd,
+                  "echo 'hello world' | grep hello", 4);
+              chk("grep", out, "hello");
+              out = run(fd,
+                  "echo 'hello world' | cut -d' ' -f2", 4);
+              chk("cut", out, "world");
+              out = run(fd,
+                  "echo 'hello world' | tr a-z A-Z", 4);
+              chk("tr", out, "HELLO");
+              out = run(fd,
+                  "echo 'hello world' | sed 's/hello/bye/'",
+                  4);
+              chk("sed", out, "bye");
+              out = run(fd,
+                  "printf 'b\\na\\nc\\n' | sort", 4);
+              chk("sort", out, "a");
+              out = run(fd,
+                  "printf 'a\\na\\nb\\n' | uniq", 4);
+              chk("uniq", out, "b");
+              out = run(fd,
+                  "printf 'L1\\nL2\\n' | head -1", 4);
+              chk("head", out, "L1");
+              out = run(fd,
+                  "printf 'L1\\nL2\\n' | tail -1", 4);
+              chk("tail", out, "L2");
+              out = run(fd, "echo hello | base64", 4);
+              chk("base64", out, "aGVsbG8K");
+              out = run(fd, "echo hello | md5sum", 4);
+              chk("md5sum", out, NULL);
+
+              printf("\n=== Misc ===\n");
+              out = run(fd, "printenv HOME", 3);
+              chk("printenv", out, "/root");
+              out = run(fd, "which sh", 3);
+              chk("which", out, "/bin/sh");
+              out = run(fd, "ls /tmp", 4);
+              chk("ls /tmp", out, "tf");
+
+              printf("\n=== Summary ===\n");
+              printf("%d passed, %d failed\n", pass, fail);
+              if (fail > 0) {
+                  printf("SOME TESTS FAILED\n");
                   return 1;
               }
-              printf("echo: PASS\n");
-
-              /* Test 2: ls / (fork+execve, checks no crash) */
-              write(fd, "ls /\n", 5);
-              sleep(8);
-              out = drain(fd, 5000);
-              printf("ls output (%d bytes): '%s'\n",
-                  (int)strlen(out), out);
-              /* For now just verify the child didn't crash
-               * the whole process; directory listing may be
-               * empty due to VFS overlay merge limitations. */
-              printf("ls /: PASS (no crash)\n");
-
               printf("ALL TESTS PASSED\n");
               return 0;
           }
