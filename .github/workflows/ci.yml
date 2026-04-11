@@ -153,11 +153,19 @@ jobs:
           echo "Installing $APP"
           xcrun simctl install "$DEVICE" "$APP"
 
+          # Disable library validation so dlopen of our ad-hoc
+          # signed AOT dylibs works in the simulator sandbox.
+          xcrun simctl spawn "$DEVICE" defaults write \
+            com.alpineonios.app \
+            DYLD_DISABLE_LIBRARY_VALIDATION -bool YES 2>/dev/null || true
+
           # Launch with --integration-test and capture output.
           # simctl launch --console streams stdout/stderr; the
           # app prints INTEGRATION_TEST: lines and exits 0/1.
           OUTPUT=$(xcrun simctl launch --console-pty \
+            --terminate-running-process \
             "$DEVICE" com.alpineonios.app \
+            DYLD_DISABLE_LIBRARY_VALIDATION=1 \
             --integration-test 2>&1) || true
           echo "$OUTPUT"
 
