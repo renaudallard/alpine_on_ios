@@ -175,16 +175,20 @@ emu_spawn(const char *path, const char **argv, const char **envp, int *term_fd)
 	tio.c_cc[VMIN]   = 1;
 	tio.c_cc[VTIME]  = 0;
 
-	if (openpty(&master, &slave, NULL, &tio, &ws) < 0) {
+	/*
+	 * EMU_FORCE_SOCKETPAIR: skip openpty and use a plain
+	 * socketpair.  Matches the iOS runtime path (where
+	 * openpty is blocked by the sandbox) and avoids macOS
+	 * PTY quirks that break the master's read side after
+	 * a forked child closes its dup'd slave fds.
+	 */
+	if (getenv("EMU_FORCE_SOCKETPAIR") != NULL ||
+	    openpty(&master, &slave, NULL, &tio, &ws) < 0) {
 		int	sp[2];
-		int	saved = errno;
 
-		LOG_INFO("emu_spawn: openpty failed (%s); "
-		    "falling back to socketpair",
-		    strerror(saved));
+		LOG_INFO("emu_spawn: using socketpair");
 		if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) < 0) {
-			set_error("openpty: %s; socketpair: %s",
-			    strerror(saved), strerror(errno));
+			set_error("socketpair: %s", strerror(errno));
 			return (-1);
 		}
 		master = sp[0];
