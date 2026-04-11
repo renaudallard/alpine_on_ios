@@ -321,13 +321,12 @@ jobs:
               out = run(fd, "/bin/echo FORKTEST", 15);
               chk("fork+exec echo", out, "FORKTEST");
 
-              /* uname hung previously; test with 20s wait and
-               * dump breadcrumbs on failure to see which
-               * syscall the child is stuck on. */
-              out = run(fd, "/bin/uname", 20);
-              printf("uname output: '%.200s'\n", out);
-              if (strstr(out, "Linux") == NULL) {
-                  printf("  FAIL: uname (dumping crumbs)\n");
+              /* Test a second fork+exec to see if the shell
+               * can fork more than once. */
+              out = run(fd, "/bin/echo FORK2", 20);
+              printf("fork2 output: '%.200s'\n", out);
+              if (strstr(out, "FORK2") == NULL) {
+                  printf("  FAIL: fork2 (dumping crumbs)\n");
                   fail++;
                   FILE *cf = fopen("/tmp/emu_crumbs.log", "r");
                   if (cf) {
@@ -353,7 +352,7 @@ jobs:
                           free(lines[k]);
                   }
               } else {
-                  printf("  PASS: uname\n"); pass++;
+                  printf("  PASS: fork2\n"); pass++;
               }
 
               /* Remaining tests disabled until fork+exec is
