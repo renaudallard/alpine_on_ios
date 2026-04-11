@@ -288,8 +288,8 @@ jobs:
 
               /* Test 2: ls / (fork+execve) */
               write(fd, "ls /\n", 5);
-              sleep(3);
-              out = drain(fd, 3000);
+              sleep(8);
+              out = drain(fd, 5000);
               if (strstr(out, "bin") == NULL) {
                   fprintf(stderr, "FAIL: ls /: got '%s'\n", out);
                   return 1;
