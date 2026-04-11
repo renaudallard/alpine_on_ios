@@ -334,8 +334,10 @@ jobs:
               out = run(fd, "mkdir -p /tmp/td", 5);
               chk("mkdir", out, "__MARK__");
               run(fd, "echo filetest > /tmp/tf", 3);
-              /* Mark crumbs before cat so we can find the
-               * child's syscall trace. */
+              /* Test file readability with builtins first */
+              out = run(fd,
+                  "read LINE < /tmp/tf; echo $LINE", 3);
+              chk("file read", out, "filetest");
               emu_breadcrumb_str("=== CAT TEST ===");
               out = run(fd, "cat /tmp/tf", 30);
               if (strstr(out, "filetest") == NULL) {
