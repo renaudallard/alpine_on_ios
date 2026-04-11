@@ -201,7 +201,8 @@ typedef struct {
 #define VM_PROT_WRITE	2
 #define VM_PROT_EXEC	4
 
-#define PLATFORM_IOS	2
+#define PLATFORM_IOS		2
+#define PLATFORM_IOSSIMULATOR	7
 
 #define PAGE_SZ		0x4000	/* 16K for arm64 iOS */
 #define ALIGN_UP(x, a)	(((x) + (a) - 1) & ~((uint64_t)(a) - 1))
@@ -1474,8 +1475,15 @@ main(int argc, char **argv)
 	uint64_t	 linkedit_off, linkedit_sz;
 	uint64_t	 total_sz;
 
+	uint32_t macho_platform = PLATFORM_IOS;
+	if (argc >= 2 && strcmp(argv[1], "--simulator") == 0) {
+		macho_platform = PLATFORM_IOSSIMULATOR;
+		argc--;
+		argv++;
+	}
 	if (argc != 3) {
-		fprintf(stderr, "usage: elf2macho <input.elf> <output.dylib>\n");
+		fprintf(stderr, "usage: elf2macho [--simulator] "
+		    "<input.elf> <output.dylib>\n");
 		return 1;
 	}
 
@@ -1914,7 +1922,7 @@ main(int argc, char **argv)
 		build_version_command bv = {
 			.cmd = LC_BUILD_VERSION,
 			.cmdsize = 24,
-			.platform = PLATFORM_IOS,
+			.platform = macho_platform,
 			.minos = 0x000F0000,	/* 15.0 */
 			.sdk = 0x000F0000,
 			.ntools = 0

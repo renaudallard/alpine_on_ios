@@ -44,6 +44,13 @@ else
 	fi
 fi
 
+# Detect simulator builds: PLATFORM_NAME is set by Xcode.
+ELF2MACHO_FLAGS=""
+if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
+	ELF2MACHO_FLAGS="--simulator"
+	echo "Detected simulator build; will set PLATFORM_IOSSIMULATOR."
+fi
+
 echo "Scanning $ROOTFS for ELF aarch64 binaries..."
 
 # Counters live in a temp file so the piped subshell can update them
@@ -82,7 +89,7 @@ find "$ROOTFS" -type f | while read -r f; do
 		continue
 	fi
 	DYLIB="${f}.dylib"
-	if ! "$ELF2MACHO" "$f" "$DYLIB" >/dev/null 2>&1; then
+	if ! "$ELF2MACHO" $ELF2MACHO_FLAGS "$f" "$DYLIB" >/dev/null 2>&1; then
 		echo "ERROR: elf2macho failed on $f" >&2
 		failed=$((failed + 1))
 		echo "$converted $skipped $failed $errors" > "$COUNTERS"
