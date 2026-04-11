@@ -35,6 +35,13 @@ struct AlpineOnIOSApp: App {
         guard !isSetup else { return }
         isSetup = true
 
+        if ProcessInfo.processInfo.arguments.contains("--integration-test") {
+            DispatchQueue.global(qos: .userInitiated).async {
+                IntegrationTest.run(app: self)
+            }
+            return
+        }
+
         let fm = FileManager.default
         let bundleRootfs = bundleRootfsPath()
         let overlay = overlayPath()
@@ -123,7 +130,7 @@ struct AlpineOnIOSApp: App {
     /// Idempotent: compares the current link target against
     /// `/bin/busybox` and only recreates if different, so it is
     /// safe (and cheap) to run on every launch.
-    private func createBusyboxSymlinks(rootfs: String) {
+    func createBusyboxSymlinks(rootfs: String) {
         let fm = FileManager.default
 
         /* Standard busybox applet list */

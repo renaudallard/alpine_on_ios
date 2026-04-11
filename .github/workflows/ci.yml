@@ -137,7 +137,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             ONLY_ACTIVE_ARCH=YES
 
-      - name: Smoke test in Simulator
+      - name: Integration test in Simulator
+        timeout-minutes: 5
         run: |
           set -e
           DEVICE="${{ steps.sim.outputs.device }}"
@@ -151,23 +152,23 @@ jobs:
           echo "Installing $APP"
           xcrun simctl install "$DEVICE" "$APP"
 
-          # Launch and capture PID
-          OUTPUT=$(xcrun simctl launch "$DEVICE" com.alpineonios.app)
-          PID=$(echo "$OUTPUT" | grep -oE '[0-9]+$')
-          echo "Launched PID=$PID, waiting 20s for startup..."
-          sleep 20
+          # Launch with --integration-test and capture output.
+          # simctl launch --console streams stdout/stderr; the
+          # app prints INTEGRATION_TEST: lines and exits 0/1.
+          OUTPUT=$(xcrun simctl launch --console-pty \
+            "$DEVICE" com.alpineonios.app \
+            --integration-test 2>&1) || true
+          echo "$OUTPUT"
 
-          # Check if process is still alive
-          if kill -0 "$PID" 2>/dev/null; then
-            echo "PASS: app still running after 20s"
-            xcrun simctl terminate "$DEVICE" com.alpineonios.app \
-              2>/dev/null || true
+          if echo "$OUTPUT" | grep -q "ALL TESTS PASSED"; then
+            echo "--- INTEGRATION TEST PASSED ---"
           else
-            echo "FAIL: app crashed during startup"
-            # Dump any crash log
+            echo "--- INTEGRATION TEST FAILED ---"
+            # Dump crash log if available
             find ~/Library/Logs/DiagnosticReports \
               -name "AlpineOnIOS*" -newer "$APP" 2>/dev/null \
               | head -3 | xargs head -80 2>/dev/null || true
+            xcrun simctl shutdown "$DEVICE" 2>/dev/null || true
             exit 1
           fi
 
