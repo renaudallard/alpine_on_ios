@@ -334,8 +334,48 @@ jobs:
               out = run(fd, "mkdir -p /tmp/td", 5);
               chk("mkdir", out, "__MARK__");
               run(fd, "echo filetest > /tmp/tf", 3);
-              out = run(fd, "cat /tmp/tf", 3);
-              chk("cat", out, "filetest");
+              /* Diagnostic: dump last crumbs if cat hangs
+               * to find the blocking syscall. */
+              {
+                  FILE *cf = fopen("/tmp/emu_crumbs.log","r");
+                  if (cf) { fseek(cf, 0, SEEK_END); fclose(cf); }
+              }
+              out = run(fd, "cat /tmp/tf", 8);
+              if (strstr(out, "filetest") == NULL) {
+                  printf("  FAIL: cat (want 'filetest')\n");
+                  printf("    got: %.200s\n", out);
+                  fail++;
+                  /* Dump last crumbs */
+                  FILE *cf = fopen("/tmp/emu_crumbs.log","r");
+                  if (cf) {
+                      char lb[512];
+                      char *lines[40];
+                      int lc = 0;
+                      memset(lines, 0, sizeof(lines));
+                      while (fgets(lb, sizeof(lb), cf)) {
+                          free(lines[lc % 40]);
+                          lines[lc % 40] = strdup(lb);
+                          lc++;
+                      }
+                      fclose(cf);
+                      printf("--- last %d crumbs ---\n",
+                          lc < 40 ? lc : 40);
+                      for (int k = 0; k < 40 && k < lc; k++){
+                          int idx = (lc<=40)?k:(lc-40+k)%40;
+                          if (lines[idx])
+                              printf("  %s", lines[idx]);
+                      }
+                      for (int k = 0; k < 40; k++)
+                          free(lines[k]);
+                  }
+                  /* Stop here to avoid cascading hangs */
+                  printf("\n=== Summary ===\n");
+                  printf("%d passed, %d failed\n", pass,fail);
+                  printf("SOME TESTS FAILED\n");
+                  return 1;
+              } else {
+                  printf("  PASS: cat\n"); pass++;
+              }
               out = run(fd, "cp /tmp/tf /tmp/tc", 3);
               out = run(fd, "cat /tmp/tc", 3);
               chk("cp+cat", out, "filetest");
