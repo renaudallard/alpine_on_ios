@@ -331,7 +331,9 @@ jobs:
               printf("\n=== Fork+exec ===\n");
               out = run(fd, "/bin/echo FORKTEST", 5);
               chk("fork+exec echo", out, "FORKTEST");
-              out = run(fd, "/bin/echo FORK2", 5);
+              out = run(fd, "/bin/echo FORK2", 30);
+              printf("  fork2 out(%d): '%.100s'\n",
+                  (int)strlen(out), out);
               chk("fork+exec echo2", out, "FORK2");
               out = run(fd, "/bin/basename /foo/bar", 5);
               chk("basename", out, "bar");
