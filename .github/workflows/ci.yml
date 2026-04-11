@@ -481,4 +481,4 @@ jobs:
             --entitlements /tmp/test.entitlements \
             /tmp/integration_test
 
-          EMU_FORCE_SOCKETPAIR=1 /tmp/integration_test "$ROOTFS" "$OVERLAY"
+          /tmp/integration_test "$ROOTFS" "$OVERLAY"
