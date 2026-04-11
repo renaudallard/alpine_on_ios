@@ -237,8 +237,10 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			 */
 			char dylib_path[PATH_MAX];
 			char real_host_path[PATH_MAX];
+			char unique_path[PATH_MAX];
 			const char *base_for_dylib;
 			void *dl;
+			static int dlopen_seq;
 
 			if (realpath(host_path, real_host_path) != NULL)
 				base_for_dylib = real_host_path;
@@ -247,7 +249,37 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			snprintf(dylib_path, sizeof(dylib_path),
 			    "%s.dylib", base_for_dylib);
 
-			dl = dlopen(dylib_path, RTLD_NOW | RTLD_LOCAL);
+			/*
+			 * dlopen of the same path returns the existing
+			 * handle (refcount++), sharing writable DATA
+			 * pages between parent and child.  When the
+			 * child's musl runs RELR self-relocation on the
+			 * shared pages, it double-applies them and hangs.
+			 * Copy the dylib to a unique temp path so each
+			 * process gets independent data pages.
+			 */
+			{
+				int seq = __sync_fetch_and_add(
+				    &dlopen_seq, 1);
+				snprintf(unique_path, sizeof(unique_path),
+				    "%s.%d", dylib_path, seq);
+				int sfd = open(dylib_path, O_RDONLY);
+				int dfd = open(unique_path,
+				    O_WRONLY | O_CREAT | O_TRUNC, 0755);
+				if (sfd >= 0 && dfd >= 0) {
+					char cpbuf[65536];
+					ssize_t nr;
+					while ((nr = read(sfd, cpbuf,
+					    sizeof(cpbuf))) > 0)
+						(void)write(dfd, cpbuf,
+						    (size_t)nr);
+				}
+				if (sfd >= 0) close(sfd);
+				if (dfd >= 0) close(dfd);
+			}
+
+			dl = dlopen(unique_path, RTLD_NOW | RTLD_LOCAL);
+			unlink(unique_path);
 			if (dl == NULL) {
 				/*
 				 * The file is a Mach-O dylib companion at
