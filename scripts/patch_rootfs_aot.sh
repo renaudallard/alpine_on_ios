@@ -102,7 +102,9 @@ find "$ROOTFS" -type f | while read -r f; do
 		continue
 	fi
 	if command -v codesign >/dev/null 2>&1; then
-		codesign --force --sign - "$DYLIB" 2>/dev/null || true
+		if ! codesign --force --sign - "$DYLIB" 2>&1; then
+			echo "WARNING: codesign failed on $DYLIB" >&2
+		fi
 	fi
 	converted=$((converted + 1))
 	echo "$converted $skipped $failed $errors" > "$COUNTERS"

@@ -1704,7 +1704,13 @@ main(int argc, char **argv)
 	if (le_strtab_sz == 0) le_strtab_sz = 8;
 	uint64_t le_codesig_off = le_strtab_off + le_strtab_sz;
 	le_codesig_off = (le_codesig_off + 15) & ~(uint64_t)15;
-	uint64_t le_codesig_sz = 4096; /* placeholder space for codesign */
+	/*
+	 * Placeholder for codesign.  Needs to hold a SuperBlob
+	 * with CodeDirectory hashes covering every 4K page.  A
+	 * 1 MB binary has ~256 pages * 32 byte SHA-256 = 8 KB,
+	 * plus headers.  16 KB covers binaries up to ~2 MB.
+	 */
+	uint64_t le_codesig_sz = 16384;
 	uint64_t le_total = le_codesig_off + le_codesig_sz;
 
 	linkedit_sz = ALIGN_UP(le_total, PAGE_SZ);
