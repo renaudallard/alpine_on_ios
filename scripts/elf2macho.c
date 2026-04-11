@@ -1705,12 +1705,14 @@ main(int argc, char **argv)
 	uint64_t le_codesig_off = le_strtab_off + le_strtab_sz;
 	le_codesig_off = (le_codesig_off + 15) & ~(uint64_t)15;
 	/*
-	 * Placeholder for codesign.  Needs to hold a SuperBlob
-	 * with CodeDirectory hashes covering every 4K page.  A
-	 * 1 MB binary has ~256 pages * 32 byte SHA-256 = 8 KB,
-	 * plus headers.  16 KB covers binaries up to ~2 MB.
+	 * Leave datasize = 0 for the code signature; codesign
+	 * will extend the file and fill in the real signature.
+	 * A non-zero placeholder caused "invalid or unsupported
+	 * format for signature" because codesign on macOS 26
+	 * rejects files with trailing data after __LINKEDIT if
+	 * the code directory doesn't already cover it.
 	 */
-	uint64_t le_codesig_sz = 16384;
+	uint64_t le_codesig_sz = 0;
 	uint64_t le_total = le_codesig_off + le_codesig_sz;
 
 	/*
