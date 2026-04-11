@@ -44,12 +44,18 @@ else
 	fi
 fi
 
-# Detect simulator builds: PLATFORM_NAME is set by Xcode.
+# Detect platform: PLATFORM_NAME is set by Xcode or the caller.
 ELF2MACHO_FLAGS=""
-if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
-	ELF2MACHO_FLAGS="--simulator"
-	echo "Detected simulator build; will set PLATFORM_IOSSIMULATOR."
-fi
+case "$PLATFORM_NAME" in
+	iphonesimulator)
+		ELF2MACHO_FLAGS="--simulator"
+		echo "Platform: iOS Simulator (PLATFORM_IOSSIMULATOR)."
+		;;
+	macosx)
+		ELF2MACHO_FLAGS="--macos"
+		echo "Platform: macOS (PLATFORM_MACOS)."
+		;;
+esac
 
 echo "Scanning $ROOTFS for ELF aarch64 binaries..."
 

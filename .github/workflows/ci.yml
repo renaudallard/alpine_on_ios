@@ -197,7 +197,9 @@ jobs:
           fi
 
       - name: Patch rootfs (macOS native)
-        run: scripts/patch_rootfs_aot.sh rootfs/alpine rootfs/alpine
+        run: |
+          export PLATFORM_NAME=macosx
+          scripts/patch_rootfs_aot.sh rootfs/alpine rootfs/alpine
 
       - name: Build emulator (macOS)
         run: make -C emu

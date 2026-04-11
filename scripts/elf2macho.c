@@ -201,6 +201,7 @@ typedef struct {
 #define VM_PROT_WRITE	2
 #define VM_PROT_EXEC	4
 
+#define PLATFORM_MACOS		1
 #define PLATFORM_IOS		2
 #define PLATFORM_IOSSIMULATOR	7
 
@@ -1480,9 +1481,13 @@ main(int argc, char **argv)
 		macho_platform = PLATFORM_IOSSIMULATOR;
 		argc--;
 		argv++;
+	} else if (argc >= 2 && strcmp(argv[1], "--macos") == 0) {
+		macho_platform = PLATFORM_MACOS;
+		argc--;
+		argv++;
 	}
 	if (argc != 3) {
-		fprintf(stderr, "usage: elf2macho [--simulator] "
+		fprintf(stderr, "usage: elf2macho [--simulator|--macos] "
 		    "<input.elf> <output.dylib>\n");
 		return 1;
 	}
