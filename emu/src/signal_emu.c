@@ -293,8 +293,17 @@ sig_deliver(emu_process_t *proc)
 	 */
 #define SIGFRAME_SIZE	800
 
-	LOG_DBG("sig: pid %d delivering signal %d to handler 0x%lx",
-	    proc->pid, sig, (unsigned long)sa->handler);
+	{
+		char msg[120];
+		int len = snprintf(msg, sizeof(msg),
+		    "[sig] pid=%d delivering sig=%d "
+		    "handler=0x%lx pc=0x%lx->0x%lx\n",
+		    proc->pid, sig,
+		    (unsigned long)sa->handler,
+		    (unsigned long)proc->cpu.pc,
+		    (unsigned long)sa->handler);
+		(void)write(STDERR_FILENO, msg, (size_t)len);
+	}
 
 	{
 		uint64_t	frame_addr;
