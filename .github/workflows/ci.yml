@@ -354,11 +354,23 @@ jobs:
               printf("  overlay stat: %.80s\n", out);
               chk("overlay stat", out, "Y2");
 
-              /* cat /tmp/tf hangs — the file exists (overlay
-               * stat passes) but the NOFORK cat applet
-               * doesn't produce output within the timeout.
-               * Skip file-content reads for now; test file
-               * creation + stat + touch + rmdir instead. */
+              /* Diagnostic: run cat and dump the last
+               * syscalls to find the blocking call. */
+              out = run(fd, "cat /tmp/tf", 8);
+              if (strstr(out, "filetest") == NULL) {
+                  printf("  FAIL: cat (want 'filetest')\n");
+                  printf("    got: %.200s\n", out);
+                  fail++;
+                  /* Dump last 50 lines of syscall trace */
+                  system("echo '--- syscall trace (last 50) ---';"
+                      "tail -50 /tmp/syscall_trace.log");
+                  printf("\n=== Summary ===\n");
+                  printf("%d passed, %d failed\n", pass,fail);
+                  printf("SOME TESTS FAILED\n");
+                  return 1;
+              } else {
+                  printf("  PASS: cat\n"); pass++;
+              }
               out = run(fd, "touch /tmp/tt && echo ok", 3);
               chk("touch", out, "ok");
               out = run(fd, "rmdir /tmp/td && echo ok", 3);
@@ -433,4 +445,6 @@ jobs:
             --entitlements /tmp/test.entitlements \
             /tmp/integration_test
 
-          /tmp/integration_test "$ROOTFS" "$OVERLAY"
+          EMU_TRACE_SYSCALLS=1 \
+            /tmp/integration_test "$ROOTFS" "$OVERLAY" \
+            2>/tmp/syscall_trace.log

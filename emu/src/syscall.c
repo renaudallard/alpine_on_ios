@@ -61,9 +61,43 @@ sys_handle(emu_process_t *proc)
 		    (unsigned long long)a2);
 	}
 
-	LOG_TRACE("syscall: pid=%d nr=%llu a0=0x%llx",
-	    proc->pid, (unsigned long long)nr,
-	    (unsigned long long)a0);
+	/*
+	 * Full syscall trace: on by default in debug builds,
+	 * off in production.  Set EMU_TRACE_SYSCALLS=1 to enable.
+	 * Goes to stderr so CI captures it.
+	 */
+	{
+		static int trace = -1;
+		if (trace < 0)
+			trace = (getenv("EMU_TRACE_SYSCALLS") != NULL);
+		if (trace) {
+			static const char *names[] = {
+			    [17]="getcwd",[29]="ioctl",[48]="faccessat",
+			    [49]="chdir",[56]="openat",[57]="close",
+			    [61]="getdents64",[63]="read",[64]="write",
+			    [66]="writev",[73]="ppoll",[78]="readlinkat",
+			    [79]="fstatat",[80]="fstat",[93]="exit",
+			    [94]="exit_grp",[96]="set_tid_addr",
+			    [134]="sigaction",[135]="sigprocmask",
+			    [160]="uname",[172]="getpid",[174]="getuid",
+			    [175]="geteuid",[220]="clone",[221]="execve",
+			    [222]="mmap",[226]="mprotect",[214]="brk",
+			    [260]="wait4",[261]="prlimit64",
+			    [278]="getrandom",[113]="clock_gettime",
+			    [153]="times",
+			};
+			const char *nm = NULL;
+			if (nr < sizeof(names)/sizeof(names[0]))
+				nm = names[nr];
+			fprintf(stderr, "[sys] pid=%d #%lu %s(%llu) "
+			    "a0=0x%llx a1=0x%llx\n",
+			    proc->pid, g_syscall_count,
+			    nm ? nm : "?",
+			    (unsigned long long)nr,
+			    (unsigned long long)a0,
+			    (unsigned long long)a1);
+		}
+	}
 
 	switch (nr) {
 	/* File I/O */
@@ -257,6 +291,13 @@ sys_handle(emu_process_t *proc)
 		    (long long)ret);
 	}
 
-	LOG_TRACE("syscall: nr=%llu ret=%lld",
-	    (unsigned long long)nr, (long long)ret);
+	{
+		static int trace = -1;
+		if (trace < 0)
+			trace = (getenv("EMU_TRACE_SYSCALLS") != NULL);
+		if (trace)
+			fprintf(stderr, "[sys] pid=%d #%lu ret=%lld\n",
+			    proc->pid, g_syscall_count,
+			    (long long)ret);
+	}
 }
