@@ -410,6 +410,13 @@ proc_fork(emu_process_t *parent)
 
 	/* Start child thread. */
 	child->cpu.running = 1;
+	{
+		char msg[80];
+		int len = snprintf(msg, sizeof(msg),
+		    "[fork] creating thread for pid=%d\n",
+		    child->pid);
+		(void)write(STDERR_FILENO, msg, (size_t)len);
+	}
 	ret = pthread_create(&child->host_thread, NULL, proc_run, child);
 	if (ret != 0) {
 		LOG_ERR("proc: failed to create thread for pid %d",
@@ -418,6 +425,13 @@ proc_fork(emu_process_t *parent)
 		return (-ENOMEM);
 	}
 	pthread_detach(child->host_thread);
+	{
+		char msg[80];
+		int len = snprintf(msg, sizeof(msg),
+		    "[fork] thread created for pid=%d\n",
+		    child->pid);
+		(void)write(STDERR_FILENO, msg, (size_t)len);
+	}
 
 	/*
 	 * Wait for the child to reach execve or exit.  The child
