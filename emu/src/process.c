@@ -436,6 +436,13 @@ proc_fork(emu_process_t *parent)
 		return (-ENOMEM);
 	}
 	pthread_detach(child->host_thread);
+	{
+		char m[60];
+		int l = snprintf(m, sizeof(m),
+		    "[fork] detached pid=%d done=%d\n",
+		    child->pid, child->vfork_done);
+		(void)write(STDERR_FILENO, m, (size_t)l);
+	}
 
 	/*
 	 * Wait for the child to reach execve or exit.  sem_wait
