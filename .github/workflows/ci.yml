@@ -361,11 +361,10 @@ jobs:
                   printf("  FAIL: cat (want 'filetest')\n");
                   printf("    got: %.200s\n", out);
                   fail++;
-                  /* Dump pid=1 syscalls near the end
-                   * (cat is NOFORK, runs in pid=1) */
-                  system("echo '--- pid=1 trace (last 30) ---';"
-                      "grep 'pid=1' /tmp/syscall_trace.log"
-                      " | tail -30");
+                  /* Show ALL pids in the last 80 lines
+                   * to see what the child is stuck on */
+                  system("echo '--- trace (last 80) ---';"
+                      "tail -80 /tmp/syscall_trace.log");
                   printf("\n=== Summary ===\n");
                   printf("%d passed, %d failed\n", pass,fail);
                   printf("SOME TESTS FAILED\n");
