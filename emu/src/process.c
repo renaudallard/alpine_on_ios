@@ -29,6 +29,31 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/*
+ * Cross-platform semaphore helpers.  macOS deprecated POSIX
+ * unnamed semaphores (sem_init returns ENOSYS).  Use GCD
+ * dispatch_semaphore on Apple, POSIX sem elsewhere.
+ */
+#ifdef __APPLE__
+#define VFORK_SEM_INIT(p) \
+	((p)->vfork_sem = dispatch_semaphore_create(0))
+#define VFORK_SEM_WAIT(p) \
+	dispatch_semaphore_wait((p)->vfork_sem, DISPATCH_TIME_FOREVER)
+#define VFORK_SEM_POST(p) \
+	dispatch_semaphore_signal((p)->vfork_sem)
+#define VFORK_SEM_DESTROY(p) \
+	do { (p)->vfork_sem = NULL; } while (0)
+#else
+#define VFORK_SEM_INIT(p) \
+	sem_init(&(p)->vfork_sem, 0, 0)
+#define VFORK_SEM_WAIT(p) \
+	sem_wait(&(p)->vfork_sem)
+#define VFORK_SEM_POST(p) \
+	sem_post(&(p)->vfork_sem)
+#define VFORK_SEM_DESTROY(p) \
+	sem_destroy(&(p)->vfork_sem)
+#endif
 #include <unistd.h>
 
 #include "cpu.h"
@@ -167,7 +192,7 @@ proc_create(emu_process_t *parent)
 	pthread_mutex_init(&p->lock, NULL);
 	pthread_cond_init(&p->wait_cond, NULL);
 	pthread_cond_init(&p->reap_cond, NULL);
-	sem_init(&p->vfork_sem, 0, 0);
+	VFORK_SEM_INIT(p);
 
 	/* Add to process list. */
 	pthread_mutex_lock(&proc_lock);
@@ -237,7 +262,7 @@ proc_exit(emu_process_t *proc, int status)
 	 * was never reached on the success side.  sem_post is safe
 	 * even if already posted (just increments the count).
 	 */
-	sem_post(&proc->vfork_sem);
+	VFORK_SEM_POST(proc);
 	pthread_mutex_unlock(&proc->lock);
 
 	/*
@@ -423,7 +448,7 @@ proc_fork(emu_process_t *parent)
 	 * is NOT — it silently failed on macOS, deadlocking
 	 * the parent forever).
 	 */
-	sem_wait(&child->vfork_sem);
+	VFORK_SEM_WAIT(child);
 
 	LOG_DBG("proc: forked pid %d from pid %d", child->pid, parent->pid);
 	return (child->pid);
@@ -666,7 +691,7 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	 * etc.).
 	 */
 	/* Wake the parent — sem_post is async-signal-safe. */
-	sem_post(&proc->vfork_sem);
+	VFORK_SEM_POST(proc);
 
 	LOG_INFO("proc: execve pid %d: %s entry=0x%lx sp=0x%lx",
 	    proc->pid, path, (unsigned long)entry, (unsigned long)sp);
@@ -709,7 +734,7 @@ proc_destroy(emu_process_t *proc)
 	pthread_mutex_destroy(&proc->lock);
 	pthread_cond_destroy(&proc->wait_cond);
 	pthread_cond_destroy(&proc->reap_cond);
-	sem_destroy(&proc->vfork_sem);
+	VFORK_SEM_DESTROY(proc);
 
 	LOG_DBG("proc: destroyed pid %d", proc->pid);
 	free(proc);
