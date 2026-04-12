@@ -313,6 +313,18 @@ sig_deliver(emu_process_t *proc)
 
 		frame_addr = (proc->cpu.sp - SIGFRAME_SIZE) & ~15ULL;
 
+		/* Verify the frame fits in mapped memory.
+		 * If not, skip delivery — the guest stack is
+		 * exhausted or the SP is corrupt. */
+		if (mem_translate(proc->mem, frame_addr,
+		    SIGFRAME_SIZE, MEM_PROT_WRITE) == NULL) {
+			LOG_WARN("sig: pid %d cannot push signal "
+			    "frame at 0x%lx (sp=0x%lx)",
+			    proc->pid, (unsigned long)frame_addr,
+			    (unsigned long)proc->cpu.sp);
+			return;
+		}
+
 		/* Save x0-x30 */
 		for (i = 0; i < 31; i++)
 			mem_write64(proc->mem,
