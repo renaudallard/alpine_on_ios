@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <time.h>
 #include "cpu.h"
 #include "memory.h"
@@ -100,15 +101,13 @@ typedef struct emu_process {
 
 	/*
 	 * vfork-style blocking.  A non-CLONE_VM fork (proc_fork) sets
-	 * vfork_blocking = 1 on the child, then the parent blocks on
-	 * vfork_cond until the child either calls execve or exits.
-	 * This is necessary because mem_space_clone is a shallow clone
-	 * that leaves the child sharing the parent's stack, heap and
-	 * data via MEM_MAP_EXTERNAL; running both threads concurrently
-	 * in guest mode races on the same stack pages and crashes.
+	 * vfork_done to an initialized semaphore, then the parent
+	 * blocks on sem_wait until the child calls execve or exits.
+	 * We use a semaphore instead of a cond var because sem_post
+	 * is async-signal-safe and the child posts from inside the
+	 * SIGTRAP handler (via proc_execve / proc_exit).
 	 */
-	int		vfork_blocking;
-	pthread_cond_t	vfork_cond;
+	sem_t		vfork_sem;
 
 	struct emu_process	*next;
 } emu_process_t;

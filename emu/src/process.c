@@ -167,7 +167,7 @@ proc_create(emu_process_t *parent)
 	pthread_mutex_init(&p->lock, NULL);
 	pthread_cond_init(&p->wait_cond, NULL);
 	pthread_cond_init(&p->reap_cond, NULL);
-	pthread_cond_init(&p->vfork_cond, NULL);
+	sem_init(&p->vfork_sem, 0, 0);
 
 	/* Add to process list. */
 	pthread_mutex_lock(&proc_lock);
@@ -234,12 +234,10 @@ proc_exit(emu_process_t *proc, int status)
 	/*
 	 * Release any vfork parent still blocked in proc_fork.  This
 	 * covers the execve-failed-then-_exit path where proc_execve
-	 * was never reached on the success side.
+	 * was never reached on the success side.  sem_post is safe
+	 * even if already posted (just increments the count).
 	 */
-	if (proc->vfork_blocking) {
-		proc->vfork_blocking = 0;
-		pthread_cond_signal(&proc->vfork_cond);
-	}
+	sem_post(&proc->vfork_sem);
 	pthread_mutex_unlock(&proc->lock);
 
 	/*
@@ -404,19 +402,9 @@ proc_fork(emu_process_t *parent)
 	 * allows this because our "known limitation" is that forked
 	 * children must execve immediately.
 	 */
-	pthread_mutex_lock(&child->lock);
-	child->vfork_blocking = 1;
-	pthread_mutex_unlock(&child->lock);
 
 	/* Start child thread. */
 	child->cpu.running = 1;
-	{
-		char msg[80];
-		int len = snprintf(msg, sizeof(msg),
-		    "[fork] creating thread for pid=%d\n",
-		    child->pid);
-		(void)write(STDERR_FILENO, msg, (size_t)len);
-	}
 	ret = pthread_create(&child->host_thread, NULL, proc_run, child);
 	if (ret != 0) {
 		LOG_ERR("proc: failed to create thread for pid %d",
@@ -425,39 +413,17 @@ proc_fork(emu_process_t *parent)
 		return (-ENOMEM);
 	}
 	pthread_detach(child->host_thread);
-	{
-		char msg[80];
-		int len = snprintf(msg, sizeof(msg),
-		    "[fork] thread created for pid=%d\n",
-		    child->pid);
-		(void)write(STDERR_FILENO, msg, (size_t)len);
-	}
 
 	/*
-	 * Wait for the child to reach execve or exit.  The child
-	 * signals vfork_cond from proc_execve (after swapping in the
-	 * new mem_space) or from proc_exit (if it never got that far).
-	 * proc_run_exit then waits up to 2 s for its parent to reap
-	 * it via wait4, so child->lock / child->vfork_cond stay valid
-	 * for as long as the wakeup path needs them.
+	 * Wait for the child to reach execve or exit.  sem_wait
+	 * is safe even if the child posts before we reach here.
+	 * We use a semaphore instead of a cond var because the
+	 * child posts from inside the SIGTRAP handler and
+	 * sem_post is async-signal-safe (pthread_cond_signal
+	 * is NOT — it silently failed on macOS, deadlocking
+	 * the parent forever).
 	 */
-	{
-		char msg[80];
-		int len = snprintf(msg, sizeof(msg),
-		    "[fork] pid=%d waiting on vfork (blocking=%d)\n",
-		    child->pid, child->vfork_blocking);
-		(void)write(STDERR_FILENO, msg, (size_t)len);
-	}
-	pthread_mutex_lock(&child->lock);
-	while (child->vfork_blocking)
-		pthread_cond_wait(&child->vfork_cond, &child->lock);
-	pthread_mutex_unlock(&child->lock);
-	{
-		char msg[80];
-		int len = snprintf(msg, sizeof(msg),
-		    "[fork] pid=%d vfork done\n", child->pid);
-		(void)write(STDERR_FILENO, msg, (size_t)len);
-	}
+	sem_wait(&child->vfork_sem);
 
 	LOG_DBG("proc: forked pid %d from pid %d", child->pid, parent->pid);
 	return (child->pid);
@@ -699,19 +665,8 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	 * vfork_blocking was never set (direct spawn, thread clone,
 	 * etc.).
 	 */
-	pthread_mutex_lock(&proc->lock);
-	{
-		char msg[80];
-		int len = snprintf(msg, sizeof(msg),
-		    "[execve] pid=%d vfork_blocking=%d\n",
-		    proc->pid, proc->vfork_blocking);
-		(void)write(STDERR_FILENO, msg, (size_t)len);
-	}
-	if (proc->vfork_blocking) {
-		proc->vfork_blocking = 0;
-		pthread_cond_signal(&proc->vfork_cond);
-	}
-	pthread_mutex_unlock(&proc->lock);
+	/* Wake the parent — sem_post is async-signal-safe. */
+	sem_post(&proc->vfork_sem);
 
 	LOG_INFO("proc: execve pid %d: %s entry=0x%lx sp=0x%lx",
 	    proc->pid, path, (unsigned long)entry, (unsigned long)sp);
@@ -754,7 +709,7 @@ proc_destroy(emu_process_t *proc)
 	pthread_mutex_destroy(&proc->lock);
 	pthread_cond_destroy(&proc->wait_cond);
 	pthread_cond_destroy(&proc->reap_cond);
-	pthread_cond_destroy(&proc->vfork_cond);
+	sem_destroy(&proc->vfork_sem);
 
 	LOG_DBG("proc: destroyed pid %d", proc->pid);
 	free(proc);
@@ -798,14 +753,6 @@ proc_run(void *arg)
 	emu_process_t	*proc;
 
 	proc = (emu_process_t *)arg;
-
-	/* Raw write to stderr to bypass any lock contention */
-	{
-		char msg[80];
-		int len = snprintf(msg, sizeof(msg),
-		    "[proc_run] pid=%d started\n", proc->pid);
-		(void)write(STDERR_FILENO, msg, (size_t)len);
-	}
 
 	/*
 	 * Unblock SIGTRAP on this thread.  proc_fork creates the
