@@ -17,6 +17,8 @@
 #define _DEFAULT_SOURCE
 
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 
 #include "emu.h"
