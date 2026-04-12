@@ -252,15 +252,20 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 			/*
 			 * dlopen of the same path returns the existing
 			 * handle (refcount++), sharing writable DATA
-			 * pages between parent and child.  When the
-			 * child's musl runs RELR self-relocation on the
-			 * shared pages, it double-applies them and hangs.
-			 * Copy the dylib to a unique temp path so each
-			 * process gets independent data pages.
+			 * pages between parent and child.  Copy the
+			 * dylib to a unique temp path so each process
+			 * gets independent data pages.
+			 *
+			 * On iOS the app bundle is read-only and dylibs
+			 * must be codesigned by AltServer, so the copy
+			 * may fail.  Fall back to the original path —
+			 * proc_fork's save/restore mechanism handles the
+			 * shared-page issue for the parent side.
 			 */
 			{
 				int seq = __sync_fetch_and_add(
 				    &dlopen_seq, 1);
+				int copied = 0;
 				snprintf(unique_path, sizeof(unique_path),
 				    "%s.%d", dylib_path, seq);
 				int sfd = open(dylib_path, O_RDONLY);
@@ -269,17 +274,32 @@ elf_load(const char *host_path, mem_space_t *mem, uint64_t base_hint,
 				if (sfd >= 0 && dfd >= 0) {
 					char cpbuf[65536];
 					ssize_t nr;
+					copied = 1;
 					while ((nr = read(sfd, cpbuf,
-					    sizeof(cpbuf))) > 0)
-						(void)write(dfd, cpbuf,
-						    (size_t)nr);
+					    sizeof(cpbuf))) > 0) {
+						if (write(dfd, cpbuf,
+						    (size_t)nr) != nr) {
+							copied = 0;
+							break;
+						}
+					}
 				}
 				if (sfd >= 0) close(sfd);
 				if (dfd >= 0) close(dfd);
+				if (!copied) {
+					/* Copy failed (read-only bundle,
+					 * sandbox, etc.) — use original. */
+					unlink(unique_path);
+					snprintf(unique_path,
+					    sizeof(unique_path),
+					    "%s", dylib_path);
+				}
 			}
 
 			dl = dlopen(unique_path, RTLD_NOW | RTLD_LOCAL);
-			unlink(unique_path);
+			if (unique_path[0] != '\0' &&
+			    strcmp(unique_path, dylib_path) != 0)
+				unlink(unique_path);
 			if (dl == NULL) {
 				/*
 				 * The file is a Mach-O dylib companion at
