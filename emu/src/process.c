@@ -765,6 +765,14 @@ proc_run(void *arg)
 
 	proc = (emu_process_t *)arg;
 
+	/* Raw write to stderr to bypass any lock contention */
+	{
+		char msg[80];
+		int len = snprintf(msg, sizeof(msg),
+		    "[proc_run] pid=%d started\n", proc->pid);
+		(void)write(STDERR_FILENO, msg, (size_t)len);
+	}
+
 	/*
 	 * Unblock SIGTRAP on this thread.  proc_fork creates the
 	 * child pthread from inside the parent's SIGTRAP handler,
