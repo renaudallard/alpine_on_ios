@@ -222,17 +222,6 @@ sig_deliver(emu_process_t *proc)
 	if (deliverable == 0)
 		return;
 
-	{
-		char m[80];
-		int l = snprintf(m, sizeof(m),
-		    "[sig_deliver] pid=%d pending=0x%llx "
-		    "blocked=0x%llx\n",
-		    proc->pid,
-		    (unsigned long long)proc->sig_pending,
-		    (unsigned long long)proc->sig_blocked);
-		(void)write(STDERR_FILENO, m, (size_t)l);
-	}
-
 	/* Find lowest set bit (first pending unblocked signal). */
 	for (sig = 1; sig < EMU_NSIG; sig++) {
 		if (deliverable & SIGMASK(sig))
@@ -306,17 +295,8 @@ sig_deliver(emu_process_t *proc)
 	 */
 #define SIGFRAME_SIZE	800
 
-	{
-		char msg[120];
-		int len = snprintf(msg, sizeof(msg),
-		    "[sig] pid=%d delivering sig=%d "
-		    "handler=0x%lx pc=0x%lx->0x%lx\n",
-		    proc->pid, sig,
-		    (unsigned long)sa->handler,
-		    (unsigned long)proc->cpu.pc,
-		    (unsigned long)sa->handler);
-		(void)write(STDERR_FILENO, msg, (size_t)len);
-	}
+	LOG_DBG("sig: pid %d delivering signal %d to handler 0x%lx",
+	    proc->pid, sig, (unsigned long)sa->handler);
 
 	{
 		uint64_t	frame_addr;
