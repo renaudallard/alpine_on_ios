@@ -361,18 +361,17 @@ jobs:
                   printf("  FAIL: cat (want 'filetest')\n");
                   printf("    got: %.200s\n", out);
                   fail++;
-                  /* Show context around clone calls */
+                  /* Search for openat + read/write near end
+                   * to see what cat does */
                   system(
-                      "echo '--- all forks ---';"
-                      "grep -n 'clone\\|\\[fork\\]\\|\\[proc_run\\]' "
-                      "/tmp/syscall_trace.log;"
-                      "echo '--- trace around last clone ---';"
-                      "N=$(grep -n 'clone' /tmp/syscall_trace.log"
-                      " | tail -1 | cut -d: -f1);"
-                      "if [ -n \"$N\" ]; then"
-                      "  sed -n \"$((N-5)),$((N+10))p\" "
-                      "  /tmp/syscall_trace.log;"
-                      "fi");
+                      "echo '--- openat calls (last 10) ---';"
+                      "grep 'openat' /tmp/syscall_trace.log"
+                      " | tail -10;"
+                      "echo '--- negative returns (errors) ---';"
+                      "grep 'ret=-' /tmp/syscall_trace.log"
+                      " | tail -10;"
+                      "echo '--- last 15 lines ---';"
+                      "tail -15 /tmp/syscall_trace.log");
                   printf("\n=== Summary ===\n");
                   printf("%d passed, %d failed\n", pass,fail);
                   printf("SOME TESTS FAILED\n");
