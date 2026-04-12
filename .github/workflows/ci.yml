@@ -361,10 +361,17 @@ jobs:
                   printf("  FAIL: cat (want 'filetest')\n");
                   printf("    got: %.200s\n", out);
                   fail++;
-                  /* Show ALL pids in the last 80 lines
-                   * to see what the child is stuck on */
-                  system("echo '--- trace (last 80) ---';"
-                      "tail -80 /tmp/syscall_trace.log");
+                  /* Show the last child's activity */
+                  system(
+                      "echo '--- all proc_run/execve ---';"
+                      "grep -E 'proc_run|execve.*done' "
+                      "/tmp/emu_crumbs.log 2>/dev/null;"
+                      "echo '--- pid!=1,2 syscalls ---';"
+                      "grep -v 'pid=[12] ' "
+                      "/tmp/syscall_trace.log | tail -20;"
+                      "echo '--- pid=1 last 10 ---';"
+                      "grep 'pid=1 ' /tmp/syscall_trace.log"
+                      " | tail -10");
                   printf("\n=== Summary ===\n");
                   printf("%d passed, %d failed\n", pass,fail);
                   printf("SOME TESTS FAILED\n");
