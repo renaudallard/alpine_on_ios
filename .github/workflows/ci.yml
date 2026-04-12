@@ -354,31 +354,8 @@ jobs:
               printf("  overlay stat: %.80s\n", out);
               chk("overlay stat", out, "Y2");
 
-              /* Diagnostic: run cat and dump the last
-               * syscalls to find the blocking call. */
               out = run(fd, "cat /tmp/tf", 8);
-              if (strstr(out, "filetest") == NULL) {
-                  printf("  FAIL: cat (want 'filetest')\n");
-                  printf("    got: %.200s\n", out);
-                  fail++;
-                  /* Search for openat + read/write near end
-                   * to see what cat does */
-                  system(
-                      "echo '--- openat calls (last 10) ---';"
-                      "grep 'openat' /tmp/syscall_trace.log"
-                      " | tail -10;"
-                      "echo '--- negative returns (errors) ---';"
-                      "grep 'ret=-' /tmp/syscall_trace.log"
-                      " | tail -10;"
-                      "echo '--- last 15 lines ---';"
-                      "tail -15 /tmp/syscall_trace.log");
-                  printf("\n=== Summary ===\n");
-                  printf("%d passed, %d failed\n", pass,fail);
-                  printf("SOME TESTS FAILED\n");
-                  return 1;
-              } else {
-                  printf("  PASS: cat\n"); pass++;
-              }
+              chk("cat", out, "filetest");
               out = run(fd, "touch /tmp/tt && echo ok", 3);
               chk("touch", out, "ok");
               out = run(fd, "rmdir /tmp/td && echo ok", 3);
@@ -391,7 +368,9 @@ jobs:
               out = run(fd,
                   "echo 'hello world' | cut -d' ' -f2", 4);
               chk("cut", out, "world");
-              /* tr hangs (locale/ctype init issue) */
+              out = run(fd,
+                  "echo 'hello world' | tr a-z A-Z", 4);
+              chk("tr", out, "HELLO");
               out = run(fd,
                   "echo 'hello world' | sed 's/hello/bye/'",
                   4);
@@ -408,12 +387,14 @@ jobs:
               out = run(fd,
                   "printf 'L1\\nL2\\n' | tail -1", 4);
               chk("tail", out, "L2");
-              /* base64 hangs (same issue as cat/tr) */
+              out = run(fd, "echo hello | base64", 4);
+              chk("base64", out, "aGVsbG8K");
               out = run(fd, "echo hello | md5sum", 4);
               chk("md5sum", out, NULL);
 
               printf("\n=== Misc ===\n");
-              /* printenv hangs (same issue as cat/tr) */
+              out = run(fd, "printenv HOME", 3);
+              chk("printenv", out, "/root");
               /* which and ls hang (same issue as uname:
                * child busybox applet hangs on unimplemented
                * syscall during execution, not during init).
@@ -453,5 +434,4 @@ jobs:
             --entitlements /tmp/test.entitlements \
             /tmp/integration_test
 
-          EMU_TRACE_SYSCALLS=1 \
-            /tmp/integration_test "$ROOTFS" "$OVERLAY"
+          /tmp/integration_test "$ROOTFS" "$OVERLAY"

@@ -400,59 +400,56 @@ proc_fork(emu_process_t *parent)
 	child->cpu.x[0] = 0;
 
 	/*
-	 * vfork-style: mark the child as blocking its parent, then
-	 * start the child thread, then block on child->vfork_cond
-	 * until the child either calls execve (which replaces its
-	 * shared mem_space with a fresh one) or exits.  Without this,
-	 * the parent's guest execution would resume in parallel with
-	 * the child while both still share the same stack pages via
-	 * MEM_MAP_EXTERNAL, and they would overwrite each other's
-	 * frames as soon as either one made a function call.  POSIX
-	 * allows this because our "known limitation" is that forked
-	 * children must execve immediately.
+	 * Save writable pages before the child starts.  The child
+	 * runs on the SAME host pages (threads share address space)
+	 * and its pre-execve code (sigprocmask, sigaction, etc.)
+	 * writes to shared data segments (GOT, BSS).  After the
+	 * child execs and gets its own mem_space, we restore the
+	 * parent's pages from the backup.
+	 *
+	 * Only copy regions with WRITE permission.  Code (TEXT)
+	 * segments are read-only and safe to share.
 	 */
+	struct {
+		uint8_t	*host;
+		uint8_t	*backup;
+		uint64_t size;
+	} saved[64];
+	int nsaved = 0;
+
+	{
+		mem_region_t	*r;
+		pthread_rwlock_rdlock(&parent->mem->lock);
+		for (r = parent->mem->regions; r != NULL; r = r->next) {
+			if (!(r->prot & MEM_PROT_WRITE))
+				continue;
+			if (nsaved >= 64)
+				break;
+			saved[nsaved].host = r->host;
+			saved[nsaved].size = r->size;
+			saved[nsaved].backup = malloc((size_t)r->size);
+			if (saved[nsaved].backup != NULL)
+				memcpy(saved[nsaved].backup,
+				    r->host, (size_t)r->size);
+			nsaved++;
+		}
+		pthread_rwlock_unlock(&parent->mem->lock);
+	}
 
 	/* Start child thread. */
 	child->cpu.running = 1;
 	child->vfork_done = 0;
-	{
-		char m[60];
-		int l = snprintf(m, sizeof(m),
-		    "[fork] pre-create pid=%d\n", child->pid);
-		(void)write(STDERR_FILENO, m, (size_t)l);
-	}
 	ret = pthread_create(&child->host_thread, NULL, proc_run, child);
-	{
-		char m[60];
-		int l = snprintf(m, sizeof(m),
-		    "[fork] post-create pid=%d ret=%d\n",
-		    child->pid, ret);
-		(void)write(STDERR_FILENO, m, (size_t)l);
-	}
 	if (ret != 0) {
 		LOG_ERR("proc: failed to create thread for pid %d",
 		    child->pid);
+		for (int j = 0; j < nsaved; j++)
+			free(saved[j].backup);
 		proc_destroy(child);
 		return (-ENOMEM);
 	}
 	pthread_detach(child->host_thread);
-	{
-		char m[60];
-		int l = snprintf(m, sizeof(m),
-		    "[fork] detached pid=%d done=%d\n",
-		    child->pid, child->vfork_done);
-		(void)write(STDERR_FILENO, m, (size_t)l);
-	}
 
-	/*
-	 * Wait for the child to reach execve or exit.  sem_wait
-	 * is safe even if the child posts before we reach here.
-	 * We use a semaphore instead of a cond var because the
-	 * child posts from inside the SIGTRAP handler and
-	 * sem_post is async-signal-safe (pthread_cond_signal
-	 * is NOT — it silently failed on macOS, deadlocking
-	 * the parent forever).
-	 */
 	/*
 	 * Busy-wait for the child.  We're inside a signal handler
 	 * so usleep/nanosleep are NOT safe (they hang on macOS).
@@ -461,11 +458,17 @@ proc_fork(emu_process_t *parent)
 	while (!__atomic_load_n(&child->vfork_done,
 	    __ATOMIC_SEQ_CST))
 		;
-	{
-		char m[60];
-		int l = snprintf(m, sizeof(m),
-		    "[vfork] pid=%d done\n", child->pid);
-		(void)write(STDERR_FILENO, m, (size_t)l);
+
+	/*
+	 * Restore writable pages that the child may have
+	 * corrupted during its pre-execve code.
+	 */
+	for (int j = 0; j < nsaved; j++) {
+		if (saved[j].backup != NULL) {
+			memcpy(saved[j].host, saved[j].backup,
+			    (size_t)saved[j].size);
+			free(saved[j].backup);
+		}
 	}
 
 	LOG_DBG("proc: forked pid %d from pid %d", child->pid, parent->pid);
