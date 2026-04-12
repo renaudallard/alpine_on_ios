@@ -231,6 +231,8 @@ native_init(void)
 	sa.sa_flags = SA_SIGINFO;
 	sigaction(SIGBUS, &sa, NULL);
 	sigaction(SIGSEGV, &sa, NULL);
+	sigaction(SIGILL, &sa, NULL);
+	sigaction(SIGABRT, &sa, NULL);
 
 	LOG_INFO("native: initialized");
 	return (0);

@@ -222,6 +222,17 @@ sig_deliver(emu_process_t *proc)
 	if (deliverable == 0)
 		return;
 
+	{
+		char m[80];
+		int l = snprintf(m, sizeof(m),
+		    "[sig_deliver] pid=%d pending=0x%llx "
+		    "blocked=0x%llx\n",
+		    proc->pid,
+		    (unsigned long long)proc->sig_pending,
+		    (unsigned long long)proc->sig_blocked);
+		(void)write(STDERR_FILENO, m, (size_t)l);
+	}
+
 	/* Find lowest set bit (first pending unblocked signal). */
 	for (sig = 1; sig < EMU_NSIG; sig++) {
 		if (deliverable & SIGMASK(sig))
