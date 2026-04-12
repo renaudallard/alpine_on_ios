@@ -345,7 +345,11 @@ jobs:
                   "echo X > /dev/null; echo REDIR_OK", 3);
               chk("redirect", out, "REDIR_OK");
 
-              run(fd, "echo filetest > /tmp/tf", 3);
+              out = run(fd,
+                  "echo filetest > /tmp/tf; echo WR:$?",
+                  3);
+              printf("  write result: %.80s\n", out);
+              chk("file write", out, "WR:0");
               out = run(fd, "echo AFTER_WRITE", 3);
               chk("after write", out, "AFTER_WRITE");
 
@@ -443,4 +447,5 @@ jobs:
             --entitlements /tmp/test.entitlements \
             /tmp/integration_test
 
-          /tmp/integration_test "$ROOTFS" "$OVERLAY"
+          EMU_FORCE_SOCKETPAIR=1 \
+            /tmp/integration_test "$ROOTFS" "$OVERLAY"
