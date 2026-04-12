@@ -441,10 +441,23 @@ proc_fork(emu_process_t *parent)
 	 * it via wait4, so child->lock / child->vfork_cond stay valid
 	 * for as long as the wakeup path needs them.
 	 */
+	{
+		char msg[80];
+		int len = snprintf(msg, sizeof(msg),
+		    "[fork] pid=%d waiting on vfork (blocking=%d)\n",
+		    child->pid, child->vfork_blocking);
+		(void)write(STDERR_FILENO, msg, (size_t)len);
+	}
 	pthread_mutex_lock(&child->lock);
 	while (child->vfork_blocking)
 		pthread_cond_wait(&child->vfork_cond, &child->lock);
 	pthread_mutex_unlock(&child->lock);
+	{
+		char msg[80];
+		int len = snprintf(msg, sizeof(msg),
+		    "[fork] pid=%d vfork done\n", child->pid);
+		(void)write(STDERR_FILENO, msg, (size_t)len);
+	}
 
 	LOG_DBG("proc: forked pid %d from pid %d", child->pid, parent->pid);
 	return (child->pid);
@@ -687,6 +700,13 @@ proc_execve(emu_process_t *proc, const char *path, const char **argv,
 	 * etc.).
 	 */
 	pthread_mutex_lock(&proc->lock);
+	{
+		char msg[80];
+		int len = snprintf(msg, sizeof(msg),
+		    "[execve] pid=%d vfork_blocking=%d\n",
+		    proc->pid, proc->vfork_blocking);
+		(void)write(STDERR_FILENO, msg, (size_t)len);
+	}
 	if (proc->vfork_blocking) {
 		proc->vfork_blocking = 0;
 		pthread_cond_signal(&proc->vfork_cond);
