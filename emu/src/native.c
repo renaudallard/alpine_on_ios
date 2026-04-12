@@ -127,7 +127,8 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		 * SIGCHLD is never delivered and busybox ash hangs
 		 * in its signal wait loop after the first fork.
 		 */
-		sig_deliver(proc);
+		/* sig_deliver disabled for diagnosis */
+		/* sig_deliver(proc); */
 
 		/*
 		 * Mirror the full state back to uc.  Most handlers
