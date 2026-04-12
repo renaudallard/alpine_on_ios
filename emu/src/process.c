@@ -432,7 +432,30 @@ proc_fork(emu_process_t *parent)
 	 * is NOT — it silently failed on macOS, deadlocking
 	 * the parent forever).
 	 */
-	while (!__atomic_load_n(&child->vfork_done, __ATOMIC_SEQ_CST)) usleep(1000);
+	{
+		int spin = 0;
+		while (!__atomic_load_n(&child->vfork_done,
+		    __ATOMIC_SEQ_CST)) {
+			usleep(1000);
+			if (++spin % 1000 == 0) {
+				char m[80];
+				int l = snprintf(m, sizeof(m),
+				    "[vfork] waiting pid=%d "
+				    "done=%d spin=%d\n",
+				    child->pid,
+				    child->vfork_done, spin);
+				(void)write(STDERR_FILENO,
+				    m, (size_t)l);
+			}
+		}
+		{
+			char m[80];
+			int l = snprintf(m, sizeof(m),
+			    "[vfork] pid=%d woke after %d spins\n",
+			    child->pid, spin);
+			(void)write(STDERR_FILENO, m, (size_t)l);
+		}
+	}
 
 	LOG_DBG("proc: forked pid %d from pid %d", child->pid, parent->pid);
 	return (child->pid);
