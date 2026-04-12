@@ -361,13 +361,18 @@ jobs:
                   printf("  FAIL: cat (want 'filetest')\n");
                   printf("    got: %.200s\n", out);
                   fail++;
-                  /* Dump fork/proc_run from trace file */
+                  /* Show context around clone calls */
                   system(
-                      "echo '--- fork/proc_run ---';"
-                      "grep -E '\\[fork\\]|\\[proc_run\\]' "
+                      "echo '--- all forks ---';"
+                      "grep -n 'clone\\|\\[fork\\]\\|\\[proc_run\\]' "
                       "/tmp/syscall_trace.log;"
-                      "echo '--- last 20 of trace ---';"
-                      "tail -20 /tmp/syscall_trace.log");
+                      "echo '--- trace around last clone ---';"
+                      "N=$(grep -n 'clone' /tmp/syscall_trace.log"
+                      " | tail -1 | cut -d: -f1);"
+                      "if [ -n \"$N\" ]; then"
+                      "  sed -n \"$((N-5)),$((N+10))p\" "
+                      "  /tmp/syscall_trace.log;"
+                      "fi");
                   printf("\n=== Summary ===\n");
                   printf("%d passed, %d failed\n", pass,fail);
                   printf("SOME TESTS FAILED\n");
