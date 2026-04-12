@@ -9,11 +9,6 @@
 #include <stdint.h>
 #include <limits.h>
 #include <pthread.h>
-#ifdef __APPLE__
-#include <dispatch/dispatch.h>
-#else
-#include <semaphore.h>
-#endif
 #include <time.h>
 #include "cpu.h"
 #include "memory.h"
@@ -111,11 +106,7 @@ typedef struct emu_process {
 	 * is async-signal-safe and the child posts from inside the
 	 * SIGTRAP handler (via proc_execve / proc_exit).
 	 */
-#ifdef __APPLE__
-	dispatch_semaphore_t	vfork_sem;
-#else
-	sem_t			vfork_sem;
-#endif
+	volatile int	vfork_done;
 
 	struct emu_process	*next;
 } emu_process_t;
