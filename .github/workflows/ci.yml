@@ -354,7 +354,13 @@ jobs:
               printf("  overlay stat: %.80s\n", out);
               chk("overlay stat", out, "Y2");
 
-              out = run(fd, "cat /tmp/tf", 8);
+              /* Test if file content is readable via
+               * builtin read (no NOFORK applet) */
+              out = run(fd,
+                  "read L < /tmp/tf; echo R:$L", 3);
+              chk("read file", out, "R:filetest");
+              out = run(fd, "cat /tmp/tf 2>&1", 8);
+              printf("  cat out: %.100s\n", out);
               chk("cat", out, "filetest");
               out = run(fd, "touch /tmp/tt && echo ok", 3);
               chk("touch", out, "ok");
@@ -369,7 +375,9 @@ jobs:
                   "echo 'hello world' | cut -d' ' -f2", 4);
               chk("cut", out, "world");
               out = run(fd,
-                  "echo 'hello world' | tr a-z A-Z", 4);
+                  "echo 'hello world' | tr a-z A-Z 2>&1",
+                  4);
+              printf("  tr out: %.100s\n", out);
               chk("tr", out, "HELLO");
               out = run(fd,
                   "echo 'hello world' | sed 's/hello/bye/'",
@@ -393,7 +401,8 @@ jobs:
               chk("md5sum", out, NULL);
 
               printf("\n=== Misc ===\n");
-              out = run(fd, "printenv HOME", 3);
+              out = run(fd, "printenv HOME 2>&1", 3);
+              printf("  printenv out: %.100s\n", out);
               chk("printenv", out, "/root");
               /* which and ls hang (same issue as uname:
                * child busybox applet hangs on unimplemented
