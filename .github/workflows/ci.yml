@@ -317,8 +317,15 @@ jobs:
               out = run(fd, "test 1 -eq 1; echo $?", 2);
               chk("test", out, "0");
 
-              /* Skip fork tests with socketpair to isolate
-               * whether the hang is fork-specific */
+              printf("\n=== Fork+exec ===\n");
+              out = run(fd, "/bin/echo FORKTEST", 5);
+              chk("fork+exec echo", out, "FORKTEST");
+              out = run(fd, "/bin/echo FORK2", 5);
+              chk("fork+exec echo2", out, "FORK2");
+              out = run(fd, "/bin/basename /foo/bar", 5);
+              chk("basename", out, "bar");
+              out = run(fd, "/bin/dirname /foo/bar", 5);
+              chk("dirname", out, "/foo");
 
               printf("\n=== File ops ===\n");
               out = run(fd, "mkdir -p /tmp/td", 5);
@@ -348,14 +355,14 @@ jobs:
               printf("  overlay stat: %.80s\n", out);
               chk("overlay stat", out, "Y2");
 
-              /* Test if file content is readable via
-               * builtin read (no NOFORK applet) */
-              out = run(fd,
-                  "read L < /tmp/tf; echo R:$L", 3);
-              chk("read file", out, "R:filetest");
+              /* Test cat on a rootfs file first */
+              out = run(fd, "cat /etc/hostname 2>&1", 5);
+              printf("  cat rootfs: %.100s\n", out);
+              chk("cat rootfs", out, NULL);
+              /* Test cat on overlay file */
               out = run(fd, "cat /tmp/tf 2>&1", 8);
-              printf("  cat out: %.100s\n", out);
-              chk("cat", out, "filetest");
+              printf("  cat overlay: %.100s\n", out);
+              chk("cat overlay", out, "filetest");
               out = run(fd, "touch /tmp/tt && echo ok", 3);
               chk("touch", out, "ok");
               out = run(fd, "rmdir /tmp/td && echo ok", 3);
@@ -437,5 +444,4 @@ jobs:
             --entitlements /tmp/test.entitlements \
             /tmp/integration_test
 
-          EMU_FORCE_SOCKETPAIR=1 \
-            /tmp/integration_test "$ROOTFS" "$OVERLAY"
+          /tmp/integration_test "$ROOTFS" "$OVERLAY"
