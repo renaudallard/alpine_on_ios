@@ -187,6 +187,26 @@ native_sigtrap_handler(int sig, siginfo_t *si, void *ctx)
 		UC_PC(uc) = pc + 4;
 }
 
+static void
+native_fault_handler(int sig, siginfo_t *si, void *ctx)
+{
+	ucontext_t	*uc = (ucontext_t *)ctx;
+	char		 msg[256];
+	int		 len;
+
+	len = snprintf(msg, sizeof(msg),
+	    "\n*** %s at addr=%p pc=0x%lx sp=0x%lx ***\n",
+	    sig == SIGBUS ? "SIGBUS" : "SIGSEGV",
+	    si->si_addr,
+	    (unsigned long)UC_PC(uc),
+	    (unsigned long)UC_SP(uc));
+	(void)write(STDERR_FILENO, msg, (size_t)len);
+
+	/* Re-raise with default handler to produce a core dump */
+	signal(sig, SIG_DFL);
+	raise(sig);
+}
+
 int
 native_init(void)
 {
@@ -201,6 +221,16 @@ native_init(void)
 		LOG_ERR("native: failed to install SIGTRAP handler");
 		return (-1);
 	}
+
+	/* Catch SIGBUS/SIGSEGV to report the fault address
+	 * before crashing.  Guest code misaligned accesses or
+	 * writes to unmapped memory would otherwise silently
+	 * terminate the process. */
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_sigaction = native_fault_handler;
+	sa.sa_flags = SA_SIGINFO;
+	sigaction(SIGBUS, &sa, NULL);
+	sigaction(SIGSEGV, &sa, NULL);
 
 	LOG_INFO("native: initialized");
 	return (0);
