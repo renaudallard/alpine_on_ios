@@ -454,5 +454,4 @@ jobs:
             /tmp/integration_test
 
           EMU_TRACE_SYSCALLS=1 \
-            /tmp/integration_test "$ROOTFS" "$OVERLAY" \
-            2>/tmp/syscall_trace.log
+            /tmp/integration_test "$ROOTFS" "$OVERLAY"

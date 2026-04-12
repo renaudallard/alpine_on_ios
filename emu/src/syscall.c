@@ -69,10 +69,15 @@ sys_handle(emu_process_t *proc)
 	 * Goes to stderr so CI captures it.
 	 */
 	{
+		static FILE *trace_fp;
 		static int trace = -1;
-		if (trace < 0)
+		if (trace < 0) {
 			trace = (getenv("EMU_TRACE_SYSCALLS") != NULL);
-		if (trace) {
+			if (trace)
+				trace_fp = fopen("/tmp/syscall_trace.log",
+				    "w");
+		}
+		if (trace && trace_fp) {
 			static const char *names[] = {
 			    [17]="getcwd",[29]="ioctl",[48]="faccessat",
 			    [49]="chdir",[56]="openat",[57]="close",
@@ -91,13 +96,15 @@ sys_handle(emu_process_t *proc)
 			const char *nm = NULL;
 			if (nr < sizeof(names)/sizeof(names[0]))
 				nm = names[nr];
-			fprintf(stderr, "[sys] pid=%d #%lu %s(%llu) "
+			fprintf(trace_fp,
+			    "[sys] pid=%d #%lu %s(%llu) "
 			    "a0=0x%llx a1=0x%llx\n",
 			    proc->pid, g_syscall_count,
 			    nm ? nm : "?",
 			    (unsigned long long)nr,
 			    (unsigned long long)a0,
 			    (unsigned long long)a1);
+			fflush(trace_fp);
 		}
 	}
 
@@ -294,12 +301,17 @@ sys_handle(emu_process_t *proc)
 	}
 
 	{
-		static int trace = -1;
-		if (trace < 0)
-			trace = (getenv("EMU_TRACE_SYSCALLS") != NULL);
-		if (trace)
-			fprintf(stderr, "[sys] pid=%d #%lu ret=%lld\n",
+		static FILE *tfp;
+		static int t = -1;
+		if (t < 0) {
+			t = (getenv("EMU_TRACE_SYSCALLS") != NULL);
+			if (t) tfp = fopen("/tmp/syscall_trace.log","a");
+		}
+		if (t && tfp) {
+			fprintf(tfp, "[sys] pid=%d #%lu ret=%lld\n",
 			    proc->pid, g_syscall_count,
 			    (long long)ret);
+			fflush(tfp);
+		}
 	}
 }
