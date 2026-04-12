@@ -39,6 +39,8 @@
  * line because we fflush + close after each write.
  */
 static _Thread_local unsigned long g_syscall_count;
+static FILE *g_trace_fp;
+static int g_trace = -1;
 
 void
 sys_handle(emu_process_t *proc)
@@ -69,15 +71,13 @@ sys_handle(emu_process_t *proc)
 	 * Goes to stderr so CI captures it.
 	 */
 	{
-		static FILE *trace_fp;
-		static int trace = -1;
-		if (trace < 0) {
-			trace = (getenv("EMU_TRACE_SYSCALLS") != NULL);
-			if (trace)
-				trace_fp = fopen("/tmp/syscall_trace.log",
-				    "w");
+		if (g_trace < 0) {
+			g_trace = (getenv("EMU_TRACE_SYSCALLS") != NULL);
+			if (g_trace)
+				g_trace_fp = fopen(
+				    "/tmp/syscall_trace.log", "w");
 		}
-		if (trace && trace_fp) {
+		if (g_trace && g_trace_fp) {
 			static const char *names[] = {
 			    [17]="getcwd",[29]="ioctl",[48]="faccessat",
 			    [49]="chdir",[56]="openat",[57]="close",
@@ -96,7 +96,7 @@ sys_handle(emu_process_t *proc)
 			const char *nm = NULL;
 			if (nr < sizeof(names)/sizeof(names[0]))
 				nm = names[nr];
-			fprintf(trace_fp,
+			fprintf(g_trace_fp,
 			    "[sys] pid=%d #%lu %s(%llu) "
 			    "a0=0x%llx a1=0x%llx\n",
 			    proc->pid, g_syscall_count,
@@ -104,7 +104,7 @@ sys_handle(emu_process_t *proc)
 			    (unsigned long long)nr,
 			    (unsigned long long)a0,
 			    (unsigned long long)a1);
-			fflush(trace_fp);
+			fflush(g_trace_fp);
 		}
 	}
 
@@ -300,18 +300,9 @@ sys_handle(emu_process_t *proc)
 		    (long long)ret);
 	}
 
-	{
-		static FILE *tfp;
-		static int t = -1;
-		if (t < 0) {
-			t = (getenv("EMU_TRACE_SYSCALLS") != NULL);
-			if (t) tfp = fopen("/tmp/syscall_trace.log","a");
-		}
-		if (t && tfp) {
-			fprintf(tfp, "[sys] pid=%d #%lu ret=%lld\n",
-			    proc->pid, g_syscall_count,
-			    (long long)ret);
-			fflush(tfp);
-		}
+	if (g_trace && g_trace_fp) {
+		fprintf(g_trace_fp, "[sys] pid=%d #%lu ret=%lld\n",
+		    proc->pid, g_syscall_count, (long long)ret);
+		fflush(g_trace_fp);
 	}
 }
