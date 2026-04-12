@@ -317,6 +317,10 @@ jobs:
               out = run(fd, "test 1 -eq 1; echo $?", 2);
               chk("test", out, "0");
 
+              /* Pre-fork alive check */
+              out = run(fd, "echo ALIVE:$$", 3);
+              printf("  pre-fork: %.60s\n", out);
+
               printf("\n=== Fork+exec ===\n");
               out = run(fd, "/bin/echo FORKTEST", 5);
               chk("fork+exec echo", out, "FORKTEST");
@@ -326,6 +330,11 @@ jobs:
               chk("basename", out, "bar");
               out = run(fd, "/bin/dirname /foo/bar", 5);
               chk("dirname", out, "/foo");
+
+              /* TRUE test: output PID (not in command text) */
+              out = run(fd, "echo PID:$$", 3);
+              printf("  pid test: %.60s\n", out);
+              chk("shell alive", out, "PID:");
 
               printf("\n=== File ops ===\n");
               out = run(fd, "mkdir -p /tmp/td", 5);
