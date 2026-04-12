@@ -414,7 +414,21 @@ proc_fork(emu_process_t *parent)
 
 	/* Start child thread. */
 	child->cpu.running = 1;
+	child->vfork_done = 0;
+	{
+		char m[60];
+		int l = snprintf(m, sizeof(m),
+		    "[fork] pre-create pid=%d\n", child->pid);
+		(void)write(STDERR_FILENO, m, (size_t)l);
+	}
 	ret = pthread_create(&child->host_thread, NULL, proc_run, child);
+	{
+		char m[60];
+		int l = snprintf(m, sizeof(m),
+		    "[fork] post-create pid=%d ret=%d\n",
+		    child->pid, ret);
+		(void)write(STDERR_FILENO, m, (size_t)l);
+	}
 	if (ret != 0) {
 		LOG_ERR("proc: failed to create thread for pid %d",
 		    child->pid);
