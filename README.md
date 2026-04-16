@@ -161,7 +161,7 @@ AOT-patches all ELF binaries, and ad-hoc codesigns them.
 
 | Workflow | Trigger | Action |
 |----------|---------|--------|
-| `ci.yml` | Push / PR | Test on Linux, build iOS |
+| `ci.yml` | Push / PR | Linux unit tests, iOS build, native + Simulator integration tests |
 | `version-tag.yml` | `MARKETING_VERSION` change | Auto-create `v*` tag, dispatch release |
 | `release.yml` | Tag / dispatch | Build IPA + DMG, publish GitHub Release |
 | `aot-repo.yml` | Daily / manual | Build AOT-patched APK repository |

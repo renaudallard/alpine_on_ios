@@ -138,39 +138,50 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             ONLY_ACTIVE_ARCH=YES
 
-      - name: Smoke test (launch check)
-        timeout-minutes: 3
+      - name: Simulator integration test
+        timeout-minutes: 6
         run: |
           set -e
           DEVICE="${{ steps.sim.outputs.device }}"
-          xcrun simctl boot "$DEVICE" 2>/dev/null || true
+
+          # Boot and wait for the simulator to be fully ready.
+          # Plain `simctl boot` is async; `simctl launch` against a
+          # half-booted device can block indefinitely.
+          xcrun simctl bootstatus "$DEVICE" -b
 
           APP=$(find DerivedData -name "AlpineOnIOS.app" \
             -path "*iphonesimulator*" | head -1)
           [ -z "$APP" ] && { echo "FAIL: .app not found"; exit 1; }
           xcrun simctl install "$DEVICE" "$APP"
 
-          # Launch and check the app doesn't crash on startup.
-          # dlopen of AOT dylibs fails on the simulator (library
-          # validation), so the app will land in .error state
-          # but must not segfault or abort.
-          OUTPUT=$(xcrun simctl launch "$DEVICE" com.alpineonios.app)
-          PID=$(echo "$OUTPUT" | grep -oE '[0-9]+$')
-          echo "Launched PID=$PID"
-          sleep 10
-          if kill -0 "$PID" 2>/dev/null; then
-            echo "PASS: app alive after 10s"
-            xcrun simctl terminate "$DEVICE" com.alpineonios.app \
-              2>/dev/null || true
-          else
-            echo "FAIL: app crashed"
-            find ~/Library/Logs/DiagnosticReports \
-              -name "AlpineOnIOS*" -newer "$APP" 2>/dev/null \
-              | head -3 | xargs head -80 2>/dev/null || true
-            xcrun simctl shutdown "$DEVICE" 2>/dev/null || true
-            exit 1
-          fi
+          # Drive the in-app IntegrationTest.  --console attaches
+          # the app's stdout/stderr to this step so we see every
+          # "INTEGRATION_TEST:" line; simctl exits when the app
+          # calls exit().  The step timeout guards against hangs.
+          LOG=/tmp/sim_integration.log
+          set +e
+          xcrun simctl launch --console \
+            --terminate-running-process \
+            "$DEVICE" com.alpineonios.app \
+            --integration-test 2>&1 | tee "$LOG"
+          RC=${PIPESTATUS[0]}
+          set -e
+
+          xcrun simctl terminate "$DEVICE" com.alpineonios.app \
+            2>/dev/null || true
           xcrun simctl shutdown "$DEVICE" 2>/dev/null || true
+
+          echo "--- simctl launch rc=$RC ---"
+          if grep -q "INTEGRATION_TEST: ALL TESTS PASSED" "$LOG"; then
+            echo "PASS: integration test"
+            exit 0
+          fi
+
+          echo "FAIL: integration test did not report success"
+          find ~/Library/Logs/DiagnosticReports \
+            -name "AlpineOnIOS*" -newer "$APP" 2>/dev/null \
+            | head -3 | xargs head -80 2>/dev/null || true
+          exit 1
 
   test-native:
     name: Native integration test
