@@ -261,12 +261,47 @@ jobs:
               return buf;
           }
 
+          /* Drain until __MARK__ is seen or deadline elapses.
+           * Replaces fixed sleep+drain which was flaky for
+           * slower applets (tr, base64). */
           static char *run(int fd, const char *cmd, int wait_s) {
               char w[1024];
               snprintf(w, sizeof(w), "%s; echo __MARK__\n", cmd);
               write(fd, w, strlen(w));
-              sleep(wait_s);
-              return drain(fd, 3000);
+
+              int off = 0;
+              buf[0] = '\0';
+              struct pollfd pfd = { .fd = fd, .events = POLLIN };
+              long deadline_ms = (long)wait_s * 1000L + 3000L;
+              long elapsed = 0;
+              while (off < (int)sizeof(buf) - 1 &&
+                     elapsed < deadline_ms) {
+                  int r = poll(&pfd, 1, 200);
+                  if (r > 0) {
+                      int n = (int)read(fd, buf + off,
+                          sizeof(buf) - 1 - off);
+                      if (n <= 0) break;
+                      off += n;
+                      buf[off] = '\0';
+                      if (strstr(buf, "__MARK__")) break;
+                  } else if (r < 0) {
+                      break;
+                  }
+                  elapsed += 200;
+              }
+              buf[off] = '\0';
+              return buf;
+          }
+
+          static void print_escaped(const char *s) {
+              for (const char *p = s; *p; p++) {
+                  unsigned char c = (unsigned char)*p;
+                  if (c == '\n') fputs("\\n", stdout);
+                  else if (c == '\r') fputs("\\r", stdout);
+                  else if (c == '\t') fputs("\\t", stdout);
+                  else if (c >= 32 && c < 127) putchar(c);
+                  else printf("\\x%02x", c);
+              }
           }
 
           static void chk(const char *name, const char *out,
@@ -276,7 +311,11 @@ jobs:
               } else {
                   printf("  FAIL: %s (want '%s')\n",
                       name, expect);
-                  printf("    got: %.200s\n", out); fail++;
+                  printf("    got (%zu bytes): ",
+                      strlen(out));
+                  print_escaped(out);
+                  putchar('\n');
+                  fail++;
               }
           }
 
@@ -464,4 +503,24 @@ jobs:
             --entitlements /tmp/test.entitlements \
             /tmp/integration_test
 
-          /tmp/integration_test "$ROOTFS" "$OVERLAY"
+          # Run the test under a shell watchdog so a hang
+          # (e.g. child applet stuck on an unimplemented
+          # syscall) gets killed before the 15-min step
+          # timeout and we still dump breadcrumbs.
+          set +e
+          /tmp/integration_test "$ROOTFS" "$OVERLAY" &
+          TEST_PID=$!
+          ( sleep 300; kill -TERM "$TEST_PID" 2>/dev/null; \
+            sleep 3; kill -KILL "$TEST_PID" 2>/dev/null ) &
+          WATCHDOG_PID=$!
+          wait "$TEST_PID"
+          RC=$?
+          kill -TERM "$WATCHDOG_PID" 2>/dev/null
+          wait "$WATCHDOG_PID" 2>/dev/null
+          set -e
+
+          echo "--- integration test rc=$RC ---"
+          echo "--- breadcrumbs (last 200 lines) ---"
+          tail -200 /tmp/emu_crumbs.log 2>/dev/null \
+            || echo "(no breadcrumb log at /tmp/emu_crumbs.log)"
+          exit $RC
