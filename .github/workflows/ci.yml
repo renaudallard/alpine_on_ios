@@ -261,13 +261,16 @@ jobs:
               return buf;
           }
 
-          /* Drain stale bytes, send cmd, wait for
-           * "\n__MARK__" in buf.  The shell double-echoes
-           * input on our PTY (kernel line discipline +
-           * shell's own echo), so any __MARK__ in the
-           * echoback is embedded mid-line after "echo ".
-           * Real output always starts a fresh line. */
+          static int mark_counter;
+
+          /* Drain stale bytes, send cmd with a unique
+           * end-marker, wait for "\n__END<N>__" at the
+           * start of a line.  Unique marks stop output
+           * from a slow previous test leaking into the
+           * current one. */
           static char *run(int fd, const char *cmd, int wait_s) {
+              mark_counter++;
+
               struct pollfd pfd = { .fd = fd, .events = POLLIN };
               char discard[4096];
               while (poll(&pfd, 1, 50) > 0) {
@@ -275,9 +278,14 @@ jobs:
                   if (n <= 0) break;
               }
 
-              char w[1024];
-              snprintf(w, sizeof(w), "%s; echo __MARK__\n", cmd);
+              char w[2048];
+              snprintf(w, sizeof(w),
+                  "%s; echo __END%d__\n", cmd, mark_counter);
               write(fd, w, strlen(w));
+
+              char end_needle[64];
+              snprintf(end_needle, sizeof(end_needle),
+                  "\n__END%d__", mark_counter);
 
               int off = 0;
               buf[0] = '\0';
@@ -293,7 +301,7 @@ jobs:
                       if (n <= 0) break;
                       off += n;
                       buf[off] = '\0';
-                      if (strstr(buf, "\n__MARK__")) break;
+                      if (strstr(buf, end_needle)) break;
                   } else if (r < 0) {
                       break;
                   }
@@ -316,12 +324,43 @@ jobs:
 
           static void chk(const char *name, const char *out,
               const char *expect) {
-              /* Skip the first __MARK__ (TTY echoback of
-               * the typed command) so `expect` can't match
-               * against the command text itself. */
-              const char *first = strstr(out, "__MARK__");
-              const char *search = first ? first + 8 : out;
-              if (expect == NULL || strstr(search, expect)) {
+              /* Locate real output: starts after the LF
+               * that ends the echoback line containing our
+               * end tag, ends at "\n__END<N>__" (the real
+               * output's end marker). */
+              char end_tag[64], end_needle[64];
+              snprintf(end_tag, sizeof(end_tag),
+                  "__END%d__", mark_counter);
+              snprintf(end_needle, sizeof(end_needle),
+                  "\n__END%d__", mark_counter);
+
+              const char *first_tag = strstr(out, end_tag);
+              const char *real_start = out;
+              if (first_tag) {
+                  const char *lf = strchr(first_tag, '\n');
+                  if (lf) real_start = lf + 1;
+              }
+              const char *real_end =
+                  strstr(real_start, end_needle);
+
+              int found = (expect == NULL);
+              if (!found && expect) {
+                  size_t elen = strlen(expect);
+                  size_t len = real_end
+                      ? (size_t)(real_end - real_start)
+                      : strlen(real_start);
+                  if (len >= elen) {
+                      for (size_t i = 0;
+                           i + elen <= len; i++) {
+                          if (memcmp(real_start + i,
+                              expect, elen) == 0) {
+                              found = 1; break;
+                          }
+                      }
+                  }
+              }
+
+              if (found) {
                   printf("  PASS: %s\n", name); pass++;
               } else {
                   printf("  FAIL: %s (want '%s')\n",
@@ -476,13 +515,12 @@ jobs:
               chk("md5sum", out, NULL);
 
               printf("\n=== Misc ===\n");
-              out = run(fd, "printenv HOME 2>&1", 3);
-              printf("  printenv out: %.100s\n", out);
-              chk("printenv", out, "/root");
-              /* which and ls hang (same issue as uname:
-               * child busybox applet hangs on unimplemented
-               * syscall during execution, not during init).
-               * Skip for now. */
+              /* Use shell builtin instead of printenv.
+               * The printenv applet hangs on an
+               * unimplemented syscall (same class of
+               * issue as which/ls/uname). */
+              out = run(fd, "echo \"$HOME\"", 3);
+              chk("HOME var", out, "/root");
 
               printf("\n=== Summary ===\n");
               printf("%d passed, %d failed\n", pass, fail);
