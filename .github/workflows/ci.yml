@@ -241,10 +241,17 @@ jobs:
           #include <string.h>
           #include <unistd.h>
           #include <poll.h>
+          #include <sys/time.h>
           #include "emu.h"
 
           static char buf[65536];
           static int pass, fail;
+
+          static long now_ms(void) {
+              struct timeval tv;
+              gettimeofday(&tv, NULL);
+              return tv.tv_sec * 1000L + tv.tv_usec / 1000L;
+          }
 
           static char *drain(int fd, int timeout_ms) {
               int off = 0;
@@ -290,11 +297,14 @@ jobs:
               int off = 0;
               buf[0] = '\0';
               pfd.revents = 0;
-              long deadline_ms = (long)wait_s * 1000L + 3000L;
-              long elapsed = 0;
+              long deadline_t =
+                  now_ms() + (long)wait_s * 1000L + 3000L;
               while (off < (int)sizeof(buf) - 1 &&
-                     elapsed < deadline_ms) {
-                  int r = poll(&pfd, 1, 200);
+                     now_ms() < deadline_t) {
+                  long remain = deadline_t - now_ms();
+                  int poll_ms = remain > 200 ? 200 :
+                      (int)(remain > 0 ? remain : 1);
+                  int r = poll(&pfd, 1, poll_ms);
                   if (r > 0) {
                       int n = (int)read(fd, buf + off,
                           sizeof(buf) - 1 - off);
@@ -305,7 +315,6 @@ jobs:
                   } else if (r < 0) {
                       break;
                   }
-                  elapsed += 200;
               }
               buf[off] = '\0';
               return buf;
@@ -324,34 +333,46 @@ jobs:
 
           static void chk(const char *name, const char *out,
               const char *expect) {
-              /* Locate real output: starts after the LF
-               * that ends the echoback line containing our
-               * end tag, ends at "\n__END<N>__" (the real
-               * output's end marker). */
+              /* With our PTY's double-echo the end tag may
+               * appear up to 3 times: once per echoback
+               * copy, plus once in real output (at line
+               * start).  Real output's mark is the one
+               * preceded by \n; anything before it with
+               * the end tag is echoback. */
               char end_tag[64], end_needle[64];
               snprintf(end_tag, sizeof(end_tag),
                   "__END%d__", mark_counter);
               snprintf(end_needle, sizeof(end_needle),
                   "\n__END%d__", mark_counter);
 
-              const char *first_tag = strstr(out, end_tag);
+              const char *real_mark = strstr(out, end_needle);
+              const char *last_echo_tag = NULL;
+              const char *cursor = out;
+              const char *limit = real_mark ? real_mark
+                                            : out + strlen(out);
+              while (cursor < limit) {
+                  const char *f = strstr(cursor, end_tag);
+                  if (!f || f >= limit) break;
+                  last_echo_tag = f;
+                  cursor = f + strlen(end_tag);
+              }
+
               const char *real_start = out;
-              if (first_tag) {
-                  const char *lf = strchr(first_tag, '\n');
+              if (last_echo_tag) {
+                  const char *lf =
+                      strchr(last_echo_tag, '\n');
                   if (lf) real_start = lf + 1;
               }
-              const char *real_end =
-                  strstr(real_start, end_needle);
+              size_t real_len = real_mark
+                  ? (size_t)(real_mark - real_start)
+                  : strlen(real_start);
 
               int found = (expect == NULL);
               if (!found && expect) {
                   size_t elen = strlen(expect);
-                  size_t len = real_end
-                      ? (size_t)(real_end - real_start)
-                      : strlen(real_start);
-                  if (len >= elen) {
+                  if (real_len >= elen) {
                       for (size_t i = 0;
-                           i + elen <= len; i++) {
+                           i + elen <= real_len; i++) {
                           if (memcmp(real_start + i,
                               expect, elen) == 0) {
                               found = 1; break;
