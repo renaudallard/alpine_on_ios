@@ -261,17 +261,34 @@ jobs:
               return buf;
           }
 
-          /* Drain until __MARK__ is seen or deadline elapses.
-           * Replaces fixed sleep+drain which was flaky for
-           * slower applets (tr, base64). */
+          static int count_marks(const char *s) {
+              int n = 0;
+              const char *p = s;
+              while ((p = strstr(p, "__MARK__")) != NULL) {
+                  n++; p += 8;
+              }
+              return n;
+          }
+
+          /* Drain stale bytes, send cmd, wait for TWO
+           * __MARK__ occurrences: one in the TTY echoback
+           * of the typed command, one in the shell's
+           * actual `echo __MARK__` output. */
           static char *run(int fd, const char *cmd, int wait_s) {
+              struct pollfd pfd = { .fd = fd, .events = POLLIN };
+              char discard[4096];
+              while (poll(&pfd, 1, 50) > 0) {
+                  int n = (int)read(fd, discard, sizeof(discard));
+                  if (n <= 0) break;
+              }
+
               char w[1024];
               snprintf(w, sizeof(w), "%s; echo __MARK__\n", cmd);
               write(fd, w, strlen(w));
 
               int off = 0;
               buf[0] = '\0';
-              struct pollfd pfd = { .fd = fd, .events = POLLIN };
+              pfd.revents = 0;
               long deadline_ms = (long)wait_s * 1000L + 3000L;
               long elapsed = 0;
               while (off < (int)sizeof(buf) - 1 &&
@@ -283,7 +300,7 @@ jobs:
                       if (n <= 0) break;
                       off += n;
                       buf[off] = '\0';
-                      if (strstr(buf, "__MARK__")) break;
+                      if (count_marks(buf) >= 2) break;
                   } else if (r < 0) {
                       break;
                   }
@@ -306,7 +323,12 @@ jobs:
 
           static void chk(const char *name, const char *out,
               const char *expect) {
-              if (expect == NULL || strstr(out, expect)) {
+              /* Skip the first __MARK__ (TTY echoback of
+               * the typed command) so `expect` can't match
+               * against the command text itself. */
+              const char *first = strstr(out, "__MARK__");
+              const char *search = first ? first + 8 : out;
+              if (expect == NULL || strstr(search, expect)) {
                   printf("  PASS: %s\n", name); pass++;
               } else {
                   printf("  FAIL: %s (want '%s')\n",
