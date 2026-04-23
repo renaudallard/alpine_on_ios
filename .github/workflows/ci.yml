@@ -261,19 +261,12 @@ jobs:
               return buf;
           }
 
-          static int count_marks(const char *s) {
-              int n = 0;
-              const char *p = s;
-              while ((p = strstr(p, "__MARK__")) != NULL) {
-                  n++; p += 8;
-              }
-              return n;
-          }
-
-          /* Drain stale bytes, send cmd, wait for TWO
-           * __MARK__ occurrences: one in the TTY echoback
-           * of the typed command, one in the shell's
-           * actual `echo __MARK__` output. */
+          /* Drain stale bytes, send cmd, wait for
+           * "\n__MARK__" in buf.  The shell double-echoes
+           * input on our PTY (kernel line discipline +
+           * shell's own echo), so any __MARK__ in the
+           * echoback is embedded mid-line after "echo ".
+           * Real output always starts a fresh line. */
           static char *run(int fd, const char *cmd, int wait_s) {
               struct pollfd pfd = { .fd = fd, .events = POLLIN };
               char discard[4096];
@@ -300,7 +293,7 @@ jobs:
                       if (n <= 0) break;
                       off += n;
                       buf[off] = '\0';
-                      if (count_marks(buf) >= 2) break;
+                      if (strstr(buf, "\n__MARK__")) break;
                   } else if (r < 0) {
                       break;
                   }
