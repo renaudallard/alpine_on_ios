@@ -76,7 +76,7 @@ jobs:
           rm -rf Payload
 
       - name: Upload IPA
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: AlpineOnIOS-ci
           path: AlpineOnIOS.ipa
