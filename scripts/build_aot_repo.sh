@@ -189,9 +189,14 @@ while read -r pkg; do
 	url="$MIRROR/$ALPINE_VER/$repo/$ARCH/$fname"
 
 	if [ ! -f "$DLDIR/$fname" ]; then
-		curl -sL "$url" -o "$DLDIR/$fname"
-		downloaded=$((downloaded + 1))
-		printf "\r  Downloaded %d/%d" "$downloaded" "$NPKGS"
+		if curl -sL --retry 5 --retry-delay 2 --retry-connrefused \
+		    --max-time 60 "$url" -o "$DLDIR/$fname"; then
+			downloaded=$((downloaded + 1))
+			printf "\r  Downloaded %d/%d" "$downloaded" "$NPKGS"
+		else
+			rm -f "$DLDIR/$fname"
+			printf "\r  Skipped %s (fetch failed)\n" "$fname"
+		fi
 	fi
 done < "$RESOLVED"
 echo ""
