@@ -154,22 +154,48 @@ jobs:
           [ -z "$APP" ] && { echo "FAIL: .app not found"; exit 1; }
           xcrun simctl install "$DEVICE" "$APP"
 
-          # Drive the in-app IntegrationTest.  --console attaches
-          # the app's stdout/stderr to this step so we see every
-          # "INTEGRATION_TEST:" line; simctl exits when the app
-          # calls exit().  The step timeout guards against hangs.
+          # Drive the in-app IntegrationTest.  simctl launch --console
+          # on macOS 26 sometimes keeps the console attached even after
+          # the app calls exit(), which would hang the step.  So run it
+          # in the background, stream the log, and decide PASS/FAIL by
+          # scanning for the in-app markers.  Once we see a verdict we
+          # kill simctl ourselves instead of waiting for it to notice.
           LOG=/tmp/sim_integration.log
+          : > "$LOG"
           set +e
           xcrun simctl launch --console \
             --terminate-running-process \
             "$DEVICE" com.alpineonios.app \
-            --integration-test 2>&1 | tee "$LOG"
-          RC=${PIPESTATUS[0]}
-          set -e
+            --integration-test >"$LOG" 2>&1 &
+          SIMCTL_PID=$!
+
+          tail -f "$LOG" &
+          TAIL_PID=$!
+
+          DEADLINE=$(( $(date +%s) + 300 ))
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            if grep -q "INTEGRATION_TEST: ALL TESTS PASSED" "$LOG"; then
+              break
+            fi
+            if grep -q "INTEGRATION_TEST: FAIL" "$LOG"; then
+              break
+            fi
+            if ! kill -0 "$SIMCTL_PID" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          kill "$TAIL_PID" 2>/dev/null
+          wait "$TAIL_PID" 2>/dev/null
 
           xcrun simctl terminate "$DEVICE" com.alpineonios.app \
             2>/dev/null || true
+          kill -TERM "$SIMCTL_PID" 2>/dev/null
+          wait "$SIMCTL_PID" 2>/dev/null
+          RC=$?
           xcrun simctl shutdown "$DEVICE" 2>/dev/null || true
+          set -e
 
           echo "--- simctl launch rc=$RC ---"
           if grep -q "INTEGRATION_TEST: ALL TESTS PASSED" "$LOG"; then
